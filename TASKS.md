@@ -11,7 +11,7 @@
 - [x] Verify GPU is used — mistral at ~47 t/s, full model in VRAM (4.66 GB / 6 GB)
 - [x] Set up Express + TypeScript server with tsx watch
 - [x] Set up environment config with dotenv + Zod validation (lib/env.ts)
-- [ ] Implement local JWT auth (bcrypt + jsonwebtoken) — in progress, tracked as task
+- [x] Implement local JWT auth (bcrypt + jsonwebtoken) — multi-user RBAC, LDAP optional, audit log
 
 ### Database Schema
 - [x] Create `projects` table with all fields including `color`, `status`, `tech_stack[]`, `type`
@@ -309,10 +309,10 @@
 - [x] Runbooks page — "✓" Mark as Used button added to each list card; calls API and updates last_used_at inline without navigating to detail
 
 ### Org Mode (v2 foundation)
-- [ ] Multi-user auth — role-based: viewer / editor / admin per project; extend `JWT_SECRET` + add `users` table
-- [ ] LDAP/SSO integration — optional, configured via env vars
-- [ ] Shared command library — personal namespace + team namespace per project
-- [ ] Audit log — `audit_events` table; log create/update/delete actions with user + timestamp
+- [x] Multi-user auth — role-based: viewer / editor / admin per project; `users` + `project_members` tables; backward-compatible JWT migration; first-run auto-creates admin from AUTH_PASSWORD
+- [x] LDAP/SSO integration — optional, env-var driven (`LDAP_URL` etc.); dynamic import of ldapjs (graceful no-op if not installed); binds as user to verify password
+- [x] Shared command library — personal namespace + team namespace per command; filter chips (👥 Team / 🔒 Personal) in sidebar; namespace field in create modal; personal badge on card; server filters by namespace + user
+- [x] Audit log — `audit_events` table; `logAudit()` non-fatal service; all user/project mutations logged; `GET /api/audit` (admin only) with filters; AuditLog component in Settings (admin only, paginated)
 
 ---
 

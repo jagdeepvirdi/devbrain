@@ -129,6 +129,11 @@ function CommandCard({ cmd, selected, onClick, onFavToggle }: {
         <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
           {cmd.title}
         </span>
+        {cmd.namespace === 'personal' && (
+          <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: 3, background: 'rgba(99,102,241,.15)', border: '1px solid rgba(99,102,241,.3)', color: 'var(--accent-2)', flexShrink: 0, letterSpacing: '.03em' }}>
+            personal
+          </span>
+        )}
         <button onClick={onFavToggle} style={{
           fontSize: 13, flexShrink: 0,
           color: cmd.is_favorite ? '#F59E0B' : 'var(--fg-4)',
@@ -356,6 +361,7 @@ function NewCommandModal({ onClose, onCreate }: {
   const [projectId,  setProjectId]  = useState<string>(proj?.id ?? '')
   const [tagsRaw,    setTagsRaw]    = useState('')
   const [isFav,      setIsFav]      = useState(false)
+  const [namespace,  setNamespace]  = useState<'team' | 'personal'>('team')
   const [saving,     setSaving]     = useState(false)
   const [error,      setError]      = useState('')
 
@@ -369,7 +375,7 @@ function NewCommandModal({ onClose, onCreate }: {
         title: title.trim(), command: command.trim(), language,
         description: description.trim(),
         project_id: projectId || null,
-        tags, is_favorite: isFav,
+        tags, is_favorite: isFav, namespace,
       })
       onCreate(created)
     } catch (err) {
@@ -438,6 +444,21 @@ function NewCommandModal({ onClose, onCreate }: {
           <div>
             <label style={labelStyle}>Tags (comma-separated)</label>
             <input value={tagsRaw} onChange={e => setTagsRaw(e.target.value)} placeholder="dev, server, docker" style={inputStyle} />
+          </div>
+
+          <div>
+            <label style={labelStyle}>Visibility</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {(['team', 'personal'] as const).map(ns => (
+                <label key={ns} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'default', fontSize: '13px', color: namespace === ns ? 'var(--fg)' : 'var(--fg-3)', padding: '5px 12px', borderRadius: 5, border: `1px solid ${namespace === ns ? 'var(--accent)' : 'var(--line)'}`, background: namespace === ns ? 'var(--accent-dim)' : 'transparent', flex: 1, justifyContent: 'center' }}>
+                  <input type="radio" name="namespace" value={ns} checked={namespace === ns} onChange={() => setNamespace(ns)} style={{ display: 'none' }} />
+                  {ns === 'team' ? '👥 Team' : '🔒 Personal'}
+                </label>
+              ))}
+            </div>
+            <div style={{ marginTop: 4, fontSize: '11px', color: 'var(--fg-4)' }}>
+              {namespace === 'team' ? 'Visible to all team members' : 'Visible only to you'}
+            </div>
           </div>
 
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'default', fontSize: '13px', color: 'var(--fg-2)' }}>
@@ -613,6 +634,7 @@ export function CommandsPage() {
   const [search,        setSearch]        = useState('')
   const [langFilter,    setLangFilter]    = useState<string | null>(null)
   const [favFilter,     setFavFilter]     = useState(false)
+  const [nsFilter,      setNsFilter]      = useState<'all' | 'personal' | 'team'>('all')
   const [showNew,       setShowNew]       = useState(false)
   const [paletteOpen,   setPaletteOpen]   = useState(false)
   const [importing,     setImporting]     = useState(false)
@@ -638,6 +660,7 @@ export function CommandsPage() {
         search:    search || undefined,
         language:  langFilter ?? undefined,
         favorite:  favFilter || undefined,
+        namespace: nsFilter !== 'all' ? nsFilter : undefined,
         limit:     CMD_PAGE,
         offset,
       })
@@ -646,7 +669,7 @@ export function CommandsPage() {
       setNextOffset(offset + result.items.length)
     } catch { if (!append) setCommands([]) }
     finally { setLoading(false); setLoadingMore(false) }
-  }, [proj?.id, search, langFilter, favFilter])
+  }, [proj?.id, search, langFilter, favFilter, nsFilter])
 
   useEffect(() => { load(0, false) }, [load])
 
@@ -691,7 +714,7 @@ export function CommandsPage() {
       if (parsed.length === 0) { toast('No parseable commands found (need # comment before each command)', 'error'); return }
       let created = 0
       for (const { title, command } of parsed) {
-        await commandsApi.create({ title, command, language: 'bash', description: '', tags: [], is_favorite: false, project_id: proj?.id ?? null })
+        await commandsApi.create({ title, command, language: 'bash', description: '', tags: [], is_favorite: false, namespace: 'team', project_id: proj?.id ?? null })
         created++
       }
       load(0, false)
@@ -765,11 +788,17 @@ export function CommandsPage() {
 
           {/* Filters */}
           <div style={{ padding: '0 10px 8px', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-            <button onClick={() => { setFavFilter(false); setLangFilter(null) }} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 10, border: '1px solid var(--line)', background: !favFilter && !langFilter ? 'var(--bg-elev-2)' : 'transparent', color: !favFilter && !langFilter ? 'var(--fg)' : 'var(--fg-3)', cursor: 'default' }}>
+            <button onClick={() => { setFavFilter(false); setLangFilter(null); setNsFilter('all') }} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 10, border: '1px solid var(--line)', background: !favFilter && !langFilter && nsFilter === 'all' ? 'var(--bg-elev-2)' : 'transparent', color: !favFilter && !langFilter && nsFilter === 'all' ? 'var(--fg)' : 'var(--fg-3)', cursor: 'default' }}>
               All
             </button>
             <button onClick={() => { setFavFilter(v => !v); setLangFilter(null) }} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 10, border: '1px solid var(--line)', background: favFilter ? '#F59E0B20' : 'transparent', color: favFilter ? '#F59E0B' : 'var(--fg-3)', cursor: 'default' }}>
               ★ Favorites
+            </button>
+            <button onClick={() => setNsFilter(v => v === 'team' ? 'all' : 'team')} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 10, border: `1px solid ${nsFilter === 'team' ? 'rgba(99,102,241,.5)' : 'var(--line)'}`, background: nsFilter === 'team' ? 'rgba(99,102,241,.15)' : 'transparent', color: nsFilter === 'team' ? 'var(--accent-2)' : 'var(--fg-3)', cursor: 'default' }}>
+              👥 Team
+            </button>
+            <button onClick={() => setNsFilter(v => v === 'personal' ? 'all' : 'personal')} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 10, border: `1px solid ${nsFilter === 'personal' ? 'rgba(99,102,241,.5)' : 'var(--line)'}`, background: nsFilter === 'personal' ? 'rgba(99,102,241,.15)' : 'transparent', color: nsFilter === 'personal' ? 'var(--accent-2)' : 'var(--fg-3)', cursor: 'default' }}>
+              🔒 Personal
             </button>
             {availableLangs.map(l => (
               <button key={l} onClick={() => setLangFilter(langFilter === l ? null : l)} style={{

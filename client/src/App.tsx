@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useProjectStore } from './store/projectStore'
-import { projectsApi, authApi } from './lib/api'
+import { projectsApi, authApi, getCachedUser, type AuthUser } from './lib/api'
 import { ToastProvider } from './components/Toast'
 import { ProjectSwitcher } from './components/projects/ProjectSwitcher'
 import { ProjectsPage }   from './pages/Projects'
@@ -44,10 +44,14 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [authed,     setAuthed]     = useState<boolean | null>(null)
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(getCachedUser)
 
   // Auth check on mount
   useEffect(() => {
-    authApi.me().then(({ authed }) => setAuthed(authed))
+    authApi.me().then(({ authed, user }) => {
+      setAuthed(authed)
+      if (user) setCurrentUser(user)
+    })
   }, [])
 
   // Listen for 401 events from any API call
@@ -109,7 +113,7 @@ export default function App() {
       case 'releases':  return <ReleasesPage />
       case 'runbooks':  return <RunbooksPage />
       case 'dashboard': return <DashboardPage />
-      case 'settings':  return <SettingsPage onLogout={() => setAuthed(false)} />
+      case 'settings':  return <SettingsPage onLogout={() => { setAuthed(false); setCurrentUser(null) }} currentUser={currentUser} />
       default:
         return (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
@@ -154,7 +158,7 @@ export default function App() {
   if (authed === false) {
     return (
       <ToastProvider>
-        <LoginPage onLogin={() => setAuthed(true)} />
+        <LoginPage onLogin={user => { setAuthed(true); setCurrentUser(user) }} />
       </ToastProvider>
     )
   }
@@ -225,8 +229,11 @@ export default function App() {
             ☰
           </button>
           {/* Avatar */}
-          <div style={{ width: 26, height: 26, borderRadius: '50%', background: 'linear-gradient(135deg, #6366F1, #EC4899)', display: 'grid', placeItems: 'center', fontSize: '11px', fontWeight: 600, color: 'white' }}>
-            JV
+          <div
+            title={currentUser ? `${currentUser.username} (${currentUser.role})` : ''}
+            style={{ width: 26, height: 26, borderRadius: '50%', background: 'linear-gradient(135deg, #6366F1, #EC4899)', display: 'grid', placeItems: 'center', fontSize: '11px', fontWeight: 600, color: 'white', cursor: 'default' }}
+          >
+            {currentUser ? currentUser.username.slice(0, 2).toUpperCase() : '??'}
           </div>
         </div>
       </header>

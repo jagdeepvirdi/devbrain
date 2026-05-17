@@ -1,0 +1,137 @@
+import 'dotenv/config'
+import { env } from './lib/env.js'
+
+import express from 'express'
+import cors from 'cors'
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+import { pool, dbReady } from './db/pool.js'
+import { runSeed } from './db/seed.js'
+import { ollamaReady } from './services/ai.js'
+
+const app = express()
+
+app.use(cors())
+app.use(express.json({ limit: '50mb' }))
+
+// ── Health check ──────────────────────────────────────────────────────────
+
+app.get('/api/health', async (_req, res) => {
+  const [db, ollama] = await Promise.all([dbReady(), ollamaReady()])
+
+  const status = db ? (ollama ? 'ok' : 'degraded') : 'error'
+
+  res.status(db ? 200 : 503).json({
+    status,
+    ts:     new Date().toISOString(),
+    checks: {
+      db:     db     ? 'ok' : 'unreachable',
+      ollama: ollama ? 'ok' : 'unreachable',
+    },
+    config: {
+      ai_backend:  env.USE_CLAUDE ? 'claude' : 'ollama',
+      chat_model:  env.USE_CLAUDE ? 'claude-sonnet-4-6' : env.OLLAMA_CHAT_MODEL,
+      embed_model: 'nomic-embed-text',
+    },
+  })
+})
+
+// ── Auth routes (unprotected) ─────────────────────────────────────────────
+
+import authRouter from './routes/auth.js'
+app.use('/api/auth', authRouter)
+
+// ── Auth middleware (protects all routes below) ───────────────────────────
+
+import { requireAuth } from './middleware/auth.js'
+app.use('/api', requireAuth)
+
+// ── Routes ────────────────────────────────────────────────────────────────
+
+import projectsRouter  from './routes/projects.js'
+import aitaskRouter    from './routes/aitask.js'
+import documentsRouter from './routes/documents.js'
+
+app.use('/api/projects',  projectsRouter)
+app.use('/api/aitask',    aitaskRouter)
+app.use('/api/documents', documentsRouter)
+import issuesRouter from './routes/issues.js'
+app.use('/api/issues',    issuesRouter)
+import tasksRouter from './routes/tasks.js'
+app.use('/api/tasks',     tasksRouter)
+import commandsRouter from './routes/commands.js'
+app.use('/api/commands',  commandsRouter)
+import releasesRouter from './routes/releases.js'
+app.use('/api/releases',  releasesRouter)
+import runbooksRouter from './routes/runbooks.js'
+app.use('/api/runbooks',  runbooksRouter)
+import searchRouter    from './routes/search.js'
+app.use('/api/search',    searchRouter)
+import dashboardRouter from './routes/dashboard.js'
+app.use('/api/dashboard', dashboardRouter)
+import chatRouter from './routes/chat.js'
+app.use('/api/chat',      chatRouter)
+import settingsRouter from './routes/settings.js'
+app.use('/api/settings',  settingsRouter)
+import usersRouter from './routes/users.js'
+app.use('/api/users',     usersRouter)
+import auditRouter from './routes/audit.js'
+app.use('/api/audit',     auditRouter)
+
+// ── Static client (production) ────────────────────────────────────────────
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const publicDir = path.join(__dirname, 'public')
+
+if (env.NODE_ENV === 'production') {
+  app.use(express.static(publicDir))
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(publicDir, 'index.html'))
+  })
+}
+
+// ── Startup ───────────────────────────────────────────────────────────────
+
+async function start() {
+  console.log('DevBrain starting…')
+
+  // Wait for DB (retry up to 10 × 2 s during Docker cold start)
+  for (let i = 0; i < 10; i++) {
+    const ready = await dbReady()
+    if (ready) break
+    if (i === 9) {
+      console.error('  db: could not connect after 10 attempts — exiting')
+      process.exit(1)
+    }
+    console.log(`  db: not ready (attempt ${i + 1}/10) — waiting 2 s…`)
+    await new Promise(r => setTimeout(r, 2000))
+  }
+  console.log('  db: connected ✓')
+
+  // Seed on first launch
+  try {
+    await runSeed()
+  } catch (err) {
+    console.error('  seed: failed:', (err as Error).message)
+  }
+
+  // Ollama check (non-fatal — local dev may start server before Ollama)
+  const ollama = await ollamaReady()
+  console.log(`  ollama: ${ollama ? 'reachable ✓' : 'unreachable (AI features will fail)'}`)
+
+  app.listen(env.PORT, () => {
+    console.log(`  server: http://localhost:${env.PORT} ✓`)
+  })
+}
+
+start().catch(err => {
+  console.error('startup error:', err)
+  process.exit(1)
+})
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  await pool.end()
+  process.exit(0)
+})
