@@ -316,6 +316,42 @@
 
 ---
 
+## Phase 12 — Integrations & Platform Expansion
+
+### Git Integration
+- [ ] `POST /api/projects/:id/repo` — store repo URL + optional GitHub PAT (encrypted in DB)
+- [ ] `GET /api/projects/:id/commits` — fetch recent commits via GitHub API (`/repos/:owner/:repo/commits`)
+- [ ] Commit list widget on per-project dashboard — SHA, message, author, date; link to GitHub
+- [ ] "Link commit" action on issue detail — attach a commit SHA to an issue (`linked_commits TEXT[]`)
+- [ ] `POST /api/issues/:id/commits` — append SHA; show linked commits as chips in issue detail
+- [ ] PR link support — store PR URL on issue; open in browser on click
+- [ ] Release auto-populate — "Import from GitHub" on new release modal: fetches commits between two tags via API, pre-fills AI generate panel
+
+### Jira / Linear Sync
+- [ ] Settings: Jira config section — Jira base URL, email, API token (stored in DB settings table, never in env)
+- [ ] Settings: Linear config section — Linear API key
+- [ ] `POST /api/issues/import/jira` — fetch issues from a Jira project (JQL query), map to DevBrain issues (title, description, priority, status)
+- [ ] `POST /api/issues/import/linear` — fetch issues from a Linear team, same mapping
+- [ ] Import modal in Issues page — select source (Jira / Linear), enter project/team key, preview list, confirm import
+- [ ] Bi-directional status sync (stretch) — webhook receiver updates DevBrain issue status when Jira/Linear status changes
+
+### Progressive Web App (PWA / Offline)
+- [ ] Add Vite PWA plugin (`vite-plugin-pwa`) — generates service worker + manifest
+- [ ] Cache shell + static assets in service worker (cache-first strategy)
+- [ ] Offline fallback page — show cached data with "You're offline" banner, disable write actions
+- [ ] App manifest — name, icons (192/512px), theme color `#0A0A0F`, display standalone
+- [ ] "Install app" prompt — intercept `beforeinstallprompt`, show install button in Settings or nav
+
+### Cloud / Multi-Device Hosting
+- [ ] Docker Compose production profile — Caddy reverse proxy, auto-TLS, environment-based secrets
+- [ ] `docker-compose.prod.yml` — remove volume mounts for source, use built image, add Caddy service
+- [ ] One-command deploy script (`deploy.sh`) — pulls latest, rebuilds app image, restarts services
+- [ ] Health check endpoint already live (`/api/health`) — wire into Caddy upstream health check
+- [ ] Backup cron — daily `pg_dump` to local file + optional S3 upload (AWS_S3_BUCKET env var)
+- [ ] Restore script — `restore.sh` accepts dump file, stops app, restores DB, restarts
+
+---
+
 ## Known Risks & Mitigations
 
 | Risk | Mitigation |
