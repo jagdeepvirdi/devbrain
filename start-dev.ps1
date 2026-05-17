@@ -1,4 +1,4 @@
-# DevBrain — Dev startup script
+# DevBrain - Dev startup script
 # Starts: Ollama (native) + Postgres (Docker) + Express server (tsx watch) + Vite dev server
 
 $Root = $PSScriptRoot
@@ -51,11 +51,11 @@ while ($true) {
     if ($attempts -gt 25) { Write-Fail "Postgres did not become healthy in time" }
 }
 
-# --- 3. Database migrations (idempotent — safe to run every time) --------------
+# --- 3. Database migrations (idempotent - safe to run every time) --------------
 Write-Step "Running database migrations..."
 Set-Location "$Root\server"
 node db/migrate-org-v2.mjs
-if ($LASTEXITCODE -ne 0) { Write-Fail "migrate-org-v2.mjs failed — check DB connection and schema" }
+if ($LASTEXITCODE -ne 0) { Write-Fail "migrate-org-v2.mjs failed - check DB connection and schema" }
 Write-OK "Migrations up to date"
 
 # --- 4. Dev auth notice --------------------------------------------------------
@@ -63,7 +63,7 @@ $envFile = "$Root\server\.env"
 if (Test-Path $envFile) {
     $envContent = Get-Content $envFile -Raw
     if ($envContent -notmatch "AUTH_PASSWORD\s*=\s*.+") {
-        Write-Warn "AUTH_PASSWORD not set in server/.env — running in dev mode (no login required)"
+        Write-Warn "AUTH_PASSWORD not set in server/.env - running in dev mode (no login required)"
         Write-Host "    To enable login: add AUTH_PASSWORD=yourpassword to server/.env" -ForegroundColor DarkGray
     }
 }

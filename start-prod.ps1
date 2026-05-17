@@ -18,19 +18,19 @@ function Write-Fail($msg)  { Write-Host "    [!!] $msg" -ForegroundColor Red; ex
 Write-Step "Checking environment..."
 
 $envFile = "$Root\server\.env"
-if (-not (Test-Path $envFile)) { Write-Fail "server/.env not found — copy .env.example and fill in values" }
+if (-not (Test-Path $envFile)) { Write-Fail "server/.env not found - copy .env.example and fill in values" }
 
 $envContent = Get-Content $envFile -Raw
 
 # Warn on default JWT secret
 if ($envContent -match "JWT_SECRET\s*=\s*devbrain-dev-secret") {
-    Write-Warn "JWT_SECRET is still the dev default — change it before exposing this to a network"
+    Write-Warn "JWT_SECRET is still the dev default - change it before exposing this to a network"
     Write-Host "    Generate one: node -e `"console.log(require('crypto').randomBytes(32).toString('hex'))`"" -ForegroundColor DarkGray
 }
 
 # Fail if AUTH_PASSWORD is missing or empty
 if ($envContent -notmatch "AUTH_PASSWORD\s*=\s*.+") {
-    Write-Fail "AUTH_PASSWORD is not set in server/.env — required for production login`n    Add: AUTH_PASSWORD=your-strong-password"
+    Write-Fail "AUTH_PASSWORD is not set in server/.env - required for production login`n    Add: AUTH_PASSWORD=your-strong-password"
 }
 
 Write-OK "Environment checks passed"
@@ -109,11 +109,11 @@ while ($true) {
     if ($attempts -gt 25) { Write-Fail "Postgres did not become healthy in time" }
 }
 
-# --- 4. Database migrations (idempotent — safe to run every time) --------------
+# --- 4. Database migrations (idempotent - safe to run every time) --------------
 Write-Step "Running database migrations..."
 Set-Location "$Root\server"
 node db/migrate-org-v2.mjs
-if ($LASTEXITCODE -ne 0) { Write-Fail "migrate-org-v2.mjs failed — check DB connection and schema" }
+if ($LASTEXITCODE -ne 0) { Write-Fail "migrate-org-v2.mjs failed - check DB connection and schema" }
 Write-OK "Migrations up to date"
 
 # --- 5. Express server - compiled JS (serves client from server/public) --------
