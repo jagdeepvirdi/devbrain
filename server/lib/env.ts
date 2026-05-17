@@ -24,6 +24,13 @@ const schema = z.object({
       path: ['ANTHROPIC_API_KEY'],
     })
   }
+  if (data.NODE_ENV === 'production' && !data.AUTH_PASSWORD) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'AUTH_PASSWORD is required in production — server will not start without it',
+      path: ['AUTH_PASSWORD'],
+    })
+  }
 })
 
 const parsed = schema.safeParse(process.env)
