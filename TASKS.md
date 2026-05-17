@@ -316,6 +316,108 @@
 
 ---
 
+## Phase 13 — Security Hardening ⚠ (review-flagged critical)
+> Baseline review score: **3/10**. None of these are optional if more than one person uses this app.
+
+### Authentication & Token Security
+- [ ] Rate-limit `/api/auth/login` — `express-rate-limit`: max 10 attempts per 15 min per IP; return 429 with `Retry-After` header
+- [ ] Remove legacy token admin fallback — tokens missing `userId` must return 401, not grant admin; force re-login
+- [ ] Add `iss` and `aud` claims to JWT signing and verification — prevents tokens from other services being accepted
+- [ ] Move JWT from localStorage to HttpOnly cookie — eliminates XSS token theft; update `requireAuth` to read from cookie; keep `Authorization` header as fallback for API clients
+- [ ] Fix timing attack on login — run `bcrypt.compare` even when user is not found (compare against a dummy hash) so response time doesn't leak username existence
+
+### Authorization & Audit
+- [ ] Audit log: add `logAudit()` to `POST /api/auth/change-password` — password changes must be visible in audit trail
+- [ ] Admin password reset confirmation — require admin to re-enter their own password before resetting another user's; add `logAudit()` with `action: 'update'` on the affected user
+- [ ] Add HTTPS enforcement option — env var `FORCE_HTTPS=true` adds HSTS header + HTTP→HTTPS redirect middleware; document in `.env.example`
+
+### Input & SQL Safety
+- [ ] Replace `Object.keys(updates)` with explicit column allowlists in all dynamic `PUT`/`PATCH` handlers — `commands.ts`, `documents.ts`, `issues.ts`, `users.ts`; use a `const UPDATABLE_COLS = new Set([...])` guard before building the `SET` clause
+- [ ] Fix manual SQL parameter index counting — replace `let idx = N; idx++` pattern with a `buildUpdate(cols, vals)` helper that returns `{ setClauses, params }` safely
+- [ ] SSRF protection on URL document import — validate that the resolved host is not a private/loopback IP (`10.x`, `192.168.x`, `172.16–31.x`, `127.x`, `::1`) before fetching; return 422 with clear error
+
+### Infrastructure Secrets
+- [ ] Move Docker Compose credentials to env file — replace hardcoded `POSTGRES_PASSWORD: devbrain` and `JWT_SECRET` with `${POSTGRES_PASSWORD}` references; add `.env.docker` to `.env.example`; update setup guide
+- [ ] Add resource limits to Docker Compose — `mem_limit` and `cpus` on postgres and app containers to prevent runaway queries from crashing the host
+
+---
+
+## Phase 14 — Architecture & Code Quality (review-flagged)
+> Baseline review scores: Architecture **5/10**, Code **5/10**. Structural debt that compounds with every feature added.
+
+### Routing — Replace Custom Event System with React Router
+- [ ] Install `react-router-dom` v6 — wrap `App` in `<BrowserRouter>`
+- [ ] Map all current routes to URL paths: `/`, `/projects`, `/documents`, `/chat`, `/issues`, `/commands`, `/releases`, `/runbooks`, `/tasks`, `/settings`
+- [ ] Add project scoping to URLs: `/projects/:projectId/issues`, `/projects/:projectId/commands`, etc.
+- [ ] Replace `window.dispatchEvent('devbrain:navigate')` with `useNavigate()` — remove all custom event listeners from `App.tsx`
+- [ ] Replace `window.dispatchEvent('devbrain:open-issue')` with URL param: `/issues?open=:id`
+- [ ] Persist selected project in URL (`?project=:id`) so refresh and browser history work correctly
+- [ ] Add `<Link>` on all clickable cards (issue rows, command cards, release cards) — enables Ctrl+click to open in new tab
+
+### Schema — Single Source of Truth
+- [ ] Consolidate all migrations into `schema.sql` — fold `migrate-org-v2.mjs`, `migrate-releases.mjs`, `migrate-runbooks.mjs`, `migrate-tasks-devbrain.mjs` into the canonical schema; a fresh `psql < schema.sql` must produce the same DB as a fully migrated one
+- [ ] Add `updated_at TIMESTAMPTZ` column to all tables (`documents`, `issues`, `commands`, `releases`, `runbooks`, `projects`) — needed for conflict detection and activity feeds
+- [ ] Write `db/setup.ts` — single idempotent setup script that runs `schema.sql` + seeds; replaces the current multi-script setup dance
+
+### Data Integrity — Fix JSONB Race Conditions
+- [ ] Normalize `investigation_steps` into a `issue_steps` table (`id`, `issue_id`, `order`, `instruction`, `done`, `created_at`) — replace all JSONB read-modify-write with `INSERT`/`UPDATE`/`DELETE` on rows; eliminates concurrent-write data loss
+- [ ] Normalize `notes` into an `issue_notes` table (`id`, `issue_id`, `content`, `created_at`) — same reasoning; adds ability to query/search notes independently
+- [ ] Update `server/routes/issues.ts` to use new tables; update `client/src/lib/api.ts` types; update Issues.tsx rendering
+
+### Reliability — Embeddings & AI
+- [ ] Add `AbortController` with 30s timeout to all Ollama `fetch()` calls in `services/ai.ts` — prevents connection pool starvation on hung Ollama process
+- [ ] Replace fire-and-forget embed calls with tracked async — store `embedding_status: 'pending' | 'done' | 'failed'` column on `documents` and `issues`; retry failed embeddings on next request; surface status in UI (small indicator dot)
+- [ ] Add embedding retry endpoint `POST /api/documents/:id/reembed` and `POST /api/issues/:id/reembed` — allows manual repair of failed embeddings without re-uploading
+
+### Code Quality
+- [ ] Split `Issues.tsx` (1,318 lines) into: `IssuesList.tsx`, `IssueDetail.tsx`, `NewIssueModal.tsx`, `IssueSteps.tsx`, `IssueNotes.tsx` — each under 300 lines
+- [ ] Replace manual SQL parameter index counting (`let idx = 2; idx++`) with a `buildWhereClause(filters)` utility that returns `{ where, params }` — used in issues, commands, documents list routes
+- [ ] Add `useCallback` + `useMemo` to `IssuesList` and `CommandsPage` — memoize filter/sort computations and stable callbacks passed to child components
+- [ ] Add `AbortController` to debounced search inputs — cancel in-flight request when a new one starts; prevents stale response overwriting fresh results
+- [ ] Add drag-and-drop bounds validation in `IssueDetail` — guard `splice(fromIdx, 1)` with `fromIdx >= 0 && fromIdx < steps.length`
+- [ ] Add `<ErrorBoundary>` around each route in `App.tsx` — catches component crashes; shows "Something went wrong" with a reload button instead of blank white screen
+
+### Search & Pagination
+- [ ] Make search result limit configurable — replace hardcoded `const PAGE = 5` in `routes/search.ts` with `?limit=N` query param (default 10, max 50); add "load more" to the ⌘K global search results
+- [ ] Add request deduplication in `client/src/lib/api.ts` — use an in-flight map keyed by URL+method; return the same promise for identical concurrent requests; cancel on component unmount via `AbortController`
+
+---
+
+## Phase 15 — Design, Accessibility & Usability (review-flagged)
+> Baseline review scores: Design **6/10**, UI **4/10**, Usability **6/10**.
+
+### Accessibility (A11y)
+- [ ] Add `aria-label` to all icon-only buttons (star/favorite toggle, delete, close ✕, mark-used ✓) — required for screen readers
+- [ ] Add `role="dialog"` + `aria-modal="true"` + `aria-labelledby` to all modals — trap focus within modal on open; restore focus on close
+- [ ] Fix `cursor: 'default'` on all `<button>` elements — change to `cursor: 'pointer'` globally; only input-like buttons (disabled state) should be `default`
+- [ ] Add `tabIndex` and `onKeyDown` to all interactive card rows (IssueRow, CommandCard, RunbookCard) — keyboard users should be able to navigate and activate with Enter/Space
+- [ ] Add visible focus ring — `outline: '2px solid var(--accent)'` on `:focus-visible` for all interactive elements; currently focus is invisible
+
+### Responsive Layout
+- [ ] Make sidebar panels resizable — replace hardcoded `width: 300` with a drag-handle that saves width to localStorage; min 200px, max 500px
+- [ ] Add responsive breakpoint at 900px — collapse left panel into a toggleable drawer (hamburger icon in header); panels stack vertically below 900px
+- [ ] Add mobile viewport meta tag and basic touch targets — `min-height: 44px` on all interactive elements per WCAG 2.5.5
+
+### URL-Driven State & Deep Links
+> Depends on Phase 14 React Router work
+- [ ] Ensure every entity has a canonical URL — `/issues/:id`, `/commands/:id`, `/documents/:id`, `/runbooks/:id`
+- [ ] Add "Copy link" button on issue detail, command detail, runbook detail — copies canonical URL to clipboard
+- [ ] Restore last-visited route and project on page load from URL, not just localStorage
+
+### Design System Migration
+- [ ] Extract design tokens to `client/src/styles/tokens.css` CSS custom properties — consolidate all `var(--bg)`, `var(--accent)` etc. into one file; remove duplicate declarations across components
+- [ ] Create shared style constants file `client/src/styles/shared.ts` — export reusable style objects (`cardStyle`, `inputStyle`, `labelStyle`, `badgeStyle`) imported by all pages; reduces inline style duplication
+- [ ] Add enter/exit animations to modals — 150ms `opacity` + `transform: scale(0.97 → 1)` on open; makes transitions feel intentional rather than abrupt
+
+### Usability Improvements
+- [ ] Add runbook print/export view — `?print=1` URL param renders a clean, printer-friendly single-page view with no nav chrome; link in runbook detail header
+- [ ] Increase ⌘K search to show 10 results by default + "show more" — current 5-result cap hides relevant results in larger knowledge bases
+- [ ] Add onboarding empty states — when a section has 0 items, show an illustrated empty state with a single CTA ("Create your first issue", "Upload a document") instead of just "No items"
+- [ ] Add "recently viewed" trail — track last 10 visited entities (issue/command/doc) in localStorage; show as a quick-access list on the Dashboard and in ⌘K results when query is empty
+- [ ] Add keyboard shortcuts for primary actions — `N` for new (contextual: new issue on Issues page, new command on Commands page), `E` to edit selected item, `Backspace` on selected item to delete with confirm
+
+---
+
 ## Phase 12 — Integrations & Platform Expansion
 
 ### Git Integration
