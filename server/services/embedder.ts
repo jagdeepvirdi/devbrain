@@ -40,6 +40,14 @@ function chunkText(text: string): string[] {
 
 export type EmbedProgress = (done: number, total: number) => void
 
+/**
+ * Chunk `text`, embed each chunk via Ollama, and store in `document_chunks`.
+ * Deletes any existing chunks first so this function is idempotent on update.
+ * @param documentId - UUID of the parent document row
+ * @param text       - Full extracted plain-text content
+ * @param onProgress - Optional callback fired after each chunk is stored
+ * @returns Number of chunks written
+ */
 export async function embedDocument(
   documentId: string,
   text:        string,
@@ -65,6 +73,11 @@ export async function embedDocument(
   return chunks.length
 }
 
+/**
+ * Cosine-similarity search over `document_chunks` using pgvector.
+ * Optionally scoped to a single document or project.
+ * @returns Rows sorted by descending similarity, capped at `opts.limit` (default 5)
+ */
 export async function searchChunks(
   queryEmbedding: number[],
   opts: {

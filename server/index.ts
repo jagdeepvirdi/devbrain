@@ -6,6 +6,8 @@ import cors         from 'cors'
 import cookieParser from 'cookie-parser'
 import path         from 'path'
 import { fileURLToPath } from 'url'
+import swaggerUi from 'swagger-ui-express'
+import { openApiSpec } from './docs/openapi.js'
 
 import { pool, dbReady } from './db/pool.js'
 import { runSeed } from './db/seed.js'
@@ -51,6 +53,10 @@ app.get('/api/health', async (_req, res) => {
     },
   })
 })
+
+// ── API Docs (public — no auth) ───────────────────────────────────────────
+
+app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiSpec))
 
 // ── Auth routes (unprotected) ─────────────────────────────────────────────
 

@@ -13,6 +13,11 @@ type Message = { role: 'system' | 'user' | 'assistant'; content: string }
 
 // ── aiChat ────────────────────────────────────────────────────────────────
 
+/**
+ * Single-turn AI completion. Routes to Claude API when USE_CLAUDE=true,
+ * otherwise calls local Ollama. System prompt is passed separately so
+ * callers don't need to know the provider's message format.
+ */
 export async function aiChat(prompt: string, system: string): Promise<string> {
   if (env.USE_CLAUDE) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -67,6 +72,11 @@ export async function aiChat(prompt: string, system: string): Promise<string> {
 // Embeddings always use Ollama (nomic-embed-text) — never routed through
 // Claude API, which has no embedding endpoint.
 
+/**
+ * Generate a vector embedding for `text` using nomic-embed-text on Ollama.
+ * Always local — embeddings are never routed through the Claude API.
+ * Returns a 768-dimension float array suitable for pgvector storage.
+ */
 export async function aiEmbed(text: string): Promise<number[]> {
   const res = await fetch(`${OLLAMA_BASE}/api/embeddings`, {
     method: 'POST',
@@ -91,6 +101,11 @@ export async function aiEmbed(text: string): Promise<number[]> {
 // Used by the DocChat SSE route. Calls onChunk for each partial token,
 // which the route pipes to the client as `data: <token>\n\n`.
 
+/**
+ * Streaming AI completion — calls `onChunk` for each partial token as it
+ * arrives. Used by the DocChat SSE route to push tokens to the browser.
+ * Handles both Ollama's NDJSON stream and Claude's SSE stream formats.
+ */
 export async function aiChatStream(
   messages: Message[],
   onChunk: (chunk: string) => void
@@ -185,6 +200,7 @@ export async function aiChatStream(
 // ── ollamaReady ───────────────────────────────────────────────────────────
 // Returns true when Ollama's HTTP API responds. Used in the health endpoint.
 
+/** Probe Ollama's /api/tags endpoint. Returns false on any network error. */
 export async function ollamaReady(): Promise<boolean> {
   try {
     const res = await fetch(`${OLLAMA_BASE}/api/tags`, { signal: AbortSignal.timeout(3000) })

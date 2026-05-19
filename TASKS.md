@@ -120,16 +120,16 @@
 
 ---
 
-## Phase 17 — Documentation & Developer Experience (New - From Review)
+## Phase 17 — Documentation & Developer Experience ✅ COMPLETE
 
 ### Documentation
-- [ ] Integrate **Swagger/OpenAPI** for the Express server to document all endpoints
-- [ ] Create a `CONTRIBUTING.md` with setup instructions and coding standards (referencing `GEMINI.md`)
-- [ ] Add inline JSDoc/TSDoc to complex service functions
+- [x] Integrate **Swagger/OpenAPI** for the Express server to document all endpoints <!-- done: 2026-05-19 -->
+- [x] Create a `CONTRIBUTING.md` with setup instructions and coding standards (referencing `GEMINI.md`) <!-- done: 2026-05-19 -->
+- [x] Add inline JSDoc/TSDoc to complex service functions <!-- done: 2026-05-19 -->
 
 ### Developer Experience
-- [ ] Set up **ESLint** and **Prettier** with strict rules to match `GEMINI.md` mandates
-- [ ] Add a `scripts/validate.ps1` to run lint, typecheck, and tests in one go
+- [x] Set up **ESLint** and **Prettier** with strict rules to match `GEMINI.md` mandates <!-- done: 2026-05-19 -->
+- [x] Update `scripts/validate.ps1` to run lint, typecheck, and tests in one go <!-- done: 2026-05-19 -->
 
 ---
 

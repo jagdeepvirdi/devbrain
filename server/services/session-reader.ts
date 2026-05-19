@@ -71,6 +71,12 @@ function dateFromFolder(folderName: string): string {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/**
+ * Scan `<fsPath>/sessions/` and return a summary for every SESSION.md found.
+ * Folders that can't be read are silently skipped — returns [] when the
+ * sessions directory doesn't exist yet (project hasn't run any sessions).
+ * Results are sorted newest-first by folder name.
+ */
 export async function readSessions(fsPath: string): Promise<SessionSummary[]> {
   const sessionsDir = path.join(fsPath, 'sessions')
 
@@ -122,6 +128,12 @@ export async function readSessions(fsPath: string): Promise<SessionSummary[]> {
   return sessions
 }
 
+/**
+ * Read a single SESSION.md and return its full detail including raw markdown.
+ * Matches by `session_id` frontmatter field first, then by folder name as
+ * a fallback (supports the case where session_id wasn't written).
+ * Returns null when the session can't be found.
+ */
 export async function readSessionDetail(
   fsPath:    string,
   sessionId: string,
