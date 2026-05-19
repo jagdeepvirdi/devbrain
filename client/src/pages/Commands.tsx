@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { commandsApi, type Command, type CommandInput } from '../lib/api'
 import { useProjectStore } from '../store/projectStore'
 import { useToast } from '../components/Toast'
 import { SkeletonRow } from '../components/Skeleton'
 import { createHighlighter, type Highlighter } from 'shiki'
+import { useRecentlyViewed } from '../hooks/useRecentlyViewed'
 
 // ── Shiki singleton ──────────────────────────────────────────────────────────
 
@@ -119,11 +121,16 @@ function CommandCard({ cmd, selected, onClick, onFavToggle }: {
   const firstLine = cmd.command.split('\n')[0]
 
   return (
-    <div onClick={onClick} style={{
-      padding: '9px 10px', borderRadius: 6, cursor: 'default',
-      background: selected ? 'var(--bg-elev-2)' : 'transparent',
-      border: `1px solid ${selected ? 'var(--line-2)' : 'transparent'}`,
-    }}>
+    <a
+      href={`/commands?open=${cmd.id}`}
+      onClick={e => { if (!e.ctrlKey && !e.metaKey) { e.preventDefault(); onClick() } }}
+      style={{
+        display: 'block', textDecoration: 'none', color: 'inherit',
+        padding: '9px 10px', borderRadius: 6, cursor: 'default',
+        background: selected ? 'var(--bg-elev-2)' : 'transparent',
+        border: `1px solid ${selected ? 'var(--line-2)' : 'transparent'}`,
+      }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
         <LangBadge lang={cmd.language} />
         <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
@@ -134,11 +141,16 @@ function CommandCard({ cmd, selected, onClick, onFavToggle }: {
             personal
           </span>
         )}
-        <button onClick={onFavToggle} style={{
-          fontSize: 13, flexShrink: 0,
-          color: cmd.is_favorite ? '#F59E0B' : 'var(--fg-4)',
-          background: 'none', border: 'none', cursor: 'default', padding: 0, lineHeight: 1,
-        }}>
+        <button
+          onClick={onFavToggle}
+          aria-label={cmd.is_favorite ? 'Remove from favorites' : 'Add to favorites'}
+          aria-pressed={cmd.is_favorite}
+          style={{
+            fontSize: 13, flexShrink: 0,
+            color: cmd.is_favorite ? '#F59E0B' : 'var(--fg-4)',
+            background: 'none', border: 'none', padding: 0, lineHeight: 1,
+          }}
+        >
           {cmd.is_favorite ? '★' : '☆'}
         </button>
       </div>
@@ -159,7 +171,7 @@ function CommandCard({ cmd, selected, onClick, onFavToggle }: {
           ))}
         </div>
       )}
-    </div>
+    </a>
   )
 }
 
@@ -178,6 +190,8 @@ function CommandDetail({ cmd, hl, onUpdate, onDelete }: {
   const [explaining, setExplaining] = useState(false)
   const [explanation, setExplain]   = useState<string | null>(null)
   const [confirmDel, setConfirmDel] = useState(false)
+  const [linkCopied, setLinkCopied] = useState(false)
+  const { track } = useRecentlyViewed()
 
   useEffect(() => {
     setTitle(cmd.title)
@@ -186,7 +200,8 @@ function CommandDetail({ cmd, hl, onUpdate, onDelete }: {
     setEditCode(false)
     setExplain(null)
     setConfirmDel(false)
-  }, [cmd.id])
+    track({ id: cmd.id, type: 'command', title: cmd.title, projectName: cmd.project_name ?? undefined, projectColor: cmd.project_color ?? undefined })
+  }, [cmd.id, track])
 
   async function explain() {
     setExplaining(true)
@@ -213,22 +228,38 @@ function CommandDetail({ cmd, hl, onUpdate, onDelete }: {
           onChange={e => setTitle(e.target.value)}
           onBlur={() => { if (title.trim() && title !== cmd.title) onUpdate(cmd.id, { title: title.trim() }) }}
           style={{ flex: 1, background: 'none', border: 'none', color: 'var(--fg)', fontSize: 18, fontWeight: 600, padding: 0, outline: 'none' }}
+          aria-label="Command title"
         />
-        <button onClick={() => onUpdate(cmd.id, { is_favorite: !cmd.is_favorite })} style={{
-          fontSize: 18, color: cmd.is_favorite ? '#F59E0B' : 'var(--fg-4)',
-          background: 'none', border: 'none', cursor: 'default', flexShrink: 0,
-        }}>
+        <button
+          onClick={() => {
+            const url = `${window.location.origin}/commands?open=${cmd.id}`
+            navigator.clipboard.writeText(url).then(() => { setLinkCopied(true); setTimeout(() => setLinkCopied(false), 2000) })
+          }}
+          aria-label="Copy link to this command"
+          style={{ fontSize: '11px', color: linkCopied ? '#4ADE80' : 'var(--fg-4)', padding: '3px 8px', borderRadius: 4, border: `1px solid ${linkCopied ? 'rgba(74,222,128,.4)' : 'var(--line-2)'}`, flexShrink: 0 }}
+        >
+          {linkCopied ? '✓ Copied' : '⎘ Link'}
+        </button>
+        <button
+          onClick={() => onUpdate(cmd.id, { is_favorite: !cmd.is_favorite })}
+          aria-label={cmd.is_favorite ? 'Remove from favorites' : 'Add to favorites'}
+          aria-pressed={cmd.is_favorite}
+          style={{
+            fontSize: 18, color: cmd.is_favorite ? '#F59E0B' : 'var(--fg-4)',
+            background: 'none', border: 'none', flexShrink: 0,
+          }}
+        >
           {cmd.is_favorite ? '★' : '☆'}
         </button>
         {!confirmDel
-          ? <button onClick={() => setConfirmDel(true)} style={{ fontSize: '11.5px', padding: '4px 10px', borderRadius: 5, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)', cursor: 'default' }}>
+          ? <button onClick={() => setConfirmDel(true)} aria-label="Delete command" style={{ fontSize: '11.5px', padding: '4px 10px', borderRadius: 5, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)' }}>
               Delete
             </button>
           : <div style={{ display: 'flex', gap: 6 }}>
-              <button onClick={() => onDelete(cmd.id)} style={{ fontSize: '11.5px', padding: '4px 10px', borderRadius: 5, border: '1px solid #EF4444', background: 'rgba(239,68,68,.1)', color: '#EF4444', cursor: 'default' }}>
+              <button onClick={() => onDelete(cmd.id)} aria-label="Confirm delete command" style={{ fontSize: '11.5px', padding: '4px 10px', borderRadius: 5, border: '1px solid #EF4444', background: 'rgba(239,68,68,.1)', color: '#EF4444' }}>
                 Confirm
               </button>
-              <button onClick={() => setConfirmDel(false)} style={{ fontSize: '11.5px', padding: '4px 10px', borderRadius: 5, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)', cursor: 'default' }}>
+              <button onClick={() => setConfirmDel(false)} style={{ fontSize: '11.5px', padding: '4px 10px', borderRadius: 5, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)' }}>
                 Cancel
               </button>
             </div>
@@ -396,11 +427,17 @@ function NewCommandModal({ onClose, onCreate }: {
   }
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, backdropFilter: 'blur(4px)' }}>
-      <div style={{ width: 540, maxHeight: '85vh', display: 'flex', flexDirection: 'column', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: '0 24px 60px rgba(0,0,0,.5)' }}>
+    <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, backdropFilter: 'blur(4px)' }}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-cmd-dialog-title"
+        className="modal-panel"
+        style={{ width: 540, maxHeight: '85vh', display: 'flex', flexDirection: 'column', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: '0 24px 60px rgba(0,0,0,.5)' }}
+      >
         <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--fg)' }}>New Command</span>
-          <button onClick={onClose} style={{ width: 24, height: 24, display: 'grid', placeItems: 'center', borderRadius: 4, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)', cursor: 'default', fontSize: 14 }}>✕</button>
+          <span id="new-cmd-dialog-title" style={{ fontSize: '14px', fontWeight: 600, color: 'var(--fg)' }}>New Command</span>
+          <button onClick={onClose} aria-label="Close dialog" style={{ width: 24, height: 24, display: 'grid', placeItems: 'center', borderRadius: 4, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)', fontSize: 14 }}>✕</button>
         </div>
 
         <form id="new-cmd-form" onSubmit={submit} style={{ padding: '16px 18px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 14, flex: 1 }}>
@@ -624,13 +661,14 @@ export function CommandsPage() {
   const { selectedProject } = useProjectStore()
   const { toast } = useToast()
   const proj = selectedProject()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [commands,      setCommands]      = useState<Command[]>([])
   const [total,         setTotal]         = useState(0)
   const [nextOffset,    setNextOffset]    = useState(0)
   const [loading,       setLoading]       = useState(true)
   const [loadingMore,   setLoadingMore]   = useState(false)
-  const [selectedId,    setSelectedId]    = useState<string | null>(null)
+  const [selectedId,    setSelectedId]    = useState<string | null>(searchParams.get('open'))
   const [search,        setSearch]        = useState('')
   const [langFilter,    setLangFilter]    = useState<string | null>(null)
   const [favFilter,     setFavFilter]     = useState(false)
@@ -639,6 +677,7 @@ export function CommandsPage() {
   const [paletteOpen,   setPaletteOpen]   = useState(false)
   const [importing,     setImporting]     = useState(false)
   const importRef = useRef<HTMLInputElement>(null)
+  const loadAbortRef = useRef<AbortController | null>(null)
 
   // Inject Shiki CSS once
   useEffect(() => {
@@ -652,8 +691,14 @@ export function CommandsPage() {
   }, [])
 
   const load = useCallback(async (offset: number, append: boolean) => {
-    if (!append) setLoading(true)
-    else setLoadingMore(true)
+    if (!append) {
+      loadAbortRef.current?.abort()
+      loadAbortRef.current = new AbortController()
+      setLoading(true)
+    } else {
+      setLoadingMore(true)
+    }
+    const signal = !append ? loadAbortRef.current?.signal : undefined
     try {
       const result = await commandsApi.list({
         projectId: proj?.id,
@@ -663,12 +708,19 @@ export function CommandsPage() {
         namespace: nsFilter !== 'all' ? nsFilter : undefined,
         limit:     CMD_PAGE,
         offset,
+        signal,
       })
       setTotal(result.total)
       setCommands(prev => append ? [...prev, ...result.items] : result.items)
       setNextOffset(offset + result.items.length)
-    } catch { if (!append) setCommands([]) }
-    finally { setLoading(false); setLoadingMore(false) }
+      setLoading(false)
+      setLoadingMore(false)
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') return
+      if (!append) setCommands([])
+      setLoading(false)
+      setLoadingMore(false)
+    }
   }, [proj?.id, search, langFilter, favFilter, nsFilter])
 
   useEffect(() => { load(0, false) }, [load])
@@ -682,26 +734,40 @@ export function CommandsPage() {
     searchTimer.current = setTimeout(() => setSearch(v), 250)
   }
 
-  const selected = commands.find(c => c.id === selectedId) ?? null
+  const selected = useMemo(
+    () => commands.find(c => c.id === selectedId) ?? null,
+    [commands, selectedId]
+  )
 
-  async function handleUpdate(id: string, updates: Partial<CommandInput>) {
+  const handleUpdate = useCallback(async (id: string, updates: Partial<CommandInput>) => {
     const updated = await commandsApi.update(id, updates)
     setCommands(prev => prev.map(c => c.id === id ? updated : c))
-  }
+  }, [])
 
-  function handleDelete(id: string) {
+  // Keep ?open= URL param in sync with selected command
+  const selectCommand = useCallback((id: string | null) => {
+    setSelectedId(id)
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (id) next.set('open', id)
+      else next.delete('open')
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
+
+  const handleDelete = useCallback((id: string) => {
     commandsApi.remove(id).then(() => {
       setCommands(prev => prev.filter(c => c.id !== id))
-      setSelectedId(null)
+      selectCommand(null)
     })
-  }
+  }, [selectCommand])
 
-  function handleFavToggle(e: React.MouseEvent, cmd: Command) {
+  const handleFavToggle = useCallback((e: React.MouseEvent, cmd: Command) => {
     e.stopPropagation()
     commandsApi.update(cmd.id, { is_favorite: !cmd.is_favorite }).then(updated => {
       setCommands(prev => prev.map(c => c.id === cmd.id ? updated : c))
     })
-  }
+  }, [])
 
   async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -726,8 +792,21 @@ export function CommandsPage() {
     }
   }
 
-  // Unique langs present in current list
-  const availableLangs = [...new Set(commands.map(c => c.language))].sort()
+  const availableLangs = useMemo(
+    () => [...new Set(commands.map(c => c.language))].sort(),
+    [commands]
+  )
+
+  // Keyboard shortcut: N = new command
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement).tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable) return
+      if (e.key === 'n' || e.key === 'N') { e.preventDefault(); setShowNew(true) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -817,15 +896,23 @@ export function CommandsPage() {
             {loading
               ? [1,2,3,4,5].map(i => <SkeletonRow key={i} cols={[140, 80, 50]} />)
               : commands.length === 0
-                ? <div style={{ padding: 20, textAlign: 'center', fontSize: '12px', color: 'var(--fg-3)' }}>
-                    No commands{search ? ' matching "' + search + '"' : ''}
+                ? <div style={{ padding: '28px 16px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                    <div style={{ width: 38, height: 38, borderRadius: 8, background: 'var(--bg-elev)', border: '1px solid var(--line)', display: 'grid', placeItems: 'center', fontSize: 18, color: 'var(--fg-4)' }}>&gt;_</div>
+                    <div style={{ fontSize: '12px', color: 'var(--fg-3)' }}>
+                      {search ? `No commands matching "${search}"` : 'No commands yet'}
+                    </div>
+                    {!search && (
+                      <button onClick={() => setShowNew(true)} style={{ fontSize: '11.5px', padding: '5px 12px', borderRadius: 5, border: '1px solid var(--accent)', background: 'var(--accent-dim)', color: 'var(--accent-2)' }}>
+                        + Create your first command
+                      </button>
+                    )}
                   </div>
                 : commands.map(cmd => (
                     <CommandCard
                       key={cmd.id}
                       cmd={cmd}
                       selected={cmd.id === selectedId}
-                      onClick={() => setSelectedId(cmd.id)}
+                      onClick={() => selectCommand(cmd.id)}
                       onFavToggle={e => handleFavToggle(e, cmd)}
                     />
                   ))

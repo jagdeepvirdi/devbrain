@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { runbooksApi, type Runbook, type RunbookStep, type RunbookInput } from '../lib/api'
 import { useProjectStore } from '../store/projectStore'
 
@@ -133,20 +134,27 @@ function RunbookCard({ rb, selected, onClick, onMarkUsed }: {
   }
 
   return (
-    <div onClick={onClick} style={{
-      padding: '10px 12px', borderRadius: 6, cursor: 'default',
-      background: selected ? 'var(--bg-elev-2)' : 'transparent',
-      border: `1px solid ${selected ? 'var(--line-2)' : 'transparent'}`,
-    }}>
+    <div
+      onClick={onClick}
+      tabIndex={0}
+      role="button"
+      aria-label={`Open runbook: ${rb.title}`}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() } }}
+      style={{
+        padding: '10px 12px', borderRadius: 6, cursor: 'default',
+        background: selected ? 'var(--bg-elev-2)' : 'transparent',
+        border: `1px solid ${selected ? 'var(--line-2)' : 'transparent'}`,
+      }}
+    >
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 3 }}>
         <span style={{ flex: 1, fontSize: '13px', fontWeight: 500, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {rb.title}
         </span>
         <button
           onClick={handleMarkUsed}
-          title="Mark as used"
+          aria-label="Mark runbook as used"
           disabled={marking}
-          style={{ fontSize: '10px', padding: '1px 6px', borderRadius: 3, border: '1px solid rgba(34,197,94,.4)', background: 'rgba(34,197,94,.08)', color: '#22C55E', cursor: 'default', flexShrink: 0, opacity: marking ? 0.5 : 1 }}
+          style={{ fontSize: '10px', padding: '1px 6px', borderRadius: 3, border: '1px solid rgba(34,197,94,.4)', background: 'rgba(34,197,94,.08)', color: '#22C55E', flexShrink: 0, opacity: marking ? 0.5 : 1 }}
         >
           ✓
         </button>
@@ -271,10 +279,17 @@ function RunbookDetail({ rb, onUpdate, onDelete, onUsed }: {
             <span key={t} style={{ fontSize: '11px', padding: '1px 7px', borderRadius: 10, background: 'var(--bg-elev)', border: '1px solid var(--line)', color: 'var(--fg-3)' }}>{t}</span>
           ))}
           <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--fg-4)' }}>Last used: {fmtDate(rb.last_used_at)}</span>
-          <button onClick={markUsed} style={{ fontSize: '11.5px', padding: '4px 12px', borderRadius: 5, border: '1px solid #22C55E', background: 'rgba(34,197,94,.1)', color: '#22C55E', cursor: 'default' }}>
+          <button
+            onClick={() => window.open(`${window.location.pathname}?open=${rb.id}&print=1`, '_blank')}
+            aria-label="Open print view"
+            style={{ fontSize: '11.5px', padding: '4px 10px', borderRadius: 5, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)' }}
+          >
+            ⎙ Print
+          </button>
+          <button onClick={markUsed} aria-label="Mark runbook as used" style={{ fontSize: '11.5px', padding: '4px 12px', borderRadius: 5, border: '1px solid #22C55E', background: 'rgba(34,197,94,.1)', color: '#22C55E' }}>
             ✓ Mark as Used
           </button>
-          <button onClick={() => setEditMode(v => !v)} style={{ fontSize: '11.5px', padding: '4px 10px', borderRadius: 5, border: `1px solid ${editMode ? 'var(--accent)' : 'var(--line)'}`, background: editMode ? 'var(--accent-dim)' : 'none', color: editMode ? 'var(--accent-2)' : 'var(--fg-3)', cursor: 'default' }}>
+          <button onClick={() => setEditMode(v => !v)} style={{ fontSize: '11.5px', padding: '4px 10px', borderRadius: 5, border: `1px solid ${editMode ? 'var(--accent)' : 'var(--line)'}`, background: editMode ? 'var(--accent-dim)' : 'none', color: editMode ? 'var(--accent-2)' : 'var(--fg-3)' }}>
             {editMode ? 'View' : 'Edit'}
           </button>
         </div>
@@ -399,11 +414,17 @@ function NewRunbookModal({ onClose, onCreate }: {
   const inp: React.CSSProperties = { width: '100%', background: 'var(--bg-elev)', border: '1px solid var(--line)', borderRadius: 6, padding: '7px 10px', color: 'var(--fg)', fontSize: '13px', boxSizing: 'border-box', outline: 'none' }
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, backdropFilter: 'blur(4px)' }}>
-      <div style={{ width: 420, background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: '0 24px 60px rgba(0,0,0,.5)', overflow: 'hidden' }}>
+    <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, backdropFilter: 'blur(4px)' }}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-rb-dialog-title"
+        className="modal-panel"
+        style={{ width: 420, background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: '0 24px 60px rgba(0,0,0,.5)', overflow: 'hidden' }}
+      >
         <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--fg)' }}>New Runbook</span>
-          <button onClick={onClose} style={{ fontSize: 16, color: 'var(--fg-3)', background: 'none', border: 'none', cursor: 'default' }}>✕</button>
+          <span id="new-rb-dialog-title" style={{ fontSize: '14px', fontWeight: 600, color: 'var(--fg)' }}>New Runbook</span>
+          <button onClick={onClose} aria-label="Close dialog" style={{ fontSize: 16, color: 'var(--fg-3)', background: 'none', border: 'none' }}>✕</button>
         </div>
         <form id="new-rb-form" onSubmit={submit} style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
@@ -439,14 +460,17 @@ function NewRunbookModal({ onClose, onCreate }: {
 export function RunbooksPage() {
   const { selectedProject } = useProjectStore()
   const proj = selectedProject()
+  const [searchParams] = useSearchParams()
 
   const [runbooks,    setRunbooks]    = useState<Runbook[]>([])
   const [loading,     setLoading]     = useState(true)
-  const [selectedId,  setSelectedId]  = useState<string | null>(null)
+  const [selectedId,  setSelectedId]  = useState<string | null>(searchParams.get('open'))
   const [search,      setSearch]      = useState('')
   const [searchInput, setSearchInput] = useState('')
   const [showNew,     setShowNew]     = useState(false)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const isPrint = searchParams.get('print') === '1'
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -458,6 +482,17 @@ export function RunbooksPage() {
   }, [proj?.id, search])
 
   useEffect(() => { load() }, [load])
+
+  // Keyboard shortcut: N = new runbook
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement).tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable) return
+      if (e.key === 'n' || e.key === 'N') { e.preventDefault(); setShowNew(true) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   function handleSearch(v: string) {
     setSearchInput(v)
@@ -482,6 +517,40 @@ export function RunbooksPage() {
 
   function handleUsed(updated: Runbook) {
     setRunbooks(prev => prev.map(r => r.id === updated.id ? updated : r))
+  }
+
+  // Print view — clean, no nav chrome
+  if (isPrint && selectedId) {
+    const rb = runbooks.find(r => r.id === selectedId)
+    if (loading) return <div style={{ padding: 40, color: '#333' }}>Loading…</div>
+    if (!rb) return <div style={{ padding: 40, color: '#333' }}>Runbook not found.</div>
+    return (
+      <div style={{ padding: '40px 48px', maxWidth: 720, margin: '0 auto', fontFamily: 'Georgia, serif', color: '#111', background: '#fff', minHeight: '100vh' }}>
+        <h1 style={{ fontSize: 24, fontWeight: 700, margin: '0 0 8px' }}>{rb.title}</h1>
+        {rb.project_name && <p style={{ margin: '0 0 4px', fontSize: 14, color: '#555' }}>Project: {rb.project_name}</p>}
+        <p style={{ margin: '0 0 32px', fontSize: 13, color: '#888' }}>
+          {rb.steps.length} step{rb.steps.length !== 1 ? 's' : ''} · Last used: {fmtDate(rb.last_used_at)}
+        </p>
+        <hr style={{ border: 'none', borderTop: '1px solid #ddd', marginBottom: 32 }} />
+        {rb.steps.map((step, i) => (
+          <div key={step.id} style={{ display: 'flex', gap: 20, marginBottom: 28 }}>
+            <div style={{ width: 28, height: 28, borderRadius: '50%', border: '2px solid #6366F1', display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700, color: '#6366F1', flexShrink: 0, marginTop: 2 }}>
+              {i + 1}
+            </div>
+            <div style={{ flex: 1 }}>
+              <p style={{ margin: '0 0 8px', fontSize: 15, lineHeight: 1.6, color: '#111' }}>{step.instruction}</p>
+              {step.command && (
+                <pre style={{ margin: '0 0 8px', padding: '10px 14px', background: '#f5f5f5', borderRadius: 5, border: '1px solid #e0e0e0', fontFamily: 'monospace', fontSize: 13, lineHeight: 1.6, overflowX: 'auto', color: '#222' }}>
+                  {step.command}
+                </pre>
+              )}
+              {step.note && <p style={{ margin: 0, fontSize: 13, color: '#666', fontStyle: 'italic' }}>{step.note}</p>}
+            </div>
+          </div>
+        ))}
+        <p style={{ marginTop: 40, fontSize: 11, color: '#aaa' }}>Generated by DevBrain · {new Date().toLocaleDateString()}</p>
+      </div>
+    )
   }
 
   return (

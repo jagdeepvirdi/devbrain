@@ -1,0 +1,91 @@
+/* ─── CSS design tokens ──────────────────────────────────────────────────────
+   Single source of truth for all CSS custom properties.
+   Imported first by index.css so every component can reference these vars.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Surfaces */
+  --bg:        #0A0A0F;
+  --bg-elev:   #0F0F17;
+  --bg-elev-2: #14141E;
+  --bg-hover:  #1A1A26;
+  --panel:     #0D0D14;
+
+  /* Text */
+  --fg:   #E8E8F0;
+  --fg-2: #B4B4C2;
+  --fg-3: #7A7A8A;
+  --fg-4: #4A4A56;
+
+  /* Borders */
+  --line:   rgba(255, 255, 255, 0.06);
+  --line-2: rgba(255, 255, 255, 0.10);
+  --line-3: rgba(255, 255, 255, 0.16);
+
+  /* Accent */
+  --accent:      #6366F1;
+  --accent-2:    #818CF8;
+  --accent-dim:  rgba(99, 102, 241, 0.16);
+  --accent-line: rgba(99, 102, 241, 0.30);
+
+  /* Status */
+  --red:    #F05A5A;
+  --orange: #FF9D4D;
+  --yellow: #E6C341;
+  --green:  #4ADE80;
+  --blue:   #60A5FA;
+  --teal:   #2DD4BF;
+  --violet: #A78BFA;
+
+  /* Layout density (normal) */
+  --sidebar-w: 220px;
+  --row-h:   32px;
+  --pad:     14px;
+  --pad-sm:  10px;
+  --gap:     12px;
+  --radius:  6px;
+  --radius-lg: 10px;
+  --fs:      13px;
+  --fs-sm:   11.5px;
+  --fs-xs:   10.5px;
+
+  /* Typography */
+  --font-ui:   "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* Density variants */
+[data-density="compact"] {
+  --row-h:  28px;
+  --pad:    10px;
+  --pad-sm: 8px;
+  --gap:    8px;
+  --fs:     12px;
+  --fs-sm:  11px;
+  --fs-xs:  10px;
+}
+[data-density="comfy"] {
+  --row-h:  38px;
+  --pad:    18px;
+  --pad-sm: 14px;
+  --gap:    16px;
+  --fs:     14px;
+  --fs-sm:  12.5px;
+  --fs-xs:  11.5px;
+}
+
+/* Background tint variants */
+[data-tint="black"] {
+  --bg:       #060608;
+  --bg-elev:  #0B0B0D;
+  --bg-elev-2:#111114;
+  --panel:    #0A0A0C;
+  --bg-hover: #16161A;
+}
+[data-tint="warm"] {
+  --bg:       #0E0B09;
+  --bg-elev:  #14110E;
+  --bg-elev-2:#1A1611;
+  --panel:    #110E0B;
+  --bg-hover: #211C16;
+}

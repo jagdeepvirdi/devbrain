@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { documentsApi, type DocMeta, type DocDetail } from '../lib/api'
+import { documentsApi, type DocMeta, type DocDetail, type EmbeddingStatus } from '../lib/api'
 import { useProjectStore } from '../store/projectStore'
 import { useToast } from '../components/Toast'
 import { SkeletonRow } from '../components/Skeleton'
@@ -163,16 +163,54 @@ function DropZone({ projectId, onDone }: { projectId: string | undefined; onDone
   )
 }
 
+// ── Embedding status dot ──────────────────────────────────────────────────
+
+const EMBED_DOT: Record<EmbeddingStatus, { color: string; title: string }> = {
+  pending:    { color: '#64748B', title: 'Embedding pending' },
+  processing: { color: '#F59E0B', title: 'Embedding in progress…' },
+  done:       { color: '#22C55E', title: 'Embedded' },
+  failed:     { color: '#EF4444', title: 'Embedding failed — click to retry' },
+}
+
+function EmbedDot({ status, onClick }: { status: EmbeddingStatus; onClick?: () => void }) {
+  const { color, title } = EMBED_DOT[status] ?? EMBED_DOT.pending
+  return (
+    <span
+      onClick={onClick ? (e) => { e.stopPropagation(); onClick() } : undefined}
+      title={title}
+      style={{
+        width: 6, height: 6, borderRadius: '50%', background: color,
+        display: 'inline-block', flexShrink: 0,
+        cursor: onClick ? 'pointer' : 'default',
+        boxShadow: status === 'processing' ? `0 0 5px ${color}` : undefined,
+      }}
+    />
+  )
+}
+
 // ── Document preview panel ────────────────────────────────────────────────
 
-function PreviewPanel({ docId, onClose }: { docId: string; onClose: () => void }) {
-  const [doc, setDoc]   = useState<DocDetail | null>(null)
-  const [loading, setLoading] = useState(true)
+function PreviewPanel({ docId, onClose, onReembedSuccess }: { docId: string; onClose: () => void; onReembedSuccess: (id: string, status: EmbeddingStatus) => void }) {
+  const [doc, setDoc]           = useState<DocDetail | null>(null)
+  const [loading, setLoading]   = useState(true)
+  const [reembed, setReembed]   = useState(false)
 
   useEffect(() => {
     setLoading(true)
     documentsApi.get(docId).then(d => { setDoc(d); setLoading(false) }).catch(() => setLoading(false))
   }, [docId])
+
+  async function handleReembed() {
+    if (!doc || reembed) return
+    setReembed(true)
+    try {
+      const result = await documentsApi.reembed(doc.id)
+      setDoc(prev => prev ? { ...prev, embedding_status: result.embedding_status } : prev)
+      onReembedSuccess(doc.id, result.embedding_status)
+    } finally {
+      setReembed(false)
+    }
+  }
 
   const ts = TYPE_STYLE[doc?.file_type ?? ''] ?? TYPE_STYLE.txt
 
@@ -193,10 +231,21 @@ function PreviewPanel({ docId, onClose }: { docId: string; onClose: () => void }
         {loading ? 'Loading…' : (doc?.content ?? '')}
       </div>
       {doc && (
-        <div style={{ padding: '10px 16px', borderTop: '1px solid var(--line)', fontSize: 11, color: 'var(--fg-4)', display: 'flex', gap: 12, fontFamily: 'var(--font-mono)' }}>
+        <div style={{ padding: '10px 16px', borderTop: '1px solid var(--line)', fontSize: 11, color: 'var(--fg-4)', display: 'flex', gap: 10, fontFamily: 'var(--font-mono)', alignItems: 'center' }}>
+          <EmbedDot status={doc.embedding_status} />
           <span>{doc.chunk_count} chunks</span>
           <span>{fmtSize(doc.content_length)}</span>
-          <span>{fmtDate(doc.created_at)}</span>
+          <span style={{ flex: 1 }}>{fmtDate(doc.created_at)}</span>
+          {(doc.embedding_status === 'failed' || doc.embedding_status === 'pending') && (
+            <button
+              onClick={handleReembed}
+              disabled={reembed}
+              title="Re-embed this document"
+              style={{ fontSize: 10, padding: '2px 7px', borderRadius: 3, border: '1px solid var(--accent-line)', background: 'var(--accent-dim)', color: 'var(--accent-2)', cursor: reembed ? 'wait' : 'default', opacity: reembed ? 0.6 : 1 }}
+            >
+              {reembed ? 'Queueing…' : 'Re-embed'}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -292,8 +341,12 @@ export function DocumentsPage() {
           {loading && [1,2,3,4,5].map(i => <SkeletonRow key={i} cols={[7, 220, 60, 70, 90, 70]} />)}
 
           {!loading && docs.length === 0 && (
-            <div style={{ padding: '48px 18px', color: 'var(--fg-4)', fontSize: 12.5, textAlign: 'center' }}>
-              {search ? 'No documents match your search.' : 'No documents yet. Upload a file or import a URL above.'}
+            <div style={{ padding: '48px 18px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, textAlign: 'center' }}>
+              <div style={{ fontSize: 28, color: 'var(--fg-4)' }}>📄</div>
+              <div style={{ color: 'var(--fg-3)', fontSize: 13 }}>
+                {search ? `No documents match "${search}".` : 'No documents yet.'}
+              </div>
+              {!search && <div style={{ color: 'var(--fg-4)', fontSize: 12 }}>Upload a PDF, DOCX, or Markdown file above, or import a URL.</div>}
             </div>
           )}
 
@@ -327,8 +380,9 @@ export function DocumentsPage() {
                   {ts.label}
                 </span>
 
-                {/* Chunk count */}
-                <span style={{ fontSize: 11.5, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums' }}>
+                {/* Chunk count + embedding status */}
+                <span style={{ fontSize: 11.5, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <EmbedDot status={doc.embedding_status} />
                   {doc.chunk_count}
                 </span>
 
@@ -369,7 +423,13 @@ export function DocumentsPage() {
         </div>
 
         {/* Preview panel */}
-        {selected && <PreviewPanel docId={selected} onClose={() => setSelected(null)} />}
+        {selected && (
+          <PreviewPanel
+            docId={selected}
+            onClose={() => setSelected(null)}
+            onReembedSuccess={(id, status) => setDocs(prev => prev.map(d => d.id === id ? { ...d, embedding_status: status } : d))}
+          />
+        )}
       </div>
 
       {/* Delete confirm */}

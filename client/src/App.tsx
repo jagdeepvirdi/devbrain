@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { useProjectStore } from './store/projectStore'
 import { projectsApi, authApi, getCachedUser, type AuthUser } from './lib/api'
 import { ToastProvider } from './components/Toast'
@@ -16,10 +17,30 @@ import { DashboardPage } from './pages/Dashboard'
 import { SettingsPage }  from './pages/Settings'
 import { LoginPage }     from './pages/Login'
 import { GlobalSearch }  from './components/search/GlobalSearch'
+import { ErrorBoundary } from './components/ErrorBoundary'
 
 type RouteId = 'dashboard' | 'docs' | 'chat' | 'issues' | 'tasks' | 'commands' | 'releases' | 'runbooks' | 'projects' | 'aitask' | 'settings'
 type Density = 'compact' | 'normal' | 'comfy'
 type Tint    = 'cool' | 'black' | 'warm'
+
+const ROUTE_PATHS: Record<RouteId, string> = {
+  dashboard: '/',
+  docs:      '/docs',
+  chat:      '/chat',
+  issues:    '/issues',
+  tasks:     '/tasks',
+  commands:  '/commands',
+  releases:  '/releases',
+  runbooks:  '/runbooks',
+  aitask:    '/aitask',
+  projects:  '/projects',
+  settings:  '/settings',
+}
+
+function pathToRoute(pathname: string): RouteId {
+  const entry = Object.entries(ROUTE_PATHS).find(([, p]) => p === pathname)
+  return (entry?.[0] as RouteId) ?? 'dashboard'
+}
 
 const NAV_ITEMS: { id: RouteId; label: string; icon: string; dividerBefore?: boolean }[] = [
   { id: 'dashboard', label: 'Dashboard',  icon: '⊞' },
@@ -36,8 +57,21 @@ const NAV_ITEMS: { id: RouteId; label: string; icon: string; dividerBefore?: boo
 ]
 
 export default function App() {
-  const { projects, setProjects, selectedProject } = useProjectStore()
-  const [route,      setRoute]      = useState<RouteId>('dashboard')
+  const navigate     = useNavigate()
+  const location     = useLocation()
+  const [searchParams] = useSearchParams()
+  const { projects, setProjects, selectedProject, selectedId, setSelectedId } = useProjectStore()
+
+  const route = pathToRoute(location.pathname)
+
+  // Preserve ?project= param when navigating between sections
+  function setRoute(r: RouteId) {
+    const params = new URLSearchParams()
+    if (selectedId) params.set('project', selectedId)
+    const qs = params.toString()
+    navigate(`${ROUTE_PATHS[r]}${qs ? '?' + qs : ''}`)
+  }
+
   const [density,    setDensity]    = useState<Density>('normal')
   const [tint]                      = useState<Tint>('cool')
   const [sidebar,    setSidebar]    = useState<'open' | 'collapsed'>('open')
@@ -45,6 +79,20 @@ export default function App() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [authed,     setAuthed]     = useState<boolean | null>(null)
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(getCachedUser)
+  const [offline,    setOffline]    = useState(!navigator.onLine)
+
+  // Sync ?project= from URL into Zustand on initial load (URL is authoritative on deep-link/refresh)
+  useEffect(() => {
+    const pid = searchParams.get('project')
+    if (pid) setSelectedId(pid)
+    // If URL has no project param but Zustand has one, write it into the URL (replace, no history entry)
+    else if (selectedId) {
+      const params = new URLSearchParams(location.search)
+      params.set('project', selectedId)
+      navigate(`${location.pathname}?${params}`, { replace: true })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])  // run once on mount only
 
   // Auth check on mount
   useEffect(() => {
@@ -61,13 +109,13 @@ export default function App() {
     return () => window.removeEventListener('devbrain:unauthorized', onUnauthorized)
   }, [])
 
-  // Cross-page navigation via custom events (e.g. Release → Issues)
+  // Offline detection
   useEffect(() => {
-    function onNavigate(e: Event) {
-      setRoute((e as CustomEvent<RouteId>).detail)
-    }
-    window.addEventListener('devbrain:navigate', onNavigate)
-    return () => window.removeEventListener('devbrain:navigate', onNavigate)
+    const up   = () => setOffline(false)
+    const down = () => setOffline(true)
+    window.addEventListener('online',  up)
+    window.addEventListener('offline', down)
+    return () => { window.removeEventListener('online', up); window.removeEventListener('offline', down) }
   }, [])
 
   // Bootstrap project list
@@ -82,38 +130,54 @@ export default function App() {
 
   useEffect(() => { loadProjects() }, [loadProjects])
 
-  // Reload projects when navigating to projects page (picks up any external changes)
+  // Reload projects when navigating to projects page
   useEffect(() => {
     if (route === 'projects') loadProjects()
-  }, [route, loadProjects])
+  }, [location.pathname, loadProjects])
 
   // Global keyboard shortcuts
   useEffect(() => {
+    let gPressed = false
+    let gTimer: ReturnType<typeof setTimeout> | null = null
     function onKey(e: KeyboardEvent) {
       const tag = (e.target as HTMLElement).tagName
       const typing = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); setSearchOpen(true) }
       if (e.key === '?' && !typing) { e.preventDefault(); setShortcutsOpen(s => !s) }
+      // G-chord nav: G then D/I/C/R
+      if (!typing && e.key === 'g') { gPressed = true; if (gTimer) clearTimeout(gTimer); gTimer = setTimeout(() => { gPressed = false }, 800) }
+      if (!typing && gPressed && e.key !== 'g') {
+        gPressed = false
+        if (gTimer) clearTimeout(gTimer)
+        if (e.key === 'd') setRoute('dashboard')
+        else if (e.key === 'i') setRoute('issues')
+        else if (e.key === 'c') setRoute('commands')
+        else if (e.key === 'r') setRoute('runbooks')
+      }
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+    return () => { window.removeEventListener('keydown', onKey); if (gTimer) clearTimeout(gTimer) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId])
 
   const project = selectedProject()
 
   function renderRoute() {
+    const wrap = (label: string, node: React.ReactNode) => (
+      <ErrorBoundary label={label}>{node}</ErrorBoundary>
+    )
     switch (route) {
-      case 'projects':  return <ProjectsPage />
-      case 'aitask':    return <AiTaskPage />
-      case 'docs':      return <DocumentsPage />
-      case 'chat':      return <DocChatPage />
-      case 'issues':    return <IssuesPage />
-      case 'tasks':     return <TasksPage />
-      case 'commands':  return <CommandsPage />
-      case 'releases':  return <ReleasesPage />
-      case 'runbooks':  return <RunbooksPage />
-      case 'dashboard': return <DashboardPage />
-      case 'settings':  return <SettingsPage onLogout={() => { setAuthed(false); setCurrentUser(null) }} currentUser={currentUser} />
+      case 'projects':  return wrap('projects',  <ProjectsPage />)
+      case 'aitask':    return wrap('aitask',    <AiTaskPage />)
+      case 'docs':      return wrap('docs',      <DocumentsPage />)
+      case 'chat':      return wrap('chat',      <DocChatPage />)
+      case 'issues':    return wrap('issues',    <IssuesPage />)
+      case 'tasks':     return wrap('tasks',     <TasksPage />)
+      case 'commands':  return wrap('commands',  <CommandsPage />)
+      case 'releases':  return wrap('releases',  <ReleasesPage />)
+      case 'runbooks':  return wrap('runbooks',  <RunbooksPage />)
+      case 'dashboard': return wrap('dashboard', <DashboardPage />)
+      case 'settings':  return wrap('settings',  <SettingsPage onLogout={() => { setAuthed(false); setCurrentUser(null) }} currentUser={currentUser} />)
       default:
         return (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
@@ -308,36 +372,47 @@ export default function App() {
 
       {/* ── Main ─────────────────────────────────────────────────────────── */}
       <main style={{ overflow: 'hidden', position: 'relative', display: 'flex', flexDirection: 'column', background: 'var(--bg)', minWidth: 0 }}>
+        {offline && (
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 100, background: '#F59E0B', color: '#000', fontSize: 12, fontWeight: 500, padding: '5px 16px', textAlign: 'center' }}>
+            You are offline — some features may be unavailable
+          </div>
+        )}
         {renderRoute()}
       </main>
 
       <GlobalSearch
         open={searchOpen}
         onClose={() => setSearchOpen(false)}
-        onNavigate={r => { setRoute(r); setSearchOpen(false) }}
+        onNavigate={r => { navigate(ROUTE_PATHS[r as RouteId] ?? '/'); setSearchOpen(false) }}
       />
 
       {/* Keyboard shortcuts modal */}
       {shortcutsOpen && (
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="shortcuts-dialog-title"
           onClick={() => setShortcutsOpen(false)}
           style={{ position: 'fixed', inset: 0, background: 'rgba(5,5,10,.65)', backdropFilter: 'blur(4px)', zIndex: 500, display: 'grid', placeItems: 'center' }}
         >
-          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-elev)', border: '1px solid var(--line-3)', borderRadius: 10, padding: '20px 24px', width: 360, display: 'flex', flexDirection: 'column', gap: 0 }}>
+          <div className="modal-panel" onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-elev)', border: '1px solid var(--line-3)', borderRadius: 10, padding: '20px 24px', width: 360, display: 'flex', flexDirection: 'column', gap: 0 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--fg)' }}>Keyboard shortcuts</span>
-              <button onClick={() => setShortcutsOpen(false)} style={{ width: 22, height: 22, borderRadius: 4, border: '1px solid var(--line-2)', background: 'var(--bg-elev-2)', color: 'var(--fg-3)', fontSize: 12 }}>✕</button>
+              <span id="shortcuts-dialog-title" style={{ fontSize: 14, fontWeight: 600, color: 'var(--fg)' }}>Keyboard shortcuts</span>
+              <button onClick={() => setShortcutsOpen(false)} aria-label="Close shortcuts" style={{ width: 22, height: 22, borderRadius: 4, border: '1px solid var(--line-2)', background: 'var(--bg-elev-2)', color: 'var(--fg-3)', fontSize: 12 }}>✕</button>
             </div>
             {[
               ['Navigation', [
                 ['⌘K', 'Open search'],
                 ['?',  'Toggle shortcuts'],
               ]],
-              ['Global', [
+              ['Pages', [
                 ['G D', 'Go to Dashboard'],
                 ['G I', 'Go to Issues'],
                 ['G C', 'Go to Commands'],
                 ['G R', 'Go to Runbooks'],
+              ]],
+              ['Actions (context-sensitive)', [
+                ['N', 'New item (Issues / Commands / Runbooks)'],
               ]],
             ].map(([section, shortcuts]) => (
               <div key={section as string} style={{ marginBottom: 14 }}>
