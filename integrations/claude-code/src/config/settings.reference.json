@@ -1,0 +1,61 @@
+{
+  "_comment": "This is the hooks block DevBrain adds to ~/.claude/settings.json",
+  "_comment2": "If install.sh/install.ps1 could not auto-merge, add the 'hooks' key below into your existing settings.json",
+  "_comment3": "If you already have a 'hooks' key, merge SessionStart and SessionEnd into it alongside your existing hooks",
+
+  "_unix_paths": "Use these command values on macOS / Linux / WSL",
+  "hooks_unix": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/scripts/session-start.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/scripts/session-end.sh",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  },
+
+  "_windows_paths": "Use these command values on native Windows (PowerShell) — note ~\\.claude, not %APPDATA%\\Claude",
+  "hooks_windows": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Users\\<your-username>\\.claude\\scripts\\session-start.ps1",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Users\\<your-username>\\.claude\\scripts\\session-end.ps1",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
