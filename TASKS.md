@@ -175,3 +175,31 @@
 ### Import
 - [ ] `POST /api/import` — accept zip upload; parse markdown frontmatter to reconstruct issues / documents / commands; skip duplicates by matching title + project
 - [ ] Settings: Import section — zip file upload input + "Dry run" toggle (returns diff of what would be created without writing); confirmation step before live import
+
+---
+
+## Phase 26 — Hardening & Quick Wins
+
+> Ten concrete gaps found in the post-Phase-18 codebase review. No new features — fix what's already there.
+
+### Security
+
+- [ ] **Complete the localStorage → HttpOnly cookie migration on the client** (`client/src/lib/api.ts:10-13`) — Phase 13 added the HttpOnly cookie on the server but the client still reads `localStorage.getItem('devbrain_token')` and sends it as `Authorization: Bearer`. XSS can still steal the token via localStorage. Remove `getToken()`/`setToken()` localStorage calls; rely solely on the cookie the server already sets. Update `authApi.login()` to stop writing to localStorage. Audit all `getToken()` call sites.
+- [ ] **Sanitize 500 error responses in production** (`server/routes/auth.ts:193`, `server/routes/documents.ts:251,267`) — `res.status(500).json({ error: (err as Error).message })` leaks raw PostgreSQL error messages to the client. Replace with a central error-handler middleware: log full error server-side, return `{ error: 'Internal server error' }` to client when `NODE_ENV=production`, full message in dev.
+- [ ] **Add Zod validation to `change-password` route** (`server/routes/auth.ts:225`) — the only mutation route still using a raw `req.body as { ... }` cast. Add a `ChangePasswordBody` Zod schema consistent with every other route.
+- [ ] **Rate-limit mutation and AI endpoints** — add a second `express-rate-limit` instance (e.g., 60 req/min per IP) applied to `POST /api/documents`, `POST /api/chat`, `POST /api/issues/:id/summarize`, `POST /api/commands/:id/explain`. Prevents authenticated users from hammering Ollama or the DB in multi-user mode.
+
+### Reliability
+
+- [ ] **Wrap `res.json()` in try/catch in client `api.ts`** (`client/src/lib/api.ts:33`) — if the server returns an HTML error page (Caddy proxy error, cold-start race), `res.json()` throws a `SyntaxError` that propagates as an unhandled rejection with no user-visible feedback. Catch the parse error and throw a clean `Error('Unexpected server response')` instead.
+- [ ] **Add idle timeout to SSE streams** — `GET /api/chat` and `GET /api/claude-projects/:id/tasks/watch` never close on their own. Add a 5-minute inactivity timeout: if no `res.write()` has fired in 5 min, send a `data: {"type":"timeout"}\n\n` event and call `res.end()`. Prevents zombie connections after browser tab crashes.
+- [ ] **Fix Multer temp directory for cross-platform dev** (`server/routes/documents.ts:18`) — `dest: '/tmp/devbrain-uploads'` does not exist on Windows, silently breaking file uploads in native Windows dev. Replace with `dest: path.join(os.tmpdir(), 'devbrain-uploads')` and import `os` from `'node:os'`.
+
+### Database
+
+- [ ] **Add indexes on `embedding_status` columns** (`server/db/schema.sql`) — `WHERE embedding_status = 'failed'` and `WHERE embedding_status = 'pending'` are currently full table scans. Add `CREATE INDEX IF NOT EXISTS idx_documents_embedding_status ON documents (embedding_status)` and the equivalent on `issues`. Add a migration entry in `schema.sql`.
+
+### Code Quality
+
+- [ ] **Audit and fix request deduplication cache key** (`client/src/lib/api.ts:41`) — the in-flight map keys on the raw `path` argument. Verify every `request()` call site passes the full path including query string (e.g., `'/documents?limit=10&offset=0'`) so cache hits only occur on truly identical requests. Fix any call sites that build paths without query params when params differ.
+- [ ] **Parameterize LIMIT/OFFSET in `search.ts`** (`server/routes/search.ts:30,37,44,51,57`) — `LIMIT ${PAGE}` is safe in practice (validated number) but violates the project-wide rule of fully parameterized SQL. Replace with `LIMIT $N` and push `PAGE` into the params array for all five query branches.
