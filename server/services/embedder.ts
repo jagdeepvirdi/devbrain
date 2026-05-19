@@ -1,6 +1,23 @@
 import { pool } from '../db/pool.js'
 import { aiEmbed } from './ai.js'
 
+// Retry wrapper for transient Ollama failures during bulk embed operations.
+// Waits 500ms × attempt before each retry (500ms, 1000ms, 1500ms).
+async function embedWithRetry(text: string, maxAttempts = 3): Promise<number[]> {
+  let lastErr: Error = new Error('embed failed')
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await aiEmbed(text)
+    } catch (err) {
+      lastErr = err as Error
+      if (attempt < maxAttempts) {
+        await new Promise(r => setTimeout(r, 500 * attempt))
+      }
+    }
+  }
+  throw lastErr
+}
+
 // Chunk settings matching CLAUDE.md spec.
 // ~512 tokens ≈ 1800 chars at average English token density.
 const CHUNK_CHARS    = 1800
@@ -34,7 +51,7 @@ export async function embedDocument(
   const chunks = chunkText(text)
 
   for (let i = 0; i < chunks.length; i++) {
-    const embedding = await aiEmbed(chunks[i])
+    const embedding = await embedWithRetry(chunks[i])
 
     await pool.query(
       `INSERT INTO document_chunks (document_id, content, chunk_index, embedding)
