@@ -10,7 +10,6 @@ export interface AuthUser {
   role:     UserRole
 }
 
-// Augment Express Request type
 declare global {
   namespace Express {
     interface Request { user?: AuthUser }
@@ -19,35 +18,44 @@ declare global {
 
 const ROLE_RANK: Record<UserRole, number> = { viewer: 0, editor: 1, admin: 2 }
 
+const JWT_VERIFY_OPTS: jwt.VerifyOptions = {
+  issuer:   'devbrain',
+  audience: 'devbrain-client',
+}
+
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!env.AUTH_PASSWORD) {
-    // Dev mode — synthetic admin user so audit/RBAC code still has a user
     req.user = { id: 'dev', username: 'dev', role: 'admin' }
     return next()
   }
 
-  const header = req.headers.authorization
-  if (!header?.startsWith('Bearer ')) {
+  // Accept token from HttpOnly cookie or Authorization header (for API clients)
+  const cookieToken: string | undefined = (req as unknown as Record<string, Record<string, string>>).cookies?.devbrain_token
+  const bearerToken  = req.headers.authorization?.startsWith('Bearer ')
+    ? req.headers.authorization.slice(7)
+    : undefined
+
+  const token = cookieToken ?? bearerToken
+
+  if (!token) {
     res.status(401).json({ error: 'Unauthorized' })
     return
   }
 
   try {
-    const payload = jwt.verify(header.slice(7), env.JWT_SECRET) as Record<string, unknown>
+    const payload = jwt.verify(token, env.JWT_SECRET, JWT_VERIFY_OPTS) as Record<string, unknown>
 
     if (payload.userId && payload.username && payload.role) {
-      // v2 JWT with full user info
       req.user = {
         id:       payload.userId  as string,
         username: payload.username as string,
         role:     payload.role    as UserRole,
       }
+      next()
     } else {
-      // Legacy single-user token { authed: true } — treat as admin
-      req.user = { id: 'legacy', username: 'admin', role: 'admin' }
+      // Token missing required fields — must re-login (legacy tokens lack userId)
+      res.status(401).json({ error: 'Session expired — please log in again' })
     }
-
-    next()
   } catch {
     res.status(401).json({ error: 'Invalid or expired token' })
   }

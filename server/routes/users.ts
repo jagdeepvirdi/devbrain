@@ -4,6 +4,7 @@ import { z }      from 'zod'
 import { pool }   from '../db/pool.js'
 import { requireRole } from '../middleware/auth.js'
 import { logAudit }    from '../services/audit.js'
+import { buildSetClause } from '../lib/db.js'
 
 const router = Router()
 
@@ -62,31 +63,58 @@ router.post('/', async (req, res) => {
 // ── PUT /api/users/:id ────────────────────────────────────────────────────
 
 const UpdateBody = z.object({
-  email:    z.string().email().optional(),
-  role:     z.enum(['admin', 'editor', 'viewer']).optional(),
-  password: z.string().min(6).max(128).optional(),
+  email:         z.string().email().optional(),
+  role:          z.enum(['admin', 'editor', 'viewer']).optional(),
+  password:      z.string().min(6).max(128).optional(),
+  adminPassword: z.string().optional(),  // required when resetting another user's password
 })
+
+const USER_UPDATABLE_COLS = new Set(['email', 'role', 'password_hash'])
 
 router.put('/:id', async (req, res) => {
   const parsed = UpdateBody.safeParse(req.body)
   if (!parsed.success) { res.status(400).json({ error: 'Validation error', issues: parsed.error.issues }); return }
 
-  const updates: Record<string, unknown> = {}
-  if (parsed.data.email    !== undefined) updates.email         = parsed.data.email
-  if (parsed.data.role     !== undefined) updates.role          = parsed.data.role
-  if (parsed.data.password !== undefined) updates.password_hash = await bcrypt.hash(parsed.data.password, 10)
+  const { adminPassword, password, email, role } = parsed.data
 
-  if (!Object.keys(updates).length) { res.status(400).json({ error: 'Nothing to update' }); return }
+  // Admin must re-enter their own password before resetting another user's password
+  if (password !== undefined && req.params.id !== req.user!.id) {
+    if (!adminPassword) {
+      res.status(403).json({ error: 'adminPassword is required to reset another user\'s password' })
+      return
+    }
+    const { rows: adminRows } = await pool.query<{ password_hash: string }>(
+      'SELECT password_hash FROM users WHERE id = $1',
+      [req.user!.id],
+    )
+    if (!adminRows.length || !adminRows[0].password_hash) {
+      res.status(403).json({ error: 'Cannot verify admin identity' })
+      return
+    }
+    const ok = await bcrypt.compare(adminPassword, adminRows[0].password_hash)
+    if (!ok) {
+      res.status(403).json({ error: 'Admin password incorrect' })
+      return
+    }
+  }
 
-  const cols   = Object.keys(updates)
-  const values = Object.values(updates)
-  const set    = cols.map((c, i) => `${c} = $${i + 1}`).join(', ')
+  // Build update map using explicit allowlist
+  const updateMap: Record<string, unknown> = {}
+  if (email    !== undefined) updateMap.email         = email
+  if (role     !== undefined) updateMap.role          = role
+  if (password !== undefined) updateMap.password_hash = await bcrypt.hash(password, 10)
+
+  const cols = Object.keys(updateMap).filter(k => USER_UPDATABLE_COLS.has(k))
+  if (!cols.length) { res.status(400).json({ error: 'Nothing to update' }); return }
+
+  const vals = cols.map(c => updateMap[c])
+  const { setClauses, params } = buildSetClause(cols, vals)
 
   try {
     const { rows } = await pool.query(
-      `UPDATE users SET ${set} WHERE id = $${cols.length + 1}
+      `UPDATE users SET ${setClauses} WHERE id = $1
        RETURNING id, username, email, role, created_at`,
-      [...values, req.params.id],
+      [req.params.id, ...params],
     )
     if (!rows.length) { res.status(404).json({ error: 'User not found' }); return }
     await logAudit(req.user!.id, req.user!.username, 'user', req.params.id, rows[0].username, 'update', { changed: cols })

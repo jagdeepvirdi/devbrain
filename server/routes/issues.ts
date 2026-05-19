@@ -3,12 +3,17 @@ import { z }      from 'zod'
 import crypto      from 'crypto'
 import { pool }   from '../db/pool.js'
 import { aiChat, aiEmbed } from '../services/ai.js'
+import { buildSetClause }  from '../lib/db.js'
 
 function embedIssueAsync(id: string, title: string, description: string): void {
   const text = [title, description].filter(Boolean).join('. ')
+  pool.query(`UPDATE issues SET embedding_status = 'processing' WHERE id = $1`, [id]).catch(() => {})
   aiEmbed(text)
-    .then(vec => pool.query('UPDATE issues SET embedding = $2 WHERE id = $1', [id, `[${vec.join(',')}]`]))
-    .catch(() => {})
+    .then(vec => pool.query(
+      `UPDATE issues SET embedding = $2, embedding_status = 'done' WHERE id = $1`,
+      [id, `[${vec.join(',')}]`]
+    ))
+    .catch(() => pool.query(`UPDATE issues SET embedding_status = 'failed' WHERE id = $1`, [id]).catch(() => {}))
 }
 
 const router = Router()
@@ -41,11 +46,43 @@ const UpdateBody = z.object({
   tags:                z.array(z.string()).optional(),
   investigation_steps: z.array(StepSchema).optional(),
   resolution:          z.string().max(5000).optional(),
+  pr_url:              z.string().url().max(500).nullable().optional(),
 })
 
 const NoteBody = z.object({
   content: z.string().min(1).max(5000).trim(),
 })
+
+// ── Shared SELECT helper ──────────────────────────────────────────────────
+// Returns all issue columns with investigation_steps and notes aggregated
+// from relational tables (replacing the legacy JSONB columns).
+
+const ISSUE_COLS = `
+  i.id, i.project_id, i.title, i.description, i.status, i.priority,
+  i.linked_docs, i.linked_commands, i.linked_commits, i.pr_url,
+  i.resolution, i.tags, i.embedding_status,
+  i.created_at, i.updated_at, i.resolved_at,
+  p.name  AS project_name,
+  p.color AS project_color,
+  COALESCE(
+    json_agg(
+      DISTINCT jsonb_build_object('id', s.id, 'order', s."order", 'instruction', s.instruction, 'done', s.done)
+    ) FILTER (WHERE s.id IS NOT NULL),
+    '[]'::json
+  ) AS investigation_steps,
+  COALESCE(
+    json_agg(
+      DISTINCT jsonb_build_object('id', n.id, 'content', n.content, 'created_at', n.created_at)
+    ) FILTER (WHERE n.id IS NOT NULL),
+    '[]'::json
+  ) AS notes
+`
+
+const ISSUE_JOINS = `
+  LEFT JOIN projects    p ON p.id = i.project_id
+  LEFT JOIN issue_steps s ON s.issue_id = i.id
+  LEFT JOIN issue_notes n ON n.issue_id = i.id
+`
 
 // ── GET /api/issues ───────────────────────────────────────────────────────
 
@@ -87,15 +124,13 @@ router.get('/', async (req, res) => {
 
   try {
     const [countRes, dataRes] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS n FROM issues i ${where}`, values),
+      pool.query(`SELECT COUNT(DISTINCT i.id)::int AS n FROM issues i ${where}`, values),
       pool.query(
-        `SELECT
-           i.*,
-           p.name  AS project_name,
-           p.color AS project_color
+        `SELECT ${ISSUE_COLS}
          FROM issues i
-         LEFT JOIN projects p ON p.id = i.project_id
+         ${ISSUE_JOINS}
          ${where}
+         GROUP BY i.id, p.name, p.color
          ORDER BY
            CASE i.priority
              WHEN 'critical' THEN 1
@@ -148,10 +183,11 @@ router.get('/related', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT i.*, p.name AS project_name, p.color AS project_color
+      `SELECT ${ISSUE_COLS}
        FROM issues i
-       LEFT JOIN projects p ON p.id = i.project_id
-       WHERE i.id = $1`,
+       ${ISSUE_JOINS}
+       WHERE i.id = $1
+       GROUP BY i.id, p.name, p.color`,
       [req.params.id]
     )
     if (!rows.length) return res.status(404).json({ error: 'Issue not found' })
@@ -169,57 +205,117 @@ router.post('/', async (req, res) => {
 
   const { title, description, status, priority, project_id, tags, investigation_steps } = parsed.data
 
+  const client = await pool.connect()
   try {
-    const { rows } = await pool.query(
-      `INSERT INTO issues
-         (project_id, title, description, status, priority, tags, investigation_steps)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING *`,
-      [project_id ?? null, title, description, status, priority, tags, JSON.stringify(investigation_steps)]
+    await client.query('BEGIN')
+
+    const { rows } = await client.query(
+      `INSERT INTO issues (project_id, title, description, status, priority, tags)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id`,
+      [project_id ?? null, title, description, status, priority, tags]
     )
-    res.status(201).json({ data: rows[0] })
-    embedIssueAsync(rows[0].id, title, description)
+    const issueId = rows[0].id
+
+    for (const step of investigation_steps) {
+      await client.query(
+        `INSERT INTO issue_steps (id, issue_id, "order", instruction, done) VALUES ($1, $2, $3, $4, $5)`,
+        [step.id, issueId, step.order, step.instruction, step.done]
+      )
+    }
+
+    await client.query('COMMIT')
+
+    // Fetch full issue row with aggregated steps/notes for the response
+    const { rows: full } = await pool.query(
+      `SELECT ${ISSUE_COLS} FROM issues i ${ISSUE_JOINS} WHERE i.id = $1 GROUP BY i.id, p.name, p.color`,
+      [issueId]
+    )
+    res.status(201).json({ data: full[0] })
+    embedIssueAsync(issueId, title, description)
   } catch (err) {
+    await client.query('ROLLBACK')
     res.status(500).json({ error: (err as Error).message })
+  } finally {
+    client.release()
   }
 })
 
 // ── PUT /api/issues/:id ───────────────────────────────────────────────────
 
+const ISSUE_UPDATABLE_COLS = new Set(['title', 'description', 'status', 'priority', 'project_id', 'tags', 'resolution', 'pr_url'])
+
 router.put('/:id', async (req, res) => {
   const parsed = UpdateBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
-  const updates = parsed.data
-  if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' })
+  const updates = parsed.data as Record<string, unknown>
+  const newSteps = updates.investigation_steps as typeof parsed.data.investigation_steps | undefined
 
-  // Build SET clause
-  const colMap: Record<string, string> = { project_id: 'project_id' }
-  const jsonbCols = new Set(['investigation_steps'])
-  const fields = Object.keys(updates)
-  const setCols = fields.map((k, i) => `${colMap[k] ?? k} = $${i + 2}`).join(', ')
-  const values = fields.map(k => {
-    const v = (updates as Record<string, unknown>)[k]
-    return jsonbCols.has(k) ? JSON.stringify(v) : v
-  })
+  // Scalar fields (exclude investigation_steps — handled separately via issue_steps table)
+  const fields = Object.keys(updates).filter(k => ISSUE_UPDATABLE_COLS.has(k))
+  if (!fields.length && newSteps === undefined) return res.status(400).json({ error: 'Nothing to update' })
 
   // Set resolved_at when marking resolved/unresolved
   let resolvedClause = ''
   if (updates.status === 'resolved') resolvedClause = ', resolved_at = now()'
   else if (updates.status)           resolvedClause = ', resolved_at = NULL'
 
+  const client = await pool.connect()
   try {
-    const { rows } = await pool.query(
-      `UPDATE issues SET ${setCols}${resolvedClause} WHERE id = $1 RETURNING *`,
-      [req.params.id, ...values]
+    await client.query('BEGIN')
+
+    // When only steps are changing, verify the issue exists first
+    if (!fields.length && !resolvedClause && newSteps !== undefined) {
+      const { rows: exist } = await client.query('SELECT id FROM issues WHERE id = $1', [req.params.id])
+      if (!exist.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Issue not found' }) }
+    }
+
+    // Update scalar columns when present
+    if (fields.length || resolvedClause) {
+      if (fields.length) {
+        const { setClauses, params } = buildSetClause(fields, fields.map(k => updates[k]))
+        const { rows } = await client.query(
+          `UPDATE issues SET ${setClauses}${resolvedClause} WHERE id = $1 RETURNING id`,
+          [req.params.id, ...params]
+        )
+        if (!rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Issue not found' }) }
+      } else if (resolvedClause) {
+        const { rows } = await client.query(
+          `UPDATE issues SET updated_at = now()${resolvedClause} WHERE id = $1 RETURNING id`,
+          [req.params.id]
+        )
+        if (!rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Issue not found' }) }
+      }
+    }
+
+    // Replace steps atomically when provided
+    if (newSteps !== undefined) {
+      await client.query('DELETE FROM issue_steps WHERE issue_id = $1', [req.params.id])
+      for (const step of newSteps) {
+        await client.query(
+          `INSERT INTO issue_steps (id, issue_id, "order", instruction, done) VALUES ($1, $2, $3, $4, $5)`,
+          [step.id, req.params.id, step.order, step.instruction, step.done]
+        )
+      }
+    }
+
+    await client.query('COMMIT')
+
+    const { rows: full } = await pool.query(
+      `SELECT ${ISSUE_COLS} FROM issues i ${ISSUE_JOINS} WHERE i.id = $1 GROUP BY i.id, p.name, p.color`,
+      [req.params.id]
     )
-    if (!rows.length) return res.status(404).json({ error: 'Issue not found' })
-    res.json({ data: rows[0] })
+    if (!full.length) return res.status(404).json({ error: 'Issue not found' })
+    res.json({ data: full[0] })
     if (updates.title || updates.description) {
-      embedIssueAsync(rows[0].id, rows[0].title, rows[0].description)
+      embedIssueAsync(full[0].id, full[0].title, full[0].description)
     }
   } catch (err) {
+    await client.query('ROLLBACK')
     res.status(500).json({ error: (err as Error).message })
+  } finally {
+    client.release()
   }
 })
 
@@ -244,21 +340,20 @@ router.post('/:id/notes', async (req, res) => {
   const parsed = NoteBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
-  const note = {
-    id:         crypto.randomUUID(),
-    content:    parsed.data.content,
-    created_at: new Date().toISOString(),
-  }
-
   try {
-    const { rows } = await pool.query(
-      `UPDATE issues
-       SET notes = notes || $2::jsonb
-       WHERE id = $1
-       RETURNING *`,
-      [req.params.id, JSON.stringify([note])]
+    // Verify issue exists first
+    const { rows: check } = await pool.query('SELECT id FROM issues WHERE id = $1', [req.params.id])
+    if (!check.length) return res.status(404).json({ error: 'Issue not found' })
+
+    await pool.query(
+      `INSERT INTO issue_notes (id, issue_id, content) VALUES ($1, $2, $3)`,
+      [crypto.randomUUID(), req.params.id, parsed.data.content]
     )
-    if (!rows.length) return res.status(404).json({ error: 'Issue not found' })
+
+    const { rows } = await pool.query(
+      `SELECT ${ISSUE_COLS} FROM issues i ${ISSUE_JOINS} WHERE i.id = $1 GROUP BY i.id, p.name, p.color`,
+      [req.params.id]
+    )
     res.json({ data: rows[0] })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
@@ -269,18 +364,16 @@ router.post('/:id/notes', async (req, res) => {
 
 router.delete('/:id/notes/:noteId', async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `UPDATE issues
-       SET notes = (
-         SELECT COALESCE(jsonb_agg(n ORDER BY (n->>'created_at')), '[]'::jsonb)
-         FROM jsonb_array_elements(notes) AS n
-         WHERE n->>'id' != $2
-       )
-       WHERE id = $1
-       RETURNING *`,
-      [req.params.id, req.params.noteId]
+    const { rowCount } = await pool.query(
+      'DELETE FROM issue_notes WHERE id = $1 AND issue_id = $2',
+      [req.params.noteId, req.params.id]
     )
-    if (!rows.length) return res.status(404).json({ error: 'Issue not found' })
+    if (!rowCount) return res.status(404).json({ error: 'Note not found' })
+
+    const { rows } = await pool.query(
+      `SELECT ${ISSUE_COLS} FROM issues i ${ISSUE_JOINS} WHERE i.id = $1 GROUP BY i.id, p.name, p.color`,
+      [req.params.id]
+    )
     res.json({ data: rows[0] })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
@@ -318,6 +411,38 @@ router.get('/:id/related-commands', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
   }
+})
+
+// ── POST /api/issues/:id/commits — link a commit SHA ─────────────────────
+
+router.post('/:id/commits', async (req, res) => {
+  const { sha } = req.body as { sha?: string }
+  if (!sha || !/^[0-9a-f]{4,40}$/i.test(sha)) {
+    res.status(400).json({ error: 'sha must be a valid git SHA' }); return
+  }
+  try {
+    const { rows } = await pool.query(
+      `UPDATE issues SET linked_commits = array_append(array_remove(linked_commits, $2), $2)
+       WHERE id = $1 RETURNING linked_commits`,
+      [req.params.id, sha]
+    )
+    if (!rows.length) { res.status(404).json({ error: 'Issue not found' }); return }
+    res.json({ data: rows[0].linked_commits })
+  } catch (err) { res.status(500).json({ error: (err as Error).message }) }
+})
+
+// ── DELETE /api/issues/:id/commits/:sha — unlink a commit ────────────────
+
+router.delete('/:id/commits/:sha', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `UPDATE issues SET linked_commits = array_remove(linked_commits, $2)
+       WHERE id = $1 RETURNING linked_commits`,
+      [req.params.id, req.params.sha]
+    )
+    if (!rows.length) { res.status(404).json({ error: 'Issue not found' }); return }
+    res.json({ data: rows[0].linked_commits })
+  } catch (err) { res.status(500).json({ error: (err as Error).message }) }
 })
 
 // ── POST /api/issues/:id/suggest-steps ───────────────────────────────────
@@ -401,7 +526,10 @@ router.get('/:id/related-docs', async (req, res) => {
 
 router.post('/:id/summarize', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM issues WHERE id = $1', [req.params.id])
+    const { rows } = await pool.query(
+      `SELECT ${ISSUE_COLS} FROM issues i ${ISSUE_JOINS} WHERE i.id = $1 GROUP BY i.id, p.name, p.color`,
+      [req.params.id]
+    )
     if (!rows.length) return res.status(404).json({ error: 'Issue not found' })
 
     const issue = rows[0]
@@ -430,6 +558,24 @@ Please provide a concise summary of:
     const summary = await aiChat(prompt, 'You are a technical assistant helping summarize development issues. Be concise and clear. Format in Markdown.')
 
     res.json({ data: { summary } })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── POST /api/issues/:id/reembed ──────────────────────────────────────────
+
+router.post('/:id/reembed', async (req, res) => {
+  const { id } = req.params
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, title, description FROM issues WHERE id = $1', [id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Issue not found' })
+
+    embedIssueAsync(id, rows[0].title, rows[0].description)
+
+    res.json({ data: { id, embedding_status: 'processing' } })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
   }

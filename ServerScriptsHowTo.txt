@@ -1,0 +1,31 @@
+  ---
+  start-dev.ps1
+  1. Checks if Ollama is running on :11434, starts it if not
+  2. Runs docker compose up -d postgres (only the DB — no containerized app in dev)
+  3. Polls the postgres healthcheck until ready
+  4. Opens a new PowerShell window running tsx watch (hot-reload server)
+  5. Opens another window running vite dev server
+
+  Frontend  http://localhost:5173
+  Backend   http://localhost:3001
+
+  ---
+  start-prod.ps1
+  1. Same Ollama check/start
+  2. Builds server with tsc, builds client with vite build
+  3. Starts only postgres via Docker Compose + waits for health
+  4. Opens a window running node dist/index.js (compiled server)
+  5. Opens a window running vite preview (serves client/dist)
+
+  Frontend  http://localhost:4173
+  Backend   http://localhost:3001
+
+  Pass -SkipBuild to skip the build step when restarting without code changes:
+  .\start-prod.ps1 -SkipBuild
+
+  To run either script (PowerShell may block unsigned scripts by default):
+  .\start-dev.ps1
+  # or if execution policy blocks it:
+  powershell -ExecutionPolicy Bypass -File .\start-dev.ps1
+
+✻ Cogitated for 1m 35s

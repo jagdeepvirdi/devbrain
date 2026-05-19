@@ -133,6 +133,96 @@
 
 ---
 
+## Phase 18 — Claude Integration V2
+
+> Builds the DevBrain UI layer on top of the existing `integrations/claude-code/` hook foundation.
+> Feature 3 (Sharing) scrapped. Build order: Curation schema → Discovery → Task Sync → Session Viewer.
+
+### Design decisions
+- Curation state stored in PostgreSQL (`claude_projects` table), not `~/.devbrain/projects.json`
+- Scan root stored in `app_settings` (key: `claude_scan_root`), configurable from Settings UI
+- No separate "Claude Projects" sidebar — discovered projects link to existing DevBrain projects via `fs_path` field
+- Linked projects gain **Tasks** and **Sessions** tabs in project detail view
+- File watcher covers all active + pinned projects simultaneously
+
+---
+
+### Step 1 — Curation Schema & API <!-- done: 2026-05-19 -->
+
+- [x] Add `fs_path TEXT` column to `projects` table in `schema.sql` (nullable — not all projects have a linked path)
+- [x] Add `claude_scan_root` key to `app_settings` defaults in `schema.sql`
+- [x] Add `GET /api/settings/claude` and `PUT /api/settings/claude` endpoints in `settings.ts` — expose/update `claude_scan_root`
+- [x] Add `PUT /api/projects/:id/link` endpoint — set/clear `fs_path` on a project; validate path exists on disk
+- [x] Expose `fs_path` in `GET /api/projects` and `GET /api/projects/:id` responses
+
+---
+
+### Step 2 — Project Discovery <!-- done: 2026-05-19 -->
+
+- [x] Add `gray-matter` to server deps (YAML frontmatter parser)
+- [x] Write `server/services/claude-discovery.ts`:
+  - Recursive scan up to 3 levels from `claude_scan_root`
+  - Qualify a folder if it contains `CLAUDE.md`, `sessions/*/SESSION.md`, or `TASKS.md` with `project:` frontmatter
+  - Parse `TASKS.md`: extract project name, last_updated, phase list, per-phase completion %, overall completion %
+  - Parse last session date from `sessions/YYYY-MM-DD_HH-MM_<id>/` folder names (lexicographic sort)
+  - Return: `{ path, name, lastSessionDate, phases: [{ name, total, done, pct }], overallPct, matchedProjectId? }`
+  - Auto-suggest match to existing DevBrain project by name similarity (case-insensitive, strip spaces)
+  - Scan must be cancellable via `AbortController`
+- [x] Add `POST /api/claude-projects/scan` endpoint — runs discovery, returns candidates array
+- [x] Update `integrations/claude-code/src/hooks/session-start.ps1` — output per-phase summary (phase name + done/total) in context block, not just raw TASKS.md lines
+- [x] Update `integrations/claude-code/src/hooks/session-start.ps1` — on each session start, sweep TASKS.md for `[x]` items stamped `<!-- done: YYYY-MM-DD -->` older than 7 days; move those items (with their phase heading as context) to `TASKS_ARCHIVE.md`; remove them from TASKS.md; update `last_updated` frontmatter in both files
+- [x] Update `integrations/claude-code/src/skills/devbrain/SKILL.md` — when marking a task `[x]` done, append inline completion stamp: `- [x] Task title <!-- done: YYYY-MM-DD -->`; this is required for the 7-day archive sweep to work
+- [x] Define `TASKS_ARCHIVE.md` format: YAML frontmatter (`project`, `last_updated`), sections grouped by original phase name with an `archived_on: YYYY-MM-DD` note per batch; append-only (never rewrite existing entries)
+
+---
+
+### Step 3 — TASKS.md Sync <!-- done: 2026-05-19 -->
+
+- [x] Add `chokidar` to server deps (file watcher) <!-- done: 2026-05-19 -->
+- [x] Write `server/services/tasks-watcher.ts`: <!-- done: 2026-05-19 -->
+  - On startup: watch `TASKS.md` for all projects where `fs_path IS NOT NULL` and status is active or pinned
+  - Parse TASKS.md on change: phases (## headers), items ([ ] / [x] / [~] / [!]), completion % per phase + overall
+  - Emit parsed result via SSE to any connected client watching that project
+  - Debounce 300 ms (avoid double-fire on save)
+- [x] Add `GET /api/claude-projects/:id/tasks` endpoint — return parsed task tree (phases + items + stats) from current TASKS.md <!-- done: 2026-05-19 -->
+- [x] Add `GET /api/claude-projects/:id/tasks/watch` SSE endpoint — stream `task_update` events on file change <!-- done: 2026-05-19 -->
+- [x] Client: `TasksTab.tsx` component — render phase accordion with completion bar per phase and overall %; item rows with status marker (`[ ]` `[x]` `[~]` `[!]`); live-updates via SSE <!-- done: 2026-05-19 -->
+- [x] Add Tasks tab to project detail view (only rendered when `fs_path` is set) <!-- done: 2026-05-19 -->
+
+---
+
+### Step 4 — Session Viewer <!-- done: 2026-05-19 -->
+
+- [x] Write `server/services/session-reader.ts`: <!-- done: 2026-05-19 -->
+  - Scan `<fs_path>/sessions/YYYY-MM-DD_HH-MM_<id>/SESSION.md` files
+  - Parse frontmatter: `session_id`, `started`, `status`
+  - Parse sections: extract bullet points under Goals, Work Done, Decisions, Open Items
+  - Return: `{ sessionId, date, status, goals: string[], workDoneCount: number, decisions: string[], openItems: string[], rawMarkdown: string }`
+- [x] Add `GET /api/claude-projects/:id/sessions` endpoint — paginated, sorted newest-first, optional `?status=` filter and `?q=` full-text search across rawMarkdown <!-- done: 2026-05-19 -->
+- [x] Add `GET /api/claude-projects/:id/sessions/:sessionId` endpoint — return full session detail <!-- done: 2026-05-19 -->
+- [x] Client: `SessionsTab.tsx` component: <!-- done: 2026-05-19 -->
+  - Timeline grouped by week (most recent at top)
+  - Session card: date + time, status badge (active / completed), Goals bullets, "N items done" count
+  - Expandable: full SESSION.md rendered as markdown (use existing markdown renderer)
+  - Filter bar: All / Active / Completed
+  - Search input (client-side filter on loaded sessions)
+- [x] Add Sessions tab to project detail view (only rendered when `fs_path` is set) <!-- done: 2026-05-19 -->
+
+---
+
+### Step 5 — Discovery UI in Settings <!-- done: 2026-05-19 -->
+
+- [x] Settings page: add "Claude Integration" section <!-- done: 2026-05-19 -->
+  - Scan root path input + Save button (calls `PUT /api/settings/claude`)
+  - "Scan Now" button → calls `POST /api/claude-projects/scan` → shows results table
+  - Results table columns: Path, Detected Name, Last Session, Task %, Suggested Match, Action
+  - Actions per row: "Link to [suggested project]", "Link to…" (dropdown of all projects), "Create new project", "Ignore"
+  - "Link" action calls `PUT /api/projects/:id/link` with the discovered path
+- [x] Projects page / project detail: show "Claude" chip badge on projects that have `fs_path` set <!-- done: 2026-05-19 -->
+- [x] Project detail: Tasks and Sessions tabs appear only when `fs_path` is set; otherwise show "Link a folder to enable task sync" prompt with shortcut to Settings <!-- done: 2026-05-19 -->
+
+---
+
 ## Known Risks & Mitigations
 
 | Risk | Mitigation |

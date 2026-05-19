@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { releasesApi, type Release, type ReleaseInput, type AiReleaseNotes } from '../lib/api'
+import { useNavigate } from 'react-router-dom'
+import { releasesApi, gitApi, type Release, type ReleaseInput, type AiReleaseNotes } from '../lib/api'
 import { useProjectStore } from '../store/projectStore'
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -261,6 +262,7 @@ function ReleaseCard({ release, onEdit, onDelete }: {
   onEdit: () => void
   onDelete: () => void
 }) {
+  const navigate = useNavigate()
   const [expanded,    setExpanded]    = useState(true)
   const [confirmDel,  setConfirmDel]  = useState(false)
   const [qaInput,     setQaInput]     = useState('')
@@ -411,8 +413,7 @@ function ReleaseCard({ release, onEdit, onDelete }: {
                       key={id}
                       onClick={e => {
                         e.stopPropagation()
-                        window.dispatchEvent(new CustomEvent('devbrain:navigate', { detail: 'issues' }))
-                        window.dispatchEvent(new CustomEvent('devbrain:open-issue', { detail: id }))
+                        navigate('/issues?open=' + id)
                       }}
                       title={`Open issue ${id}`}
                       style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 4, border: '1px solid var(--accent-line)', background: 'var(--accent-dim)', color: 'var(--accent-2)', fontFamily: 'var(--font-mono)', cursor: 'default' }}
@@ -502,9 +503,12 @@ function ImportGitModal({ onClose, onImported }: { onClose: () => void; onImport
   const [version,   setVersion]   = useState('')
   const [date,      setDate]      = useState(today())
   const [type,      setType]      = useState<ReleaseInput['type']>('patch')
-  const [commits,   setCommits]   = useState('')
-  const [loading,   setLoading]   = useState(false)
-  const [error,     setError]     = useState('')
+  const [commits,    setCommits]    = useState('')
+  const [loading,    setLoading]    = useState(false)
+  const [error,      setError]      = useState('')
+  const [ghBase,     setGhBase]     = useState('')
+  const [ghHead,     setGhHead]     = useState('HEAD')
+  const [fetching,   setFetching]   = useState(false)
 
   const inp: React.CSSProperties = { width: '100%', background: 'var(--bg-elev)', border: '1px solid var(--line)', borderRadius: 6, padding: '7px 10px', color: 'var(--fg)', fontSize: '13px', boxSizing: 'border-box', outline: 'none' }
   const lbl: React.CSSProperties = { fontSize: '11px', fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '.07em', display: 'block', marginBottom: 5 }
@@ -514,6 +518,16 @@ function ImportGitModal({ onClose, onImported }: { onClose: () => void; onImport
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
   }, [onClose])
+
+  async function handleFetchFromGitHub() {
+    if (!projectId || !ghBase.trim()) { setError('Select project and enter base ref'); return }
+    setFetching(true); setError('')
+    try {
+      const { commits: log } = await gitApi.compare(projectId, ghBase.trim(), ghHead.trim() || 'HEAD')
+      setCommits(log)
+    } catch (e) { setError((e as Error).message) }
+    finally { setFetching(false) }
+  }
 
   async function handleImport() {
     if (!commits.trim())  { setError('Commit messages are required'); return }
@@ -576,6 +590,23 @@ function ImportGitModal({ onClose, onImported }: { onClose: () => void; onImport
                 <option value="">— Select project —</option>
                 {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
+            </div>
+          )}
+
+          {/* Fetch from GitHub */}
+          {projectId && (
+            <div style={{ padding: '10px 12px', borderRadius: 6, border: '1px solid var(--line)', background: 'var(--bg)' }}>
+              <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 8 }}>
+                Fetch from GitHub
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input value={ghBase} onChange={e => setGhBase(e.target.value)} placeholder="Base (e.g. v1.0.0 or a SHA)" style={{ ...inp, flex: 1, minWidth: 120 }} />
+                <span style={{ fontSize: 12, color: 'var(--fg-4)', flexShrink: 0 }}>→</span>
+                <input value={ghHead} onChange={e => setGhHead(e.target.value)} placeholder="Head (default: HEAD)" style={{ ...inp, flex: 1, minWidth: 120 }} />
+                <button onClick={handleFetchFromGitHub} disabled={fetching || !ghBase.trim()} style={{ padding: '6px 10px', borderRadius: 5, border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-3)', fontSize: '12px', cursor: fetching ? 'not-allowed' : 'default', opacity: fetching || !ghBase.trim() ? 0.5 : 1, whiteSpace: 'nowrap' }}>
+                  {fetching ? 'Fetching…' : 'Fetch commits'}
+                </button>
+              </div>
             </div>
           )}
 

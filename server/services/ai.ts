@@ -43,6 +43,7 @@ export async function aiChat(prompt: string, system: string): Promise<string> {
   const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(30_000),
     body: JSON.stringify({
       model:    CHAT_MODEL,
       stream:   false,
@@ -70,6 +71,7 @@ export async function aiEmbed(text: string): Promise<number[]> {
   const res = await fetch(`${OLLAMA_BASE}/api/embeddings`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(30_000),
     body: JSON.stringify({
       model:  'nomic-embed-text',
       prompt: text,
@@ -147,6 +149,7 @@ export async function aiChatStream(
   const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(120_000),  // streaming can legitimately take longer
     body: JSON.stringify({
       model:    CHAT_MODEL,
       stream:   true,

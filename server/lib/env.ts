@@ -10,6 +10,7 @@ const schema = z.object({
   USE_CLAUDE:         z.enum(['true', 'false']).default('false').transform(v => v === 'true'),
   ANTHROPIC_API_KEY:  z.string().optional(),
   NODE_ENV:           z.enum(['development', 'production', 'test']).default('development'),
+  FORCE_HTTPS:        z.enum(['true', 'false']).default('false').transform(v => v === 'true'),
   // LDAP — all optional; set LDAP_URL to activate
   LDAP_URL:           z.string().optional(),
   LDAP_BIND_DN:       z.string().optional(),

@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-devbrain}
+      POSTGRES_USER:     ${POSTGRES_USER:-devbrain}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devbrain}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-devbrain} -d ${POSTGRES_DB:-devbrain}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+
+  # Ollama runs natively on the host (direct GPU access, faster than containerised).
+  # The app container reaches it via host.docker.internal on Windows/Mac,
+  # or via --add-host=host-gateway on Linux.
+  # Do NOT start a containerised Ollama alongside the native one — they compete for VRAM.
+
+  app:
+    build: ./server
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL:      postgresql://${POSTGRES_USER:-devbrain}:${POSTGRES_PASSWORD:-devbrain}@postgres:5432/${POSTGRES_DB:-devbrain}
+      OLLAMA_URL:        http://host.docker.internal:11434
+      OLLAMA_CHAT_MODEL: mistral
+      PORT:              3001
+      JWT_SECRET:        ${JWT_SECRET:?JWT_SECRET must be set}
+      AUTH_PASSWORD:     ${AUTH_PASSWORD:-}
+      USE_CLAUDE:        ${USE_CLAUDE:-false}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      FORCE_HTTPS:       ${FORCE_HTTPS:-false}
+      NODE_ENV:          ${NODE_ENV:-production}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+
+volumes:
+  pg_data:

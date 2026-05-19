@@ -13,7 +13,10 @@ export function getToken(): string | null {
 function setToken(t: string) { localStorage.setItem(TOKEN_KEY, t) }
 function clearToken()        { localStorage.removeItem(TOKEN_KEY) }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+// In-flight cache: deduplicate identical concurrent GET requests
+const inflight = new Map<string, Promise<unknown>>()
+
+async function _fetch<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken()
   const res = await fetch(`${BASE}${path}`, {
     headers: {
@@ -30,6 +33,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const json = await res.json() as { data?: T; error?: string }
   if (!res.ok) throw new Error(json.error ?? `Request failed: ${res.status}`)
   return json.data as T
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // Only deduplicate GETs with no abort signal (signal means the caller manages lifecycle)
+  if ((!init?.method || init.method === 'GET') && !init?.signal) {
+    const existing = inflight.get(path)
+    if (existing) return existing as Promise<T>
+    const p = _fetch<T>(path, init).finally(() => inflight.delete(path))
+    inflight.set(path, p)
+    return p
+  }
+  return _fetch<T>(path, init)
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────
@@ -163,6 +178,7 @@ export type Project = {
   tech_stack:    string[]
   type:          'mobile' | 'web' | 'desktop' | 'fintech' | 'tool'
   repo_url:      string | null
+  fs_path:       string | null
   created_at:    string
   doc_count:     number
   issue_count:   number
@@ -170,7 +186,7 @@ export type Project = {
   release_count: number
 }
 
-export type ProjectInput = Omit<Project, 'id' | 'created_at' | 'doc_count' | 'issue_count' | 'command_count' | 'release_count'>
+export type ProjectInput = Omit<Project, 'id' | 'created_at' | 'doc_count' | 'issue_count' | 'command_count' | 'release_count' | 'fs_path'>
 
 export const projectsApi = {
   list:      ()                              => request<Project[]>('/projects'),
@@ -180,23 +196,151 @@ export const projectsApi = {
     request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   remove:    (id: string)                   => request<{ deleted: { id: string; name: string } }>(`/projects/${id}`, { method: 'DELETE' }),
   seedReset: ()                             => request<{ message: string }>('/projects/seed/reset', { method: 'POST' }),
+  link:      (id: string, fsPath: string | null) =>
+    request<Project>(`/projects/${id}/link`, { method: 'PUT', body: JSON.stringify({ fs_path: fsPath }) }),
+}
+
+// ── Claude Projects / TASKS.md sync ──────────────────────────────────────
+
+export type TaskItemData = {
+  text:      string
+  status:    'todo' | 'done' | 'in_progress' | 'blocked'
+  doneDate?: string
+}
+
+export type TaskPhaseData = {
+  name:  string
+  total: number
+  done:  number
+  pct:   number
+  items: TaskItemData[]
+}
+
+export type TaskTreeData = {
+  projectId:   string
+  lastUpdated: string | null
+  phases:      TaskPhaseData[]
+  overallPct:  number
+  totalDone:   number
+  totalItems:  number
+}
+
+export type ScanCandidate = {
+  path:               string
+  name:               string
+  lastUpdated:        string | null
+  lastSessionDate:    string | null
+  phases:             { name: string; total: number; done: number; pct: number }[]
+  overallPct:         number
+  matchedProjectId?:  string
+  matchedProjectName?: string
+}
+
+export type SessionStatus = 'active' | 'completed'
+
+export type SessionSummaryData = {
+  sessionId:     string
+  folderName:    string
+  date:          string
+  started:       string
+  ended?:        string
+  status:        SessionStatus
+  goals:         string[]
+  workDone:      string[]
+  decisions:     string[]
+  openItems:     string[]
+  workDoneCount: number
+}
+
+export type SessionDetailData = SessionSummaryData & { rawMarkdown: string }
+
+export type SessionsPage = {
+  sessions: SessionSummaryData[]
+  total:    number
+  page:     number
+  limit:    number
+}
+
+export const claudeProjectsApi = {
+  scan: () =>
+    request<{ root: string; count: number; candidates: ScanCandidate[] }>('/claude-projects/scan', { method: 'POST' }),
+
+  getTasks: (id: string) =>
+    request<TaskTreeData>(`/claude-projects/${id}/tasks`),
+
+  getSessions: (
+    id:      string,
+    params?: { status?: SessionStatus; q?: string; page?: number; limit?: number },
+  ) => {
+    const qs = new URLSearchParams()
+    if (params?.status) qs.set('status', params.status)
+    if (params?.q)      qs.set('q',      params.q)
+    if (params?.page)   qs.set('page',   String(params.page))
+    if (params?.limit)  qs.set('limit',  String(params.limit))
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return request<SessionsPage>(`/claude-projects/${id}/sessions${suffix}`)
+  },
+
+  getSession: (id: string, sessionId: string) =>
+    request<SessionDetailData>(`/claude-projects/${id}/sessions/${sessionId}`),
+
+  watchTasks: (
+    id:       string,
+    onUpdate: (tree: TaskTreeData) => void,
+  ): (() => void) => {
+    const token = getToken()
+    const ctrl  = new AbortController()
+
+    ;(async () => {
+      try {
+        const res = await fetch(`${BASE}/claude-projects/${id}/tasks/watch`, {
+          headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          signal:  ctrl.signal,
+        })
+        if (!res.ok || !res.body) return
+
+        const reader  = res.body.getReader()
+        const decoder = new TextDecoder()
+        let   buf     = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += decoder.decode(value, { stream: true })
+          const lines = buf.split('\n')
+          buf = lines.pop() ?? ''
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue
+            try { onUpdate(JSON.parse(line.slice(6)) as TaskTreeData) } catch { /* skip */ }
+          }
+        }
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') console.error('watchTasks error', err)
+      }
+    })()
+
+    return () => ctrl.abort()
+  },
 }
 
 // ── Documents ─────────────────────────────────────────────────────────────
 
+export type EmbeddingStatus = 'pending' | 'processing' | 'done' | 'failed'
+
 export type DocMeta = {
-  id:             string
-  project_id:     string | null
-  title:          string
-  file_type:      'pdf' | 'docx' | 'md' | 'txt' | 'xlsx' | 'url'
-  tags:           string[]
-  source:         string
-  content_hash:   string | null
-  created_at:     string
-  content_length: number
-  chunk_count:    number
-  project_name:   string | null
-  project_color:  string | null
+  id:               string
+  project_id:       string | null
+  title:            string
+  file_type:        'pdf' | 'docx' | 'md' | 'txt' | 'xlsx' | 'url'
+  tags:             string[]
+  source:           string
+  content_hash:     string | null
+  embedding_status: EmbeddingStatus
+  created_at:       string
+  content_length:   number
+  chunk_count:      number
+  project_name:     string | null
+  project_color:    string | null
 }
 
 export type DocDetail = DocMeta & { content: string }
@@ -239,6 +383,9 @@ export const documentsApi = {
 
   remove: (id: string) =>
     request<{ deleted: { id: string; title: string } }>(`/documents/${id}`, { method: 'DELETE' }),
+
+  reembed: (id: string) =>
+    request<{ id: string; embedding_status: EmbeddingStatus }>(`/documents/${id}/reembed`, { method: 'POST' }),
 }
 
 // ── Issues ────────────────────────────────────────────────────────────────
@@ -267,7 +414,9 @@ export type Issue = {
   notes:               IssueNote[]
   linked_docs:         string[]
   linked_commands:     string[]
+  linked_commits:      string[]
   resolution:          string
+  pr_url:              string | null
   tags:                string[]
   created_at:          string
   resolved_at:         string | null
@@ -311,7 +460,7 @@ export type RelatedCommand = {
 }
 
 export const issuesApi = {
-  list: (params?: { projectId?: string; status?: string; priority?: string; search?: string; limit?: number; offset?: number }) => {
+  list: (params?: { projectId?: string; status?: string; priority?: string; search?: string; limit?: number; offset?: number; signal?: AbortSignal }) => {
     const qs = new URLSearchParams()
     if (params?.projectId)      qs.set('projectId', params.projectId)
     if (params?.status)         qs.set('status',    params.status)
@@ -320,21 +469,24 @@ export const issuesApi = {
     if (params?.limit  != null) qs.set('limit',     String(params.limit))
     if (params?.offset != null) qs.set('offset',    String(params.offset))
     const q = qs.toString()
-    return request<Paged<Issue>>(`/issues${q ? `?${q}` : ''}`)
+    return request<Paged<Issue>>(`/issues${q ? `?${q}` : ''}`, params?.signal ? { signal: params.signal } : undefined)
   },
   related: (q: string) =>
     request<RelatedIssue[]>(`/issues/related?q=${encodeURIComponent(q)}`),
   get:       (id: string)                             => request<Issue>(`/issues/${id}`),
   create:    (body: IssueInput)                       => request<Issue>('/issues', { method: 'POST', body: JSON.stringify(body) }),
-  update:    (id: string, body: Partial<IssueInput> & { investigation_steps?: IssueStep[]; resolution?: string }) =>
+  update:    (id: string, body: Partial<IssueInput> & { investigation_steps?: IssueStep[]; resolution?: string; pr_url?: string | null }) =>
     request<Issue>(`/issues/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   remove:    (id: string)                             => request<{ deleted: { id: string; title: string } }>(`/issues/${id}`, { method: 'DELETE' }),
   addNote:   (id: string, content: string)            => request<Issue>(`/issues/${id}/notes`, { method: 'POST', body: JSON.stringify({ content }) }),
   deleteNote:(id: string, noteId: string)             => request<Issue>(`/issues/${id}/notes/${noteId}`, { method: 'DELETE' }),
+  linkCommit:   (id: string, sha: string)             => request<string[]>(`/issues/${id}/commits`, { method: 'POST', body: JSON.stringify({ sha }) }),
+  unlinkCommit: (id: string, sha: string)             => request<string[]>(`/issues/${id}/commits/${sha}`, { method: 'DELETE' }),
   summarize:       (id: string) => request<{ summary: string }>(`/issues/${id}/summarize`, { method: 'POST' }),
   suggestSteps:    (id: string) => request<{ steps: string[] }>(`/issues/${id}/suggest-steps`, { method: 'POST' }),
   relatedDocs:     (id: string) => request<RelatedDoc[]>(`/issues/${id}/related-docs`),
   relatedCommands: (id: string) => request<RelatedCommand[]>(`/issues/${id}/related-commands`),
+  reembed:         (id: string) => request<{ id: string; embedding_status: EmbeddingStatus }>(`/issues/${id}/reembed`, { method: 'POST' }),
 }
 
 // ── Tasks ─────────────────────────────────────────────────────────────────
@@ -444,7 +596,7 @@ export type CommandInput = Pick<Command, 'title' | 'command' | 'language' | 'des
 }
 
 export const commandsApi = {
-  list: (params?: { projectId?: string; language?: string; search?: string; favorite?: boolean; namespace?: string; limit?: number; offset?: number }) => {
+  list: (params?: { projectId?: string; language?: string; search?: string; favorite?: boolean; namespace?: string; limit?: number; offset?: number; signal?: AbortSignal }) => {
     const qs = new URLSearchParams()
     if (params?.projectId)         qs.set('projectId', params.projectId)
     if (params?.language)          qs.set('language',  params.language)
@@ -454,7 +606,7 @@ export const commandsApi = {
     if (params?.limit  != null)    qs.set('limit',     String(params.limit))
     if (params?.offset != null)    qs.set('offset',    String(params.offset))
     const q = qs.toString()
-    return request<Paged<Command>>(`/commands${q ? `?${q}` : ''}`)
+    return request<Paged<Command>>(`/commands${q ? `?${q}` : ''}`, params?.signal ? { signal: params.signal } : undefined)
   },
   get:     (id: string)                       => request<Command>(`/commands/${id}`),
   create:  (body: CommandInput)               => request<Command>('/commands', { method: 'POST', body: JSON.stringify(body) }),
@@ -532,9 +684,10 @@ export type SearchResults = {
 }
 
 export const searchApi = {
-  search: (q: string, projectId?: string | null) => {
+  search: (q: string, projectId?: string | null, limit?: number) => {
     const qs = new URLSearchParams({ q })
     if (projectId) qs.set('projectId', projectId)
+    if (limit != null) qs.set('limit', String(limit))
     return request<SearchResults>(`/search?${qs}`)
   }
 }
@@ -683,6 +836,65 @@ export async function chatStream(
   }
 }
 
+// ── Git Integration ───────────────────────────────────────────────────────
+
+export type GitCommit = {
+  sha:      string
+  full_sha: string
+  message:  string
+  author:   string
+  date:     string
+  url:      string
+}
+
+export type GitRepoConfig = {
+  id:      string
+  repo_url: string | null
+  has_pat:  boolean
+}
+
+export const gitApi = {
+  getRepo:    (projectId: string)                                           => request<GitRepoConfig>(`/git/${projectId}/repo`),
+  saveRepo:   (projectId: string, body: { repo_url?: string; github_pat?: string }) =>
+    request<GitRepoConfig>(`/git/${projectId}/repo`, { method: 'POST', body: JSON.stringify(body) }),
+  listCommits: (projectId: string, limit = 20)                             =>
+    request<GitCommit[]>(`/git/${projectId}/commits?limit=${limit}`),
+  compare:     (projectId: string, base: string, head: string)             =>
+    request<{ commits: string; count: number }>(`/git/${projectId}/compare?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}`),
+}
+
+// ── Integrations ──────────────────────────────────────────────────────────
+
+export type IntegrationsConfig = {
+  jira:   { baseUrl: string; email: string; hasToken: boolean } | null
+  linear: { hasKey: boolean } | null
+}
+
+export type JiraIssuePreview = { key: string; summary: string; priority: string; status: string }
+export type LinearIssuePreview = { id: string; title: string; state: string }
+
+export const integrationsApi = {
+  getConfig: () => request<IntegrationsConfig>('/integrations/config'),
+
+  saveJira: (body: { baseUrl: string; email: string; apiToken: string }) =>
+    request<{ ok: boolean }>('/integrations/config/jira', { method: 'PUT', body: JSON.stringify(body) }),
+
+  saveLinear: (apiKey: string) =>
+    request<{ ok: boolean }>('/integrations/config/linear', { method: 'PUT', body: JSON.stringify({ apiKey }) }),
+
+  jiraPreview: (body: { project_id?: string; jql?: string; max_results?: number }) =>
+    request<{ total: number; issues: JiraIssuePreview[] }>('/integrations/jira/preview', { method: 'POST', body: JSON.stringify(body) }),
+
+  jiraImport: (body: { project_id?: string; jql?: string; max_results?: number }) =>
+    request<{ created: number; skipped: number; total: number }>('/integrations/jira/import', { method: 'POST', body: JSON.stringify(body) }),
+
+  linearPreview: (body: { project_id?: string; team_key: string; max_results?: number }) =>
+    request<{ total: number; issues: LinearIssuePreview[] }>('/integrations/linear/preview', { method: 'POST', body: JSON.stringify(body) }),
+
+  linearImport: (body: { project_id?: string; team_key: string; max_results?: number }) =>
+    request<{ created: number; skipped: number; total: number }>('/integrations/linear/import', { method: 'POST', body: JSON.stringify(body) }),
+}
+
 // ── AI Task ───────────────────────────────────────────────────────────────
 
 export type OutputFormat = 'markdown' | 'json' | 'bullets' | 'table' | 'code' | 'summary' | 'plaintext'
@@ -717,6 +929,16 @@ export type ImportSummary = {
 
 export const settingsApi = {
   get: () => request<SettingsData>('/settings'),
+
+  getClaudeSettings: () =>
+    request<{ scan_root: string | null }>('/settings/claude'),
+
+  saveClaudeSettings: (scan_root: string | null) =>
+    request<{ scan_root: string | null }>('/settings/claude', {
+      method: 'PUT',
+      body: JSON.stringify({ scan_root }),
+    }),
+
   importBackup: (body: unknown, dryRun = false) =>
     request<ImportSummary>(`/settings/import${dryRun ? '?dry_run=true' : ''}`, { method: 'POST', body: JSON.stringify(body) }),
 

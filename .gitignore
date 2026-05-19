@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.env
+*.local
+
+# Vite
+client/dist/
+
+# Server build
+server/dist/
+server/public/
+
+# Docker volumes
+pg_data/
+ollama_data/
+
+# OS
+.DS_Store
+Thumbs.db

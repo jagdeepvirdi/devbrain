@@ -4,11 +4,13 @@ import { aiEmbed } from '../services/ai.js'
 
 const router = Router()
 
-const PAGE = 5
+const MAX_LIMIT = 50
 
 router.get('/', async (req, res) => {
-  const q   = ((req.query.q as string) || '').trim()
-  const pid = (req.query.projectId as string) || null
+  const q     = ((req.query.q as string) || '').trim()
+  const pid   = (req.query.projectId as string) || null
+  const limit = Math.min(Math.max(1, Number(req.query.limit ?? 10)), MAX_LIMIT)
+  const PAGE  = limit
 
   // Per-table project filter fragment ($2 when pid set, nothing otherwise)
   const pf = (alias: string) => pid ? `AND ${alias}.project_id = $2` : ''

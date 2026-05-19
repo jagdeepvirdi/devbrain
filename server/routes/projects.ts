@@ -1,9 +1,11 @@
 import { Router } from 'express'
 import { z } from 'zod'
+import { promises as fsPromises } from 'node:fs'
 import { pool } from '../db/pool.js'
 import { runSeed } from '../db/seed.js'
 import { env } from '../lib/env.js'
 import { requireRole } from '../middleware/auth.js'
+import { refreshProjectWatch } from '../services/tasks-watcher.js'
 
 const router = Router()
 
@@ -124,6 +126,47 @@ router.put('/:id', async (req, res) => {
       return res.status(409).json({ error: 'short_name is already taken' })
     }
     res.status(500).json({ error: msg })
+  }
+})
+
+// ── PUT /api/projects/:id/link ────────────────────────────────────────────
+
+const LinkBody = z.object({
+  fs_path: z.string().min(1).nullable(),
+})
+
+router.put('/:id/link', async (req, res) => {
+  const parsed = LinkBody.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
+  }
+
+  const { fs_path } = parsed.data
+
+  if (fs_path !== null) {
+    try {
+      const stat = await fsPromises.stat(fs_path)
+      if (!stat.isDirectory()) {
+        return res.status(422).json({ error: 'fs_path must point to a directory' })
+      }
+    } catch {
+      return res.status(422).json({ error: `Path does not exist or is not accessible: ${fs_path}` })
+    }
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `UPDATE projects SET fs_path = $1 WHERE id = $2 RETURNING *`,
+      [fs_path, req.params.id]
+    )
+    if (rows.length === 0) return res.status(404).json({ error: 'Project not found' })
+
+    // Update file watcher for this project
+    await refreshProjectWatch(req.params.id, fs_path)
+
+    res.json({ data: rows[0] })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
   }
 })
 

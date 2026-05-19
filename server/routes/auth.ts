@@ -1,24 +1,54 @@
-import { Router } from 'express'
-import jwt        from 'jsonwebtoken'
-import bcrypt     from 'bcryptjs'
-import { z }      from 'zod'
-import { pool }   from '../db/pool.js'
-import { env }    from '../lib/env.js'
-import { ldapAuth } from '../services/ldap.js'
+import { Router }     from 'express'
+import jwt             from 'jsonwebtoken'
+import bcrypt          from 'bcryptjs'
+import rateLimit       from 'express-rate-limit'
+import { z }           from 'zod'
+import { pool }        from '../db/pool.js'
+import { env }         from '../lib/env.js'
+import { ldapAuth }    from '../services/ldap.js'
 import { requireAuth } from '../middleware/auth.js'
+import { logAudit }    from '../services/audit.js'
 
 const router = Router()
 
-function signToken(userId: string, username: string, role: string) {
-  return jwt.sign({ userId, username, role }, env.JWT_SECRET, { expiresIn: '30d' })
+// Pre-computed to equalize response time when a username is not found
+const DUMMY_HASH = bcrypt.hashSync('devbrain-timing-guard-unused', 10)
+
+const COOKIE_OPTS = {
+  httpOnly: true,
+  secure:   env.NODE_ENV === 'production',
+  sameSite: 'strict' as const,
+  maxAge:   30 * 24 * 60 * 60 * 1000,  // 30 days
+}
+
+function signToken(userId: string, username: string, role: string): string {
+  return jwt.sign(
+    { userId, username, role },
+    env.JWT_SECRET,
+    { expiresIn: '30d', issuer: 'devbrain', audience: 'devbrain-client' },
+  )
 }
 
 // ── POST /api/auth/login ──────────────────────────────────────────────────
 
-router.post('/login', async (req, res) => {
+const loginLimiter = rateLimit({
+  windowMs:       15 * 60 * 1000,  // 15 minutes
+  max:            10,
+  standardHeaders: true,
+  legacyHeaders:  false,
+  handler: (_req, res) => {
+    res.status(429).json({ error: 'Too many login attempts — try again in 15 minutes' })
+  },
+})
+
+router.post('/login', loginLimiter, async (req, res) => {
   // Dev mode — no auth configured
   if (!env.AUTH_PASSWORD) {
-    const token = jwt.sign({ userId: 'dev', username: 'dev', role: 'admin', dev: true }, env.JWT_SECRET, { expiresIn: '30d' })
+    const token = jwt.sign(
+      { userId: 'dev', username: 'dev', role: 'admin', dev: true },
+      env.JWT_SECRET,
+      { expiresIn: '30d' },
+    )
     res.json({ data: { token, devMode: true, user: { id: 'dev', username: 'dev', role: 'admin' } } })
     return
   }
@@ -40,9 +70,8 @@ router.post('/login', async (req, res) => {
       return
     }
 
-    // Auto-create first admin from AUTH_PASSWORD login
     const name = (typeof username === 'string' && username.trim()) ? username.trim() : 'admin'
-    const hash  = await bcrypt.hash(password, 10)
+    const hash = await bcrypt.hash(password, 10)
     const { rows } = await pool.query<{ id: string; role: string }>(
       `INSERT INTO users (username, password_hash, role)
        VALUES ($1, $2, 'admin')
@@ -52,6 +81,7 @@ router.post('/login', async (req, res) => {
     )
     const user  = rows[0]
     const token = signToken(user.id, name, user.role)
+    res.cookie('devbrain_token', token, COOKIE_OPTS)
     res.json({ data: { token, devMode: false, user: { id: user.id, username: name, role: user.role } } })
     return
   }
@@ -64,25 +94,26 @@ router.post('/login', async (req, res) => {
 
   const uname = username.trim()
 
-  // Try local user table
-  const { rows: userRows } = await pool.query<{ id: string; username: string; role: string; password_hash: string | null }>(
-    'SELECT id, username, role, password_hash FROM users WHERE username = $1',
-    [uname],
-  )
+  const { rows: userRows } = await pool.query<{
+    id: string; username: string; role: string; password_hash: string | null
+  }>('SELECT id, username, role, password_hash FROM users WHERE username = $1', [uname])
 
   if (userRows.length && userRows[0].password_hash) {
     const ok = await bcrypt.compare(password, userRows[0].password_hash)
-    if (!ok) { res.status(401).json({ error: 'Incorrect password' }); return }
-    const u = userRows[0]
+    if (!ok) { res.status(401).json({ error: 'Invalid credentials' }); return }
+    const u     = userRows[0]
     const token = signToken(u.id, u.username, u.role)
+    res.cookie('devbrain_token', token, COOKIE_OPTS)
     res.json({ data: { token, devMode: false, user: { id: u.id, username: u.username, role: u.role } } })
     return
   }
 
+  // User not found or LDAP-only — run dummy bcrypt to equalize response time
+  await bcrypt.compare(password, DUMMY_HASH)
+
   // Try LDAP if configured
   const ldapUser = await ldapAuth(uname, password)
   if (ldapUser) {
-    // Upsert LDAP user in DB
     const { rows: ldapRows } = await pool.query<{ id: string; role: string }>(
       `INSERT INTO users (username, email, ldap_dn, role)
        VALUES ($1, $2, $3, 'editor')
@@ -91,8 +122,9 @@ router.post('/login', async (req, res) => {
        RETURNING id, username, role`,
       [ldapUser.username, ldapUser.email, ldapUser.dn],
     )
-    const u = ldapRows[0]
+    const u     = ldapRows[0]
     const token = signToken(u.id, ldapUser.username, u.role)
+    res.cookie('devbrain_token', token, COOKIE_OPTS)
     res.json({ data: { token, devMode: false, user: { id: u.id, username: ldapUser.username, role: u.role } } })
     return
   }
@@ -100,8 +132,14 @@ router.post('/login', async (req, res) => {
   res.status(401).json({ error: 'Invalid credentials' })
 })
 
+// ── POST /api/auth/logout ─────────────────────────────────────────────────
+
+router.post('/logout', (_req, res) => {
+  res.clearCookie('devbrain_token')
+  res.json({ data: { ok: true } })
+})
+
 // ── POST /api/auth/register ───────────────────────────────────────────────
-// Open only when no users exist (first-run setup); otherwise requires admin.
 
 const RegisterBody = z.object({
   username: z.string().min(2).max(64).trim(),
@@ -110,16 +148,20 @@ const RegisterBody = z.object({
   role:     z.enum(['admin', 'editor', 'viewer']).default('editor'),
 })
 
+const JWT_VERIFY_OPTS: jwt.VerifyOptions = {
+  issuer:   'devbrain',
+  audience: 'devbrain-client',
+}
+
 router.post('/register', async (req, res) => {
   const { rows: countRows } = await pool.query<{ n: number }>('SELECT COUNT(*)::int AS n FROM users')
   const firstRun = countRows[0].n === 0
 
   if (!firstRun) {
-    // Require authenticated admin for subsequent registrations
     const header = req.headers.authorization
     if (!header?.startsWith('Bearer ')) { res.status(401).json({ error: 'Unauthorized' }); return }
     try {
-      const payload = jwt.verify(header.slice(7), env.JWT_SECRET) as Record<string, unknown>
+      const payload = jwt.verify(header.slice(7), env.JWT_SECRET, JWT_VERIFY_OPTS) as Record<string, unknown>
       if (payload.role !== 'admin') { res.status(403).json({ error: 'Admin role required' }); return }
     } catch {
       res.status(401).json({ error: 'Invalid token' })
@@ -140,7 +182,7 @@ router.post('/register', async (req, res) => {
        RETURNING id, username, role`,
       [username, email ?? null, hash, firstRun ? 'admin' : role],
     )
-    const u = rows[0]
+    const u     = rows[0]
     const token = signToken(u.id, u.username, u.role)
     res.status(201).json({ data: { token, user: { id: u.id, username: u.username, role: u.role } } })
   } catch (err: unknown) {
@@ -165,12 +207,12 @@ router.get('/me', (req, res) => {
   if (!header?.startsWith('Bearer ')) { res.json({ data: { authed: false } }); return }
 
   try {
-    const payload = jwt.verify(header.slice(7), env.JWT_SECRET) as Record<string, unknown>
+    const payload = jwt.verify(header.slice(7), env.JWT_SECRET, JWT_VERIFY_OPTS) as Record<string, unknown>
     if (payload.userId) {
       res.json({ data: { authed: true, devMode: false, user: { id: payload.userId, username: payload.username, role: payload.role } } })
     } else {
-      // Legacy token
-      res.json({ data: { authed: true, devMode: false, user: { id: 'legacy', username: 'admin', role: 'admin' } } })
+      // Legacy token — expired, force re-login
+      res.json({ data: { authed: false } })
     }
   } catch {
     res.json({ data: { authed: false } })
@@ -200,6 +242,7 @@ router.post('/change-password', requireAuth, async (req, res) => {
 
   const hash = await bcrypt.hash(newPassword, 10)
   await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, userId])
+  await logAudit(userId, req.user!.username, 'user', userId, req.user!.username, 'update', { changed: ['password_hash'] })
   res.json({ data: { ok: true } })
 })
 

@@ -2,10 +2,13 @@ import { Router }   from 'express'
 import multer        from 'multer'
 import fs            from 'fs/promises'
 import crypto        from 'crypto'
+import dns           from 'node:dns/promises'
 import { z }         from 'zod'
+import * as ipaddr   from 'ipaddr.js'
 import { pool }      from '../db/pool.js'
 import { parseFile, parseUrl } from '../services/parser.js'
 import { embedDocument }       from '../services/embedder.js'
+import { buildSetClause }      from '../lib/db.js'
 
 const router = Router()
 
@@ -20,6 +23,19 @@ const upload = multer({
 
 function sha256(text: string): string {
   return crypto.createHash('sha256').update(text).digest('hex')
+}
+
+// Returns true if the URL resolves to a private/loopback address (SSRF guard)
+async function isPrivateUrl(urlStr: string): Promise<boolean> {
+  let hostname: string
+  try { hostname = new URL(urlStr).hostname } catch { return true }
+  try {
+    const { address } = await dns.lookup(hostname)
+    const addr = ipaddr.parse(address)
+    return addr.range() !== 'unicast'
+  } catch {
+    return true  // treat DNS failures as unsafe
+  }
 }
 
 // ── GET /api/documents ────────────────────────────────────────────────────
@@ -160,6 +176,11 @@ router.post('/url', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
   const { url, projectId = null, tags } = parsed.data
+
+  if (await isPrivateUrl(url)) {
+    return res.status(422).json({ error: 'URL resolves to a private or restricted address' })
+  }
+
   let docId: string | null = null
 
   try {
@@ -201,23 +222,28 @@ const PatchBody = z.object({
   projectId: z.string().nullable().optional(),
 })
 
+const DOC_COL_MAP: Record<string, string> = { projectId: 'project_id' }
+const DOC_UPDATABLE_COLS = new Set(['title', 'tags', 'project_id'])
+
 router.patch('/:id', async (req, res) => {
   const parsed = PatchBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
-  const updates = parsed.data
-  if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' })
+  const updates = parsed.data as Record<string, unknown>
+  // Map camelCase → snake_case then filter to allowlist
+  const fields = Object.keys(updates)
+    .map(k => DOC_COL_MAP[k] ?? k)
+    .filter(k => DOC_UPDATABLE_COLS.has(k))
+  const vals = Object.keys(updates).map(k => updates[k])
 
-  // Map camelCase → snake_case columns
-  const colMap: Record<string, string> = { projectId: 'project_id' }
-  const fields  = Object.keys(updates)
-  const setCols = fields.map((k, i) => `${colMap[k] ?? k} = $${i + 2}`).join(', ')
-  const values  = fields.map(k => (updates as Record<string, unknown>)[k])
+  if (!fields.length) return res.status(400).json({ error: 'Nothing to update' })
+
+  const { setClauses, params } = buildSetClause(fields, vals)
 
   try {
     const { rows } = await pool.query(
-      `UPDATE documents SET ${setCols} WHERE id = $1 RETURNING *`,
-      [req.params.id, ...values]
+      `UPDATE documents SET ${setClauses} WHERE id = $1 RETURNING *`,
+      [req.params.id, ...params]
     )
     if (!rows.length) return res.status(404).json({ error: 'Document not found' })
     res.json({ data: rows[0] })
@@ -238,6 +264,27 @@ router.delete('/:id', async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Document not found' })
     res.json({ data: { deleted: rows[0] } })
   } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── POST /api/documents/:id/reembed ──────────────────────────────────────
+
+router.post('/:id/reembed', async (req, res) => {
+  const { id } = req.params
+  try {
+    const { rows } = await pool.query('SELECT id, content FROM documents WHERE id = $1', [id])
+    if (!rows.length) return res.status(404).json({ error: 'Document not found' })
+
+    await pool.query(`UPDATE documents SET embedding_status = 'processing' WHERE id = $1`, [id])
+
+    embedDocument(id, rows[0].content)
+      .then(() => pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [id]))
+      .catch(() => pool.query(`UPDATE documents SET embedding_status = 'failed' WHERE id = $1`, [id]))
+
+    res.json({ data: { id, embedding_status: 'processing' } })
+  } catch (err) {
+    await pool.query(`UPDATE documents SET embedding_status = 'failed' WHERE id = $1`, [id]).catch(() => {})
     res.status(500).json({ error: (err as Error).message })
   }
 })

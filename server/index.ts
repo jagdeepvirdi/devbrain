@@ -1,18 +1,33 @@
 import 'dotenv/config'
 import { env } from './lib/env.js'
 
-import express from 'express'
-import cors from 'cors'
-import path from 'path'
+import express      from 'express'
+import cors         from 'cors'
+import cookieParser from 'cookie-parser'
+import path         from 'path'
 import { fileURLToPath } from 'url'
 
 import { pool, dbReady } from './db/pool.js'
 import { runSeed } from './db/seed.js'
 import { ollamaReady } from './services/ai.js'
+import { initTasksWatcher } from './services/tasks-watcher.js'
 
 const app = express()
 
+// HTTPS enforcement (set FORCE_HTTPS=true behind a reverse proxy)
+if (env.FORCE_HTTPS) {
+  app.use((req, res, next) => {
+    if (req.header('x-forwarded-proto') !== 'https') {
+      res.redirect(301, `https://${req.header('host') ?? ''}${req.url}`)
+    } else {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+      next()
+    }
+  })
+}
+
 app.use(cors())
+app.use(cookieParser())
 app.use(express.json({ limit: '50mb' }))
 
 // ── Health check ──────────────────────────────────────────────────────────
@@ -78,6 +93,12 @@ import usersRouter from './routes/users.js'
 app.use('/api/users',     usersRouter)
 import auditRouter from './routes/audit.js'
 app.use('/api/audit',     auditRouter)
+import gitRouter          from './routes/git.js'
+app.use('/api/git',           gitRouter)
+import integrationsRouter from './routes/integrations.js'
+app.use('/api/integrations',  integrationsRouter)
+import claudeProjectsRouter from './routes/claude-projects.js'
+app.use('/api/claude-projects', claudeProjectsRouter)
 
 // ── Static client (production) ────────────────────────────────────────────
 
@@ -119,6 +140,9 @@ async function start() {
   // Ollama check (non-fatal — local dev may start server before Ollama)
   const ollama = await ollamaReady()
   console.log(`  ollama: ${ollama ? 'reachable ✓' : 'unreachable (AI features will fail)'}`)
+
+  // Start TASKS.md watchers for linked projects
+  await initTasksWatcher()
 
   app.listen(env.PORT, () => {
     console.log(`  server: http://localhost:${env.PORT} ✓`)

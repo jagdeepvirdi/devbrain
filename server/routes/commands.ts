@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { z }      from 'zod'
 import { pool }   from '../db/pool.js'
 import { aiChat, aiEmbed } from '../services/ai.js'
+import { buildSetClause }  from '../lib/db.js'
 
 function embedCommandAsync(id: string, title: string, description: string, command: string): void {
   const text = [title, description, command.slice(0, 400)].filter(Boolean).join('. ')
@@ -140,21 +141,23 @@ router.post('/', async (req, res) => {
 
 // ── PUT /api/commands/:id ─────────────────────────────────────────────────
 
+const COMMAND_UPDATABLE_COLS = new Set(['title', 'command', 'language', 'description', 'project_id', 'tags', 'is_favorite', 'namespace'])
+
 router.put('/:id', async (req, res) => {
   const parsed = CommandBody.partial().safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
-  const updates = parsed.data
-  if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' })
+  const updates = parsed.data as Record<string, unknown>
+  const fields  = Object.keys(updates).filter(k => COMMAND_UPDATABLE_COLS.has(k))
+  if (!fields.length) return res.status(400).json({ error: 'Nothing to update' })
 
-  const fields  = Object.keys(updates)
-  const setCols = fields.map((k, i) => `${k} = $${i + 2}`).join(', ')
-  const values  = fields.map(k => (updates as Record<string, unknown>)[k])
+  const vals = fields.map(k => updates[k])
+  const { setClauses, params } = buildSetClause(fields, vals)
 
   try {
     const { rows } = await pool.query(
-      `UPDATE commands SET ${setCols} WHERE id = $1 RETURNING *`,
-      [req.params.id, ...values]
+      `UPDATE commands SET ${setClauses} WHERE id = $1 RETURNING *`,
+      [req.params.id, ...params]
     )
     if (!rows.length) return res.status(404).json({ error: 'Command not found' })
     res.json({ data: rows[0] })

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { settingsApi, authApi, projectsApi, usersApi, auditApi, type SettingsData, type ImportSummary, type User, type AuditEvent, type AuthUser } from '../lib/api'
+import { settingsApi, authApi, projectsApi, usersApi, auditApi, integrationsApi, claudeProjectsApi, type SettingsData, type ImportSummary, type User, type AuditEvent, type AuthUser, type IntegrationsConfig, type ScanCandidate, type Project } from '../lib/api'
 import { useToast } from '../components/Toast'
 
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
@@ -213,6 +213,416 @@ function AuditLog() {
   )
 }
 
+// ── Integrations section ─────────────────────────────────────────────────
+
+function IntegrationsSection() {
+  const { toast } = useToast()
+  const [config,      setConfig]      = useState<IntegrationsConfig | null>(null)
+  const [loading,     setLoading]     = useState(true)
+  const [jiraOpen,    setJiraOpen]    = useState(false)
+  const [linearOpen,  setLinearOpen]  = useState(false)
+  const [jiraForm,    setJiraForm]    = useState({ baseUrl: '', email: '', apiToken: '' })
+  const [linearKey,   setLinearKey]   = useState('')
+  const [saving,      setSaving]      = useState(false)
+
+  useEffect(() => {
+    integrationsApi.getConfig()
+      .then(setConfig)
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  async function saveJira(e: React.FormEvent) {
+    e.preventDefault()
+    setSaving(true)
+    try {
+      await integrationsApi.saveJira(jiraForm)
+      const cfg = await integrationsApi.getConfig()
+      setConfig(cfg)
+      setJiraOpen(false)
+      setJiraForm({ baseUrl: '', email: '', apiToken: '' })
+      toast('Jira integration saved', 'success')
+    } catch (err) { toast((err as Error).message, 'error') }
+    finally { setSaving(false) }
+  }
+
+  async function saveLinear(e: React.FormEvent) {
+    e.preventDefault()
+    if (!linearKey.trim()) return
+    setSaving(true)
+    try {
+      await integrationsApi.saveLinear(linearKey)
+      const cfg = await integrationsApi.getConfig()
+      setConfig(cfg)
+      setLinearOpen(false)
+      setLinearKey('')
+      toast('Linear integration saved', 'success')
+    } catch (err) { toast((err as Error).message, 'error') }
+    finally { setSaving(false) }
+  }
+
+  const inp: React.CSSProperties = { width: '100%', background: 'var(--bg)', border: '1px solid var(--line-2)', borderRadius: 5, padding: '5px 8px', color: 'var(--fg)', fontSize: 12.5, boxSizing: 'border-box', outline: 'none' }
+
+  if (loading) return <div style={{ fontSize: 12, color: 'var(--fg-4)', padding: '4px 0' }}>Loading…</div>
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+      {/* Jira */}
+      <div style={{ padding: '10px 12px', borderRadius: 6, border: '1px solid var(--line)', background: 'var(--bg)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)' }}>Jira</div>
+            {config?.jira
+              ? <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>{config.jira.email} · {config.jira.baseUrl}</div>
+              : <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>Not configured</div>
+            }
+          </div>
+          {config?.jira && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 3, background: 'rgba(34,197,94,.12)', border: '1px solid rgba(34,197,94,.25)', color: '#22C55E' }}>Connected</span>}
+          <button onClick={() => { setJiraOpen(o => !o); setLinearOpen(false) }} style={{ fontSize: 11.5, padding: '3px 10px', borderRadius: 4, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)', cursor: 'default' }}>
+            {jiraOpen ? 'Cancel' : config?.jira ? 'Update' : 'Configure'}
+          </button>
+        </div>
+        {jiraOpen && (
+          <form onSubmit={saveJira} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+            <input value={jiraForm.baseUrl} onChange={e => setJiraForm(p => ({ ...p, baseUrl: e.target.value }))} placeholder="https://yourorg.atlassian.net" style={inp} />
+            <input value={jiraForm.email} onChange={e => setJiraForm(p => ({ ...p, email: e.target.value }))} placeholder="your@email.com" style={inp} />
+            <input type="password" value={jiraForm.apiToken} onChange={e => setJiraForm(p => ({ ...p, apiToken: e.target.value }))} placeholder="Jira API token" style={inp} />
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button type="submit" disabled={saving || !jiraForm.baseUrl || !jiraForm.email || !jiraForm.apiToken} style={{ fontSize: 12, padding: '4px 12px', borderRadius: 4, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'white', cursor: 'default', opacity: saving ? 0.6 : 1 }}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+
+      {/* Linear */}
+      <div style={{ padding: '10px 12px', borderRadius: 6, border: '1px solid var(--line)', background: 'var(--bg)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)' }}>Linear</div>
+            {config?.linear
+              ? <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>API key saved</div>
+              : <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>Not configured</div>
+            }
+          </div>
+          {config?.linear && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 3, background: 'rgba(34,197,94,.12)', border: '1px solid rgba(34,197,94,.25)', color: '#22C55E' }}>Connected</span>}
+          <button onClick={() => { setLinearOpen(o => !o); setJiraOpen(false) }} style={{ fontSize: 11.5, padding: '3px 10px', borderRadius: 4, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)', cursor: 'default' }}>
+            {linearOpen ? 'Cancel' : config?.linear ? 'Update' : 'Configure'}
+          </button>
+        </div>
+        {linearOpen && (
+          <form onSubmit={saveLinear} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+            <input type="password" value={linearKey} onChange={e => setLinearKey(e.target.value)} placeholder="lin_api_xxxx…" style={inp} />
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button type="submit" disabled={saving || !linearKey.trim()} style={{ fontSize: 12, padding: '4px 12px', borderRadius: 4, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'white', cursor: 'default', opacity: saving ? 0.6 : 1 }}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Claude Integration section ────────────────────────────────────────────
+
+type LinkAction = 'idle' | 'linking' | 'creating'
+
+interface CandidateRowProps {
+  candidate: ScanCandidate
+  projects:  Project[]
+  onLinked:  (candidatePath: string) => void
+}
+
+function CandidateRow({ candidate, projects, onLinked }: CandidateRowProps) {
+  const { toast }          = useToast()
+  const [action, setAction] = useState<LinkAction>('idle')
+  const [ignored, setIgnored] = useState(false)
+
+  if (ignored) return null
+
+  async function linkTo(projectId: string) {
+    setAction('linking')
+    try {
+      await projectsApi.link(projectId, candidate.path)
+      toast(`Linked to project`)
+      onLinked(candidate.path)
+    } catch (err) {
+      toast((err as Error).message, 'error')
+      setAction('idle')
+    }
+  }
+
+  async function createAndLink() {
+    setAction('creating')
+    try {
+      const newProject = await projectsApi.create({
+        name:       candidate.name,
+        short_name: candidate.name.toLowerCase().replace(/\s+/g, '-').slice(0, 20),
+        description: '',
+        color:      '#6366F1',
+        status:     'active',
+        tech_stack: [],
+        type:       'tool',
+        repo_url:   '',
+      })
+      await projectsApi.link(newProject.id, candidate.path)
+      toast(`Created and linked "${candidate.name}"`)
+      onLinked(candidate.path)
+    } catch (err) {
+      toast((err as Error).message, 'error')
+      setAction('idle')
+    }
+  }
+
+  const busy = action !== 'idle'
+  const pct  = candidate.overallPct
+
+  return (
+    <tr style={{ borderBottom: '1px solid var(--line)' }}>
+      {/* Path */}
+      <td style={{ padding: '8px 10px', fontSize: 11.5, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          title={candidate.path}>
+        {candidate.path.split(/[\\/]/).slice(-2).join('/')}
+      </td>
+
+      {/* Detected name */}
+      <td style={{ padding: '8px 10px', fontSize: 12.5, color: 'var(--fg)', fontWeight: 500 }}>
+        {candidate.name}
+      </td>
+
+      {/* Last session */}
+      <td style={{ padding: '8px 10px', fontSize: 12, color: 'var(--fg-4)', whiteSpace: 'nowrap' }}>
+        {candidate.lastSessionDate
+          ? new Date(candidate.lastSessionDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })
+          : '—'}
+      </td>
+
+      {/* Task % */}
+      <td style={{ padding: '8px 10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ width: 48, height: 4, background: 'var(--bg-elev-2)', borderRadius: 2, flexShrink: 0 }}>
+            <div style={{
+              height: '100%', borderRadius: 2,
+              width: `${pct}%`,
+              background: pct === 100 ? '#22C55E' : pct >= 50 ? '#6366F1' : '#F59E0B',
+            }} />
+          </div>
+          <span style={{ fontSize: 11, color: 'var(--fg-4)', fontVariantNumeric: 'tabular-nums' }}>{pct}%</span>
+        </div>
+      </td>
+
+      {/* Suggested match */}
+      <td style={{ padding: '8px 10px', fontSize: 12, color: candidate.matchedProjectName ? '#818CF8' : 'var(--fg-4)' }}>
+        {candidate.matchedProjectName ?? '—'}
+      </td>
+
+      {/* Actions */}
+      <td style={{ padding: '8px 10px' }}>
+        <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
+          {candidate.matchedProjectId && (
+            <button
+              disabled={busy}
+              onClick={() => linkTo(candidate.matchedProjectId!)}
+              style={{ height: 24, padding: '0 9px', borderRadius: 'var(--radius)', border: '1px solid rgba(99,102,241,.4)', background: 'rgba(99,102,241,.12)', color: '#818CF8', fontSize: 11.5, opacity: busy ? 0.5 : 1, cursor: busy ? 'default' : 'pointer', whiteSpace: 'nowrap' }}
+            >
+              {action === 'linking' ? 'Linking…' : `Link to ${candidate.matchedProjectName}`}
+            </button>
+          )}
+
+          {/* Link to any project */}
+          <select
+            disabled={busy}
+            defaultValue=""
+            onChange={e => { if (e.target.value) linkTo(e.target.value) }}
+            style={{ height: 24, padding: '0 6px', borderRadius: 'var(--radius)', border: '1px solid var(--line)', background: 'var(--bg-elev)', color: 'var(--fg-4)', fontSize: 11.5, opacity: busy ? 0.5 : 1 }}
+          >
+            <option value="">Link to…</option>
+            {projects.map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+
+          <button
+            disabled={busy}
+            onClick={createAndLink}
+            style={{ height: 24, padding: '0 9px', borderRadius: 'var(--radius)', border: '1px solid var(--line)', background: 'var(--bg-elev)', color: 'var(--fg-3)', fontSize: 11.5, opacity: busy ? 0.5 : 1, cursor: busy ? 'default' : 'pointer', whiteSpace: 'nowrap' }}
+          >
+            {action === 'creating' ? 'Creating…' : '+ New project'}
+          </button>
+
+          <button
+            disabled={busy}
+            onClick={() => setIgnored(true)}
+            style={{ height: 24, padding: '0 7px', borderRadius: 'var(--radius)', border: '1px solid var(--line)', background: 'none', color: 'var(--fg-4)', fontSize: 11.5, opacity: busy ? 0.5 : 1 }}
+          >
+            Ignore
+          </button>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+function ClaudeIntegrationSection() {
+  const { toast }                         = useToast()
+  const [scanRoot,     setScanRoot]       = useState('')
+  const [savedRoot,    setSavedRoot]      = useState<string | null>(null)
+  const [rootLoading,  setRootLoading]    = useState(true)
+  const [rootSaving,   setRootSaving]     = useState(false)
+  const [scanning,     setScanning]       = useState(false)
+  const [candidates,   setCandidates]     = useState<ScanCandidate[] | null>(null)
+  const [scanError,    setScanError]      = useState<string | null>(null)
+  const [projects,     setProjects]       = useState<Project[]>([])
+  const [linked,       setLinked]         = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    settingsApi.getClaudeSettings()
+      .then(d => { setScanRoot(d.scan_root ?? ''); setSavedRoot(d.scan_root) })
+      .catch(() => {})
+      .finally(() => setRootLoading(false))
+
+    projectsApi.list().then(setProjects).catch(() => {})
+  }, [])
+
+  async function handleSaveRoot(e: React.FormEvent) {
+    e.preventDefault()
+    setRootSaving(true)
+    try {
+      const val = scanRoot.trim() || null
+      await settingsApi.saveClaudeSettings(val)
+      setSavedRoot(val)
+      toast('Scan root saved')
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    } finally {
+      setRootSaving(false)
+    }
+  }
+
+  async function handleScan() {
+    setScanning(true)
+    setScanError(null)
+    setCandidates(null)
+    setLinked(new Set())
+    try {
+      const result = await claudeProjectsApi.scan()
+      setCandidates(result.candidates)
+      if (result.candidates.length === 0) {
+        toast('Scan complete — no Claude projects found')
+      } else {
+        toast(`Found ${result.candidates.length} project${result.candidates.length !== 1 ? 's' : ''}`)
+      }
+    } catch (err) {
+      setScanError((err as Error).message)
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  function handleLinked(path: string) {
+    setLinked(prev => new Set([...prev, path]))
+    // Refresh projects list so actions stay accurate
+    projectsApi.list().then(setProjects).catch(() => {})
+  }
+
+  const inp: React.CSSProperties = {
+    flex: 1, background: 'var(--bg)', border: '1px solid var(--line-2)',
+    borderRadius: 5, padding: '5px 8px', color: 'var(--fg)', fontSize: 12.5,
+    boxSizing: 'border-box', outline: 'none',
+  }
+
+  const visibleCandidates = candidates?.filter(c => !linked.has(c.path)) ?? []
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+      {/* Scan root */}
+      <div>
+        <div style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg)', marginBottom: 6 }}>Scan root</div>
+        <div style={{ fontSize: 12, color: 'var(--fg-4)', marginBottom: 8 }}>
+          Root folder to scan for Claude Code projects. Searches up to 3 levels deep for folders containing <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>CLAUDE.md</code>, <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>TASKS.md</code>, or <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>sessions/</code>.
+        </div>
+        {rootLoading ? (
+          <div style={{ fontSize: 12, color: 'var(--fg-4)' }}>Loading…</div>
+        ) : (
+          <form onSubmit={handleSaveRoot} style={{ display: 'flex', gap: 8 }}>
+            <input
+              value={scanRoot}
+              onChange={e => setScanRoot(e.target.value)}
+              placeholder="e.g. C:\Users\you\Projects"
+              style={inp}
+            />
+            <button
+              type="submit"
+              disabled={rootSaving || scanRoot.trim() === (savedRoot ?? '')}
+              style={{ height: 30, padding: '0 14px', borderRadius: 'var(--radius)', border: '1px solid var(--accent)', background: 'var(--accent)', color: 'white', fontSize: 12.5, opacity: rootSaving ? 0.6 : 1, whiteSpace: 'nowrap', cursor: 'default' }}
+            >
+              {rootSaving ? 'Saving…' : 'Save'}
+            </button>
+          </form>
+        )}
+      </div>
+
+      {/* Scan button */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <button
+          onClick={handleScan}
+          disabled={scanning || !savedRoot}
+          title={!savedRoot ? 'Save a scan root first' : undefined}
+          style={{ height: 30, padding: '0 16px', borderRadius: 'var(--radius)', border: '1px solid rgba(99,102,241,.4)', background: 'rgba(99,102,241,.12)', color: '#818CF8', fontSize: 12.5, opacity: (scanning || !savedRoot) ? 0.5 : 1, cursor: (scanning || !savedRoot) ? 'default' : 'pointer' }}
+        >
+          {scanning ? 'Scanning…' : 'Scan Now'}
+        </button>
+        {savedRoot && (
+          <span style={{ fontSize: 11.5, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>{savedRoot}</span>
+        )}
+      </div>
+
+      {/* Error */}
+      {scanError && (
+        <div style={{ fontSize: 12.5, color: '#F8A8A8', padding: '8px 12px', borderRadius: 6, background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.2)' }}>
+          {scanError}
+        </div>
+      )}
+
+      {/* Results */}
+      {candidates !== null && visibleCandidates.length === 0 && (
+        <div style={{ fontSize: 12.5, color: 'var(--fg-4)', padding: '10px 0' }}>
+          {candidates.length === 0 ? 'No Claude projects found under the scan root.' : 'All discovered projects have been linked.'}
+        </div>
+      )}
+
+      {visibleCandidates.length > 0 && (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--line)' }}>
+                {['Path', 'Detected name', 'Last session', 'Tasks', 'Suggested match', 'Action'].map(h => (
+                  <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {visibleCandidates.map(c => (
+                <CandidateRow
+                  key={c.path}
+                  candidate={c}
+                  projects={projects}
+                  onLinked={handleLinked}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main Settings page ────────────────────────────────────────────────────
 
 export function SettingsPage({ onLogout, currentUser }: { onLogout: () => void; currentUser: AuthUser | null }) {
@@ -411,6 +821,18 @@ export function SettingsPage({ onLogout, currentUser }: { onLogout: () => void; 
                   </div>
                 )}
               </div>
+            </Section>
+
+            {/* Integrations (admin only) */}
+            {isAdmin && (
+              <Section title="Integrations">
+                <IntegrationsSection />
+              </Section>
+            )}
+
+            {/* Claude Integration */}
+            <Section title="Claude Integration">
+              <ClaudeIntegrationSection />
             </Section>
 
             {/* Audit Log (admin only) */}
