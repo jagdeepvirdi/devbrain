@@ -18,6 +18,9 @@ ollama_data/
 .devbrain-pids
 logs/
 
+# TypeScript build cache
+*.tsbuildinfo
+
 # OS
 .DS_Store
 Thumbs.db

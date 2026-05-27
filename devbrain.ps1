@@ -1,4 +1,4 @@
-# devbrain.ps1 — Unified dev/prod start and stop for Windows
+# devbrain.ps1 - Unified dev/prod start and stop for Windows
 #
 # Usage:
 #   .\devbrain.ps1 dev   start              # hot-reload dev environment
@@ -43,7 +43,7 @@ function Start-Ollama {
         $null = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -UseBasicParsing -TimeoutSec 3
         OK "Ollama started"
     } catch {
-        Fail "Ollama failed to start — is it installed?  Run: winget install Ollama.Ollama"
+        Fail "Ollama failed to start - is it installed?  Run: winget install Ollama.Ollama"
     }
 }
 
@@ -52,7 +52,7 @@ function Start-Postgres {
     Step "Starting Postgres via Docker Compose..."
     Set-Location $Root
     docker compose up -d postgres
-    if ($LASTEXITCODE -ne 0) { Fail "Docker Compose failed — is Docker Desktop running?" }
+    if ($LASTEXITCODE -ne 0) { Fail "Docker Compose failed - is Docker Desktop running?" }
 
     Write-Host "    Waiting for Postgres healthcheck" -NoNewline
     $i = 0
@@ -81,7 +81,7 @@ function Run-Migrations {
     Step "Running database migrations..."
     Set-Location "$Root\server"
     node db/migrate-org-v2.mjs
-    if ($LASTEXITCODE -ne 0) { Fail "Migration failed — check DB connection and schema" }
+    if ($LASTEXITCODE -ne 0) { Fail "Migration failed - check DB connection and schema" }
     OK "Migrations up to date"
 }
 
@@ -89,10 +89,10 @@ function Run-Migrations {
 function Assert-ProdEnv {
     Step "Checking environment..."
     $envFile = "$Root\server\.env"
-    if (-not (Test-Path $envFile)) { Fail "server/.env not found — copy .env.example and fill in values" }
+    if (-not (Test-Path $envFile)) { Fail "server/.env not found - copy .env.example and fill in values" }
     $env = Get-Content $envFile -Raw
     if ($env -match "JWT_SECRET\s*=\s*devbrain-dev-secret") {
-        Warn "JWT_SECRET is still the dev default — change it before exposing to a network"
+        Warn "JWT_SECRET is still the dev default - change it before exposing to a network"
         Write-Host "    Generate: node -e `"console.log(require('crypto').randomBytes(32).toString('hex'))`"" -ForegroundColor DarkGray
     }
     if ($env -notmatch "AUTH_PASSWORD\s*=\s*.+") {
@@ -105,7 +105,7 @@ function Assert-ProdEnv {
 function Save-Pids([int[]]$Pids) { $Pids | Set-Content $PidFile }
 
 function Stop-Pids {
-    if (-not (Test-Path $PidFile)) { Warn "No PID file found — nothing to stop"; return }
+    if (-not (Test-Path $PidFile)) { Warn "No PID file found - nothing to stop"; return }
     foreach ($pid in (Get-Content $PidFile | Where-Object { $_ -match '^\d+$' })) {
         $null = taskkill /PID $pid /T /F 2>&1
         if ($LASTEXITCODE -eq 0) { OK "Killed process tree $pid" }
@@ -118,8 +118,8 @@ function Stop-Pids {
 function Build-All {
     if ($SkipBuild) {
         Write-Host "`n    [SKIP] Build skipped (-SkipBuild)" -ForegroundColor Yellow
-        if (-not (Test-Path "$Root\server\dist\index.js"))     { Fail "server/dist/index.js not found — run without -SkipBuild first" }
-        if (-not (Test-Path "$Root\server\public\index.html")) { Fail "server/public/index.html not found — run without -SkipBuild first" }
+        if (-not (Test-Path "$Root\server\dist\index.js"))     { Fail "server/dist/index.js not found - run without -SkipBuild first" }
+        if (-not (Test-Path "$Root\server\public\index.html")) { Fail "server/public/index.html not found - run without -SkipBuild first" }
         OK "Using existing build artifacts"; return
     }
 
@@ -149,7 +149,7 @@ function Start-Dev {
 
     $envFile = "$Root\server\.env"
     if ((Test-Path $envFile) -and ((Get-Content $envFile -Raw) -notmatch "AUTH_PASSWORD\s*=\s*.+")) {
-        Warn "AUTH_PASSWORD not set — running without login gate (dev mode)"
+        Warn "AUTH_PASSWORD not set - running without login gate (dev mode)"
     }
 
     Run-Migrations
@@ -159,7 +159,7 @@ function Start-Dev {
         "Set-Location '$Root\server'; Write-Host '[SERVER]' -ForegroundColor Cyan; npm run dev" `
         -WindowStyle Normal -PassThru
 
-    Step "Starting Vite dev server (:5173)..."
+    Step "Starting Vite dev server (:5174)..."
     $cli = Start-Process powershell -ArgumentList "-NoExit", "-Command",
         "Set-Location '$Root\client'; Write-Host '[CLIENT]' -ForegroundColor Cyan; npm run dev" `
         -WindowStyle Normal -PassThru
@@ -169,9 +169,9 @@ function Start-Dev {
     Write-Host ""
     Write-Host "  DevBrain DEV started" -ForegroundColor Green
     Write-Host "  ─────────────────────────────────────────" -ForegroundColor DarkGray
-    Write-Host "  Frontend  http://localhost:5173" -ForegroundColor White
+    Write-Host "  Frontend  http://localhost:5174" -ForegroundColor White
     Write-Host "  Backend   http://localhost:3001" -ForegroundColor White
-    Write-Host "  Postgres  localhost:5433" -ForegroundColor White
+    Write-Host "  Postgres  localhost:5435" -ForegroundColor White
     Write-Host "  Ollama    http://localhost:11434" -ForegroundColor White
     Write-Host "  Stop:     .\devbrain.ps1 dev stop" -ForegroundColor DarkGray
     Write-Host ""
@@ -208,7 +208,7 @@ function Start-Prod {
     Write-Host "  DevBrain PROD started" -ForegroundColor Green
     Write-Host "  ─────────────────────────────────────────" -ForegroundColor DarkGray
     Write-Host "  App       http://localhost:3001  (API + static client)" -ForegroundColor White
-    Write-Host "  Postgres  localhost:5433" -ForegroundColor White
+    Write-Host "  Postgres  localhost:5435" -ForegroundColor White
     Write-Host "  Ollama    http://localhost:11434" -ForegroundColor White
     Write-Host "  Stop:     .\devbrain.ps1 prod stop" -ForegroundColor DarkGray
     Write-Host "  Tip:      .\devbrain.ps1 prod start -SkipBuild  (restart without rebuilding)" -ForegroundColor DarkGray

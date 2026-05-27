@@ -23,10 +23,10 @@ const RUNBOOKS = [
     tags: ['setup', 'devbrain'],
     steps: [
       { id: '1', order: 0, instruction: 'Start Docker Desktop and verify it is running', command: 'docker info', note: 'Must be running before postgres can start' },
-      { id: '2', order: 1, instruction: 'Start the pgvector postgres container', command: 'docker compose up postgres -d', note: 'Mapped to port 5433 (not 5432 — local PG14 owns that)' },
+      { id: '2', order: 1, instruction: 'Start the pgvector postgres container', command: 'docker compose up postgres -d', note: 'Mapped to port 5435 (5432/5433/5434 used by FlowForge)' },
       { id: '3', order: 2, instruction: 'Verify the database is reachable', command: 'docker exec devbrain-postgres-1 pg_isready -U devbrain' },
       { id: '4', order: 3, instruction: 'Start the backend server (tsx watch)', command: 'cd server && npm run dev', note: 'Server starts on port 3001. Watch for "server: http://localhost:3001 ✓"' },
-      { id: '5', order: 4, instruction: 'Start the Vite frontend dev server', command: 'cd client && npm run dev', note: 'Starts on port 5173 (or next available). Open the URL shown.' },
+      { id: '5', order: 4, instruction: 'Start the Vite frontend dev server', command: 'cd client && npm run dev', note: 'Starts on port 5174 (or next available). Open the URL shown.' },
       { id: '6', order: 5, instruction: 'Confirm health endpoint returns OK', command: 'curl http://localhost:3001/api/health', note: 'Both db and ollama should be "ok". Ollama can be "unreachable" if not needed.' },
     ],
   },

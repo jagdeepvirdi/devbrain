@@ -4,24 +4,14 @@ export type Paged<T> = { items: T[]; total: number }
 
 const BASE = '/api'
 
-const TOKEN_KEY = 'devbrain_token'
-
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
-}
-
-function setToken(t: string) { localStorage.setItem(TOKEN_KEY, t) }
-function clearToken()        { localStorage.removeItem(TOKEN_KEY) }
-
 // In-flight cache: deduplicate identical concurrent GET requests
 const inflight = new Map<string, Promise<unknown>>()
 
 async function _fetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getToken()
   const res = await fetch(`${BASE}${path}`, {
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...init?.headers,
     },
     ...init,
@@ -30,7 +20,12 @@ async function _fetch<T>(path: string, init?: RequestInit): Promise<T> {
     window.dispatchEvent(new CustomEvent('devbrain:unauthorized'))
     throw new Error('Unauthorized')
   }
-  const json = await res.json() as { data?: T; error?: string }
+  let json: { data?: T; error?: string }
+  try {
+    json = await res.json() as { data?: T; error?: string }
+  } catch {
+    throw new Error('Unexpected server response')
+  }
   if (!res.ok) throw new Error(json.error ?? `Request failed: ${res.status}`)
   return json.data as T
 }
@@ -62,12 +57,12 @@ export const authApi = {
   login: async (username: string, password: string): Promise<{ devMode: boolean; user: AuthUser }> => {
     const res = await fetch(`${BASE}/auth/login`, {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     })
-    const json = await res.json() as { data?: { token: string; devMode: boolean; user: AuthUser }; error?: string }
+    const json = await res.json() as { data?: { devMode: boolean; user: AuthUser }; error?: string }
     if (!res.ok) throw new Error(json.error ?? 'Login failed')
-    setToken(json.data!.token)
     setCachedUser(json.data!.user)
     return { devMode: json.data!.devMode, user: json.data!.user }
   },
@@ -75,21 +70,18 @@ export const authApi = {
   register: async (username: string, password: string, role?: string): Promise<{ user: AuthUser }> => {
     const res = await fetch(`${BASE}/auth/register`, {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password, role }),
     })
-    const json = await res.json() as { data?: { token: string; user: AuthUser }; error?: string }
+    const json = await res.json() as { data?: { user: AuthUser }; error?: string }
     if (!res.ok) throw new Error(json.error ?? 'Registration failed')
-    setToken(json.data!.token)
     setCachedUser(json.data!.user)
     return { user: json.data!.user }
   },
 
   me: async (): Promise<{ authed: boolean; devMode: boolean; user?: AuthUser }> => {
-    const token = getToken()
-    const res = await fetch(`${BASE}/auth/me`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
+    const res = await fetch(`${BASE}/auth/me`, { credentials: 'include' })
     if (!res.ok) return { authed: false, devMode: false }
     const json = await res.json() as { data?: { authed: boolean; devMode: boolean; user?: AuthUser } }
     if (json.data?.user) setCachedUser(json.data.user)
@@ -99,7 +91,10 @@ export const authApi = {
   changePassword: (currentPassword: string, newPassword: string) =>
     request<{ ok: boolean }>('/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
 
-  logout: () => { clearToken(); clearCachedUser() },
+  logout: () => {
+    fetch(`${BASE}/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {})
+    clearCachedUser()
+  },
 }
 
 // ── Users ─────────────────────────────────────────────────────────────────
@@ -288,14 +283,13 @@ export const claudeProjectsApi = {
     id:       string,
     onUpdate: (tree: TaskTreeData) => void,
   ): (() => void) => {
-    const token = getToken()
     const ctrl  = new AbortController()
 
     ;(async () => {
       try {
         const res = await fetch(`${BASE}/claude-projects/${id}/tasks/watch`, {
-          headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-          signal:  ctrl.signal,
+          credentials: 'include',
+          signal:      ctrl.signal,
         })
         if (!res.ok || !res.body) return
 
@@ -362,7 +356,7 @@ export const documentsApi = {
     fd.append('file', file)
     if (projectId) fd.append('projectId', projectId)
     fd.append('tags', JSON.stringify(tags))
-    const res = await fetch('/api/documents', { method: 'POST', body: fd })
+    const res = await fetch('/api/documents', { method: 'POST', credentials: 'include', body: fd })
     const json = await res.json() as { data?: DocMeta; error?: string; existingId?: string }
     if (!res.ok) {
       const err = new Error(json.error ?? `Upload failed: ${res.status}`) as Error & { existingId?: string }
@@ -386,6 +380,9 @@ export const documentsApi = {
 
   reembed: (id: string) =>
     request<{ id: string; embedding_status: EmbeddingStatus }>(`/documents/${id}/reembed`, { method: 'POST' }),
+
+  suggestTags: (title: string, hint?: string) =>
+    request<{ tags: string[] }>('/documents/suggest-tags', { method: 'POST', body: JSON.stringify({ title, hint }) }),
 }
 
 // ── Issues ────────────────────────────────────────────────────────────────
@@ -418,6 +415,7 @@ export type Issue = {
   resolution:          string
   pr_url:              string | null
   tags:                string[]
+  summary:             string | null
   created_at:          string
   resolved_at:         string | null
   project_name:        string | null
@@ -483,6 +481,7 @@ export const issuesApi = {
   linkCommit:   (id: string, sha: string)             => request<string[]>(`/issues/${id}/commits`, { method: 'POST', body: JSON.stringify({ sha }) }),
   unlinkCommit: (id: string, sha: string)             => request<string[]>(`/issues/${id}/commits/${sha}`, { method: 'DELETE' }),
   summarize:       (id: string) => request<{ summary: string }>(`/issues/${id}/summarize`, { method: 'POST' }),
+  suggestTags:     (title: string, description?: string) => request<{ tags: string[] }>('/issues/suggest-tags', { method: 'POST', body: JSON.stringify({ title, description }) }),
   suggestSteps:    (id: string) => request<{ steps: string[] }>(`/issues/${id}/suggest-steps`, { method: 'POST' }),
   relatedDocs:     (id: string) => request<RelatedDoc[]>(`/issues/${id}/related-docs`),
   relatedCommands: (id: string) => request<RelatedCommand[]>(`/issues/${id}/related-commands`),
@@ -586,6 +585,7 @@ export type Command = {
   namespace:     'personal' | 'team'
   created_by:    string | null
   last_used:     string | null
+  explanation:   string | null
   created_at:    string
   project_name:  string | null
   project_color: string | null
@@ -614,7 +614,7 @@ export const commandsApi = {
     request<Command>(`/commands/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   remove:  (id: string)                       => request<{ deleted: { id: string; title: string } }>(`/commands/${id}`, { method: 'DELETE' }),
   use:     (id: string)                       => request<Command>(`/commands/${id}/use`, { method: 'POST' }),
-  explain: (id: string)                       => request<{ explanation: string }>(`/commands/${id}/explain`, { method: 'POST' }),
+  explain: (id: string) => request<{ explanation: string }>(`/commands/${id}/explain`, { method: 'POST' }),
 }
 
 // ── Releases ──────────────────────────────────────────────────────────────
@@ -661,6 +661,8 @@ export const releasesApi = {
   compare:    (id1: string, id2: string)            => request<{ summary: string }>('/releases/compare',  { method: 'POST', body: JSON.stringify({ id1, id2 }) }),
   importGit:  (body: { commits: string; project_id: string; version: string; date?: string; type?: string }) =>
     request<Release>('/releases/import-git', { method: 'POST', body: JSON.stringify(body) }),
+  draft: (body: { projectId: string; from: string; to: string; issueIds?: string[] }) =>
+    request<ReleaseInput>('/releases/draft', { method: 'POST', body: JSON.stringify(body) }),
 }
 
 // ── Search ────────────────────────────────────────────────────────────────
@@ -683,13 +685,27 @@ export type SearchResults = {
   runbooks: SearchResult[]
 }
 
+export type SearchSuggestion = {
+  type:          'issue' | 'doc'
+  id:            string
+  title:         string
+  project_name:  string | null
+  project_color: string | null
+}
+
 export const searchApi = {
   search: (q: string, projectId?: string | null, limit?: number) => {
     const qs = new URLSearchParams({ q })
     if (projectId) qs.set('projectId', projectId)
     if (limit != null) qs.set('limit', String(limit))
     return request<SearchResults>(`/search?${qs}`)
-  }
+  },
+  suggestions: (projectId?: string | null) => {
+    const qs = new URLSearchParams()
+    if (projectId) qs.set('projectId', projectId)
+    const q = qs.toString()
+    return request<SearchSuggestion[]>(`/search/suggestions${q ? `?${q}` : ''}`)
+  },
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────
@@ -766,11 +782,36 @@ export type DashboardData = {
   activity:         DashboardActivity[]
 }
 
+export type DashboardStatsV2 = {
+  openByProject:    { id: string; name: string; color: string; open_count: number }[]
+  avgResolution:    { id: string; name: string; color: string; avg_days: number }[]
+  embeddingHealth:  { done: number; pending: number; failed: number; failedIds: string[] }
+  commandsThisWeek: number
+  staleIssues:      { id: string; title: string; priority: string; created_at: string; project_name: string | null; project_color: string | null }[]
+}
+
+export type DashboardActivityDay = {
+  date:             string
+  issues_opened:    number
+  issues_resolved:  number
+  docs_added:       number
+  commands_added:   number
+  total:            number
+}
+
 export const dashboardApi = {
   get: (projectId?: string | null) => {
     const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
     return request<DashboardData>(`/dashboard${qs}`)
-  }
+  },
+  statsV2: (projectId?: string | null) => {
+    const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
+    return request<DashboardStatsV2>(`/dashboard/stats${qs}`)
+  },
+  activity: (projectId?: string | null) => {
+    const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
+    return request<DashboardActivityDay[]>(`/dashboard/activity${qs}`)
+  },
 }
 
 // ── Chat / RAG ────────────────────────────────────────────────────────────
@@ -794,14 +835,11 @@ export async function chatStream(
   onCitations?: (citations: ChatCitation[]) => void,
   onChunk?:     (text: string) => void,
 ): Promise<void> {
-  const token = getToken()
   const res = await fetch('/api/chat', {
-    method:  'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body:    JSON.stringify({
+    method:      'POST',
+    credentials: 'include',
+    headers:     { 'Content-Type': 'application/json' },
+    body:        JSON.stringify({
       question,
       projectId:  scope === 'all' ? null : (projectId ?? null),
       documentId: scope === 'document' ? (documentId ?? null) : null,
@@ -927,6 +965,12 @@ export type ImportSummary = {
   summary: Record<string, { created: number; skipped: number }>
 }
 
+export type BackupConfig = {
+  path:           string | null
+  schedule:       'daily' | 'weekly' | 'off'
+  last_backup_at: string | null
+}
+
 export const settingsApi = {
   get: () => request<SettingsData>('/settings'),
 
@@ -943,10 +987,7 @@ export const settingsApi = {
     request<ImportSummary>(`/settings/import${dryRun ? '?dry_run=true' : ''}`, { method: 'POST', body: JSON.stringify(body) }),
 
   downloadBackup: async () => {
-    const token = getToken()
-    const res = await fetch(`${BASE}/settings/backup`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
+    const res = await fetch(`${BASE}/settings/backup`, { credentials: 'include' })
     if (!res.ok) throw new Error('Backup failed')
     const blob = await res.blob()
     const url  = URL.createObjectURL(blob)
@@ -955,5 +996,57 @@ export const settingsApi = {
     a.download = `devbrain-backup-${new Date().toISOString().slice(0, 10)}.json`
     a.click()
     URL.revokeObjectURL(url)
+  },
+
+  // ── Phase 21 export ──────────────────────────────────────────────────────
+
+  exportProject: async (projectId: string, projectSlug: string) => {
+    const res = await fetch(`${BASE}/export/project/${projectId}`, { credentials: 'include' })
+    if (!res.ok) throw new Error('Export failed')
+    const blob = await res.blob()
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `devbrain-${projectSlug}-${new Date().toISOString().slice(0, 10)}.zip`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
+
+  exportAll: async () => {
+    const res = await fetch(`${BASE}/export/all`, { credentials: 'include' })
+    if (!res.ok) throw new Error('Export failed')
+    const blob = await res.blob()
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `devbrain-export-${new Date().toISOString().slice(0, 10)}.zip`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
+
+  // ── Phase 21 backup config ───────────────────────────────────────────────
+
+  getBackupConfig: () =>
+    request<BackupConfig>('/settings/backup-config'),
+
+  saveBackupConfig: (cfg: Pick<BackupConfig, 'path' | 'schedule'>) =>
+    request<BackupConfig>('/settings/backup-config', { method: 'PUT', body: JSON.stringify(cfg) }),
+
+  backupNow: () =>
+    request<{ ok: boolean; path: string }>('/settings/backup-now', { method: 'POST' }),
+
+  // ── Phase 21 zip import ──────────────────────────────────────────────────
+
+  zipImport: async (file: File, dryRun = false): Promise<ImportSummary> => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await fetch(`${BASE}/settings/zip-import${dryRun ? '?dry_run=true' : ''}`, {
+      method: 'POST',
+      credentials: 'include',
+      body: fd,
+    })
+    const json = await res.json() as { data?: ImportSummary; error?: string }
+    if (!res.ok) throw new Error(json.error ?? `Import failed: ${res.status}`)
+    return json.data!
   },
 }

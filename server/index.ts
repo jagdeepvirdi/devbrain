@@ -4,6 +4,7 @@ import { env } from './lib/env.js'
 import express      from 'express'
 import cors         from 'cors'
 import cookieParser from 'cookie-parser'
+import rateLimit    from 'express-rate-limit'
 import path         from 'path'
 import { fileURLToPath } from 'url'
 import swaggerUi from 'swagger-ui-express'
@@ -13,6 +14,7 @@ import { pool, dbReady } from './db/pool.js'
 import { runSeed } from './db/seed.js'
 import { ollamaReady } from './services/ai.js'
 import { initTasksWatcher } from './services/tasks-watcher.js'
+import { startBackupScheduler } from './services/backup.js'
 
 const app = express()
 
@@ -68,6 +70,23 @@ app.use('/api/auth', authRouter)
 import { requireAuth } from './middleware/auth.js'
 app.use('/api', requireAuth)
 
+// ── Rate limiting for AI / mutation-heavy endpoints ───────────────────────
+
+const mutationLimiter = rateLimit({
+  windowMs:        60 * 1000,  // 1 minute
+  max:             60,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  handler: (_req, res) => {
+    res.status(429).json({ error: 'Too many requests — slow down' })
+  },
+})
+
+app.post('/api/documents',                mutationLimiter)
+app.post('/api/chat',                     mutationLimiter)
+app.post('/api/issues/:id/summarize',     mutationLimiter)
+app.post('/api/commands/:id/explain',     mutationLimiter)
+
 // ── Routes ────────────────────────────────────────────────────────────────
 
 import projectsRouter  from './routes/projects.js'
@@ -105,6 +124,8 @@ import integrationsRouter from './routes/integrations.js'
 app.use('/api/integrations',  integrationsRouter)
 import claudeProjectsRouter from './routes/claude-projects.js'
 app.use('/api/claude-projects', claudeProjectsRouter)
+import exportRouter from './routes/export.js'
+app.use('/api/export', exportRouter)
 
 // ── Static client (production) ────────────────────────────────────────────
 
@@ -117,6 +138,17 @@ if (env.NODE_ENV === 'production') {
     res.sendFile(path.join(publicDir, 'index.html'))
   })
 }
+
+// ── Central error handler ─────────────────────────────────────────────────
+
+import type { Request, Response, NextFunction } from 'express'
+app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  const msg = err instanceof Error ? err.message : String(err)
+  console.error('[unhandled error]', err)
+  res.status(500).json({
+    error: env.NODE_ENV === 'production' ? 'Internal server error' : msg,
+  })
+})
 
 // ── Startup ───────────────────────────────────────────────────────────────
 
@@ -149,6 +181,9 @@ async function start() {
 
   // Start TASKS.md watchers for linked projects
   await initTasksWatcher()
+
+  // Start scheduled backup (non-fatal)
+  startBackupScheduler()
 
   app.listen(env.PORT, () => {
     console.log(`  server: http://localhost:${env.PORT} ✓`)

@@ -28,13 +28,34 @@ function fmtDate(iso: string) {
 // ── Upload drop zone ──────────────────────────────────────────────────────
 
 function DropZone({ projectId, onDone }: { projectId: string | undefined; onDone: () => void }) {
-  const [dragging,  setDragging]  = useState(false)
-  const [uploading, setUploading] = useState<string | null>(null)
-  const [urlInput,  setUrlInput]  = useState('')
-  const [error,     setError]     = useState<string | null>(null)
-  const [tagInput,  setTagInput]  = useState('')
-  const [tags,      setTags]      = useState<string[]>([])
+  const [dragging,       setDragging]       = useState(false)
+  const [uploading,      setUploading]      = useState<string | null>(null)
+  const [urlInput,       setUrlInput]       = useState('')
+  const [error,          setError]          = useState<string | null>(null)
+  const [tagInput,       setTagInput]       = useState('')
+  const [tags,           setTags]           = useState<string[]>([])
+  const [suggestedTags,  setSuggestedTags]  = useState<string[]>([])
+  const [suggesting,     setSuggesting]     = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  async function handleSuggestTags() {
+    const hint = urlInput.trim() || tagInput.trim()
+    if (!hint) return
+    setSuggesting(true)
+    try {
+      const { tags: suggested } = await documentsApi.suggestTags(hint)
+      setSuggestedTags(suggested.filter(t => !tags.includes(t)))
+    } catch {
+      // silently fail — AI may not be running
+    } finally {
+      setSuggesting(false)
+    }
+  }
+
+  function acceptSuggested(tag: string) {
+    setTags(prev => prev.includes(tag) ? prev : [...prev, tag])
+    setSuggestedTags(prev => prev.filter(t => t !== tag))
+  }
 
   function addTag() {
     const t = tagInput.trim().replace(/,/g, '')
@@ -151,7 +172,30 @@ function DropZone({ projectId, onDone }: { projectId: string | undefined; onDone
               Add
             </button>
           )}
+          <button
+            onClick={handleSuggestTags}
+            disabled={suggesting || (!urlInput.trim() && !tagInput.trim())}
+            title="Suggest tags with AI (paste a URL or type a hint first)"
+            style={{ height: 28, padding: '0 10px', borderRadius: 'var(--radius)', background: 'var(--accent-dim)', border: '1px solid var(--accent-line)', color: 'var(--accent-2)', fontSize: '11px', cursor: 'default', opacity: (suggesting || (!urlInput.trim() && !tagInput.trim())) ? .5 : 1, whiteSpace: 'nowrap' }}
+          >
+            {suggesting ? '…' : '✦ Suggest'}
+          </button>
         </div>
+        {suggestedTags.length > 0 && (
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
+            <span style={{ fontSize: '11px', color: 'var(--fg-3)' }}>Suggested:</span>
+            {suggestedTags.map(t => (
+              <button
+                key={t}
+                onClick={() => acceptSuggested(t)}
+                style={{ fontSize: '11px', padding: '1px 8px', borderRadius: 10, background: 'rgba(99,102,241,.12)', border: '1px dashed var(--accent-line)', color: 'var(--accent-2)', cursor: 'default', display: 'flex', alignItems: 'center', gap: 4 }}
+              >
+                + {t}
+              </button>
+            ))}
+            <button onClick={() => setSuggestedTags([])} style={{ fontSize: '10px', color: 'var(--fg-3)', background: 'none', border: 'none', cursor: 'default', padding: '0 2px' }}>✕</button>
+          </div>
+        )}
       </div>
 
       {error && (

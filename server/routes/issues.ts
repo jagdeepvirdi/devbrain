@@ -60,7 +60,7 @@ const NoteBody = z.object({
 const ISSUE_COLS = `
   i.id, i.project_id, i.title, i.description, i.status, i.priority,
   i.linked_docs, i.linked_commands, i.linked_commits, i.pr_url,
-  i.resolution, i.tags, i.embedding_status,
+  i.resolution, i.tags, i.embedding_status, i.summary,
   i.created_at, i.updated_at, i.resolved_at,
   p.name  AS project_name,
   p.color AS project_color,
@@ -557,6 +557,7 @@ Please provide a concise summary of:
 
     const summary = await aiChat(prompt, 'You are a technical assistant helping summarize development issues. Be concise and clear. Format in Markdown.')
 
+    await pool.query('UPDATE issues SET summary = $2 WHERE id = $1', [req.params.id, summary])
     res.json({ data: { summary } })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
@@ -576,6 +577,29 @@ router.post('/:id/reembed', async (req, res) => {
     embedIssueAsync(id, rows[0].title, rows[0].description)
 
     res.json({ data: { id, embedding_status: 'processing' } })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── POST /api/issues/suggest-tags ────────────────────────────────────────────
+// Suggests up to 5 tags from issue title + description using AI.
+// Must come before /:id param routes — but all /:id routes are defined above,
+// so appending here is safe (Express matches routes in registration order).
+
+router.post('/suggest-tags', async (req, res) => {
+  const { title, description } = req.body as { title?: string; description?: string }
+  const text = [title, description].filter(Boolean).join(' ').trim()
+  if (!text) return res.status(400).json({ error: 'title or description is required' })
+
+  try {
+    const raw = await aiChat(
+      `Suggest up to 5 short, lowercase tags for a bug/issue with this title and description:\n"${text.slice(0, 500)}"\n\nReturn ONLY a JSON array of strings, e.g. ["auth","crash","ios"]. No explanation.`,
+      'You are a tagging assistant. Return only a valid JSON array of short lowercase tags.'
+    )
+    const match = raw.match(/\[[\s\S]*\]/)
+    const tags: string[] = match ? (JSON.parse(match[0]) as string[]).slice(0, 5) : []
+    res.json({ data: { tags } })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
   }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { settingsApi, authApi, projectsApi, usersApi, auditApi, integrationsApi, claudeProjectsApi, type SettingsData, type ImportSummary, type User, type AuditEvent, type AuthUser, type IntegrationsConfig, type ScanCandidate, type Project } from '../lib/api'
+import { settingsApi, authApi, projectsApi, usersApi, auditApi, integrationsApi, claudeProjectsApi, type SettingsData, type ImportSummary, type BackupConfig, type User, type AuditEvent, type AuthUser, type IntegrationsConfig, type ScanCandidate, type Project } from '../lib/api'
 import { useToast } from '../components/Toast'
 
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
@@ -623,6 +623,221 @@ function ClaudeIntegrationSection() {
   )
 }
 
+// ── Export section ────────────────────────────────────────────────────────
+
+function ExportSection({ projects }: { projects: Project[] }) {
+  const { toast } = useToast()
+  const [exportingId,  setExportingId]  = useState<string | null>(null)
+  const [exportingAll, setExportingAll] = useState(false)
+  const [selectedId,   setSelectedId]   = useState<string>('')
+
+  const inp: React.CSSProperties = { background: 'var(--bg)', border: '1px solid var(--line-2)', borderRadius: 5, padding: '5px 8px', color: 'var(--fg)', fontSize: 12.5, outline: 'none' }
+
+  async function handleExportProject() {
+    if (!selectedId) return
+    setExportingId(selectedId)
+    try {
+      const p = projects.find(x => x.id === selectedId)!
+      await settingsApi.exportProject(selectedId, p.short_name)
+      toast(`Exported ${p.name}`)
+    } catch { toast('Export failed', 'error') }
+    finally { setExportingId(null) }
+  }
+
+  async function handleExportAll() {
+    setExportingAll(true)
+    try { await settingsApi.exportAll(); toast('Full export downloaded') }
+    catch { toast('Export failed', 'error') }
+    finally { setExportingAll(false) }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 180 }}>
+          <div style={{ fontSize: 12, color: 'var(--fg-3)', marginBottom: 4 }}>Project</div>
+          <select value={selectedId} onChange={e => setSelectedId(e.target.value)} style={{ ...inp, width: '100%' }}>
+            <option value="">— select project —</option>
+            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+        <button
+          onClick={handleExportProject}
+          disabled={!selectedId || !!exportingId}
+          style={{ height: 32, padding: '0 14px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-2)', fontSize: 12.5, opacity: (!selectedId || !!exportingId) ? 0.5 : 1, cursor: 'default', flexShrink: 0 }}
+        >
+          {exportingId ? 'Exporting…' : 'Export project'}
+        </button>
+      </div>
+      <div style={{ height: 1, background: 'var(--line)' }} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ fontSize: 13, color: 'var(--fg)', fontWeight: 500 }}>Export all projects</div>
+          <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>Downloads a zip with markdown files for every project</div>
+        </div>
+        <button
+          onClick={handleExportAll}
+          disabled={exportingAll}
+          style={{ height: 28, padding: '0 14px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-2)', fontSize: 12.5, flexShrink: 0, marginLeft: 16, opacity: exportingAll ? 0.6 : 1, cursor: 'default' }}
+        >
+          {exportingAll ? 'Exporting…' : 'Export all'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── Scheduled Backup section ──────────────────────────────────────────────
+
+function ScheduledBackupSection() {
+  const { toast } = useToast()
+  const [cfg,     setCfg]     = useState<BackupConfig | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving,  setSaving]  = useState(false)
+  const [running, setRunning] = useState(false)
+  const [path,    setPath]    = useState('')
+  const [schedule, setSchedule] = useState<BackupConfig['schedule']>('off')
+
+  const inp: React.CSSProperties = { background: 'var(--bg)', border: '1px solid var(--line-2)', borderRadius: 5, padding: '6px 8px', color: 'var(--fg)', fontSize: 12.5, outline: 'none' }
+
+  useEffect(() => {
+    settingsApi.getBackupConfig()
+      .then(c => { setCfg(c); setPath(c.path ?? ''); setSchedule(c.schedule) })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault()
+    setSaving(true)
+    try {
+      const updated = await settingsApi.saveBackupConfig({ path: path || null, schedule })
+      setCfg(updated)
+      toast('Backup settings saved')
+    } catch (err) { toast((err as Error).message, 'error') }
+    finally { setSaving(false) }
+  }
+
+  async function handleBackupNow() {
+    if (!path) return
+    // save current form first so backup-now uses latest path
+    if (path !== cfg?.path || schedule !== cfg?.schedule) {
+      try { const updated = await settingsApi.saveBackupConfig({ path: path || null, schedule }); setCfg(updated) } catch { /* ignore */ }
+    }
+    setRunning(true)
+    try { await settingsApi.backupNow(); toast('Backup written successfully') }
+    catch (err) { toast((err as Error).message, 'error') }
+    finally { setRunning(false) }
+  }
+
+  if (loading) return <div style={{ fontSize: 12, color: 'var(--fg-4)', padding: '4px 0' }}>Loading…</div>
+
+  return (
+    <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 4 }}>
+      <div>
+        <div style={{ fontSize: 12, color: 'var(--fg-3)', marginBottom: 4 }}>Backup path</div>
+        <input
+          value={path}
+          onChange={e => setPath(e.target.value)}
+          placeholder="e.g. C:\Users\you\Backups"
+          style={{ ...inp, width: '100%', boxSizing: 'border-box' }}
+        />
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 12, color: 'var(--fg-3)', marginBottom: 4 }}>Schedule</div>
+          <select value={schedule} onChange={e => setSchedule(e.target.value as BackupConfig['schedule'])} style={{ ...inp, width: '100%' }}>
+            <option value="off">Off</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+          </select>
+        </div>
+        <button
+          type="submit"
+          disabled={saving}
+          style={{ height: 32, padding: '0 14px', borderRadius: 'var(--radius)', border: '1px solid var(--accent)', background: 'var(--accent)', color: 'white', fontSize: 12.5, opacity: saving ? 0.6 : 1, cursor: 'default', flexShrink: 0 }}
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        <button
+          type="button"
+          onClick={handleBackupNow}
+          disabled={running || !path}
+          style={{ height: 32, padding: '0 14px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-2)', fontSize: 12.5, opacity: (running || !path) ? 0.5 : 1, cursor: 'default', flexShrink: 0 }}
+        >
+          {running ? 'Backing up…' : 'Backup now'}
+        </button>
+      </div>
+      {cfg?.last_backup_at && (
+        <div style={{ fontSize: 12, color: 'var(--fg-4)' }}>
+          Last backup: <span style={{ color: 'var(--fg-2)', fontFamily: 'var(--font-mono)' }}>{new Date(cfg.last_backup_at).toLocaleString()}</span>
+        </div>
+      )}
+    </form>
+  )
+}
+
+// ── Zip Import section ────────────────────────────────────────────────────
+
+function ZipImportSection() {
+  const { toast } = useToast()
+  const zipRef = useRef<HTMLInputElement>(null)
+  const [zipFile,  setZipFile]  = useState<File | null>(null)
+  const [loading,  setLoading]  = useState(false)
+  const [result,   setResult]   = useState<ImportSummary | null>(null)
+  const [error,    setError]    = useState('')
+
+  async function handleImport(dryRun: boolean) {
+    if (!zipFile) return
+    setLoading(true); setError(''); setResult(null)
+    try {
+      const r = await settingsApi.zipImport(zipFile, dryRun)
+      setResult(r)
+      if (!dryRun) {
+        const total = Object.values(r.summary).reduce((s, t) => s + t.created, 0)
+        toast(`Zip import complete — ${total} records created`)
+      }
+    } catch (e) { setError((e as Error).message) }
+    finally { setLoading(false) }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 4 }}>
+      <div style={{ fontSize: 12, color: 'var(--fg-4)' }}>
+        Import from a DevBrain zip export — restores documents, issues, and commands; skips records that already exist.
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <input ref={zipRef} type="file" accept=".zip" style={{ display: 'none' }} onChange={e => { setZipFile(e.target.files?.[0] ?? null); setResult(null); setError(''); e.target.value = '' }} />
+        <button onClick={() => zipRef.current?.click()} style={{ height: 28, padding: '0 12px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-2)', fontSize: 12.5, cursor: 'default' }}>
+          {zipFile ? zipFile.name : 'Choose zip file'}
+        </button>
+        {zipFile && (
+          <>
+            <button onClick={() => handleImport(true)} disabled={loading} style={{ height: 28, padding: '0 12px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-2)', fontSize: 12.5, opacity: loading ? 0.6 : 1, cursor: 'default' }}>Dry run</button>
+            <button onClick={() => handleImport(false)} disabled={loading} style={{ height: 28, padding: '0 12px', borderRadius: 'var(--radius)', border: '1px solid var(--accent)', background: 'var(--accent)', color: 'white', fontSize: 12.5, opacity: loading ? 0.6 : 1, cursor: 'default' }}>Import</button>
+          </>
+        )}
+      </div>
+      {error && <div style={{ fontSize: 12, color: '#EF4444', padding: '6px 10px', borderRadius: 5, background: 'rgba(239,68,68,.06)', border: '1px solid rgba(239,68,68,.2)' }}>{error}</div>}
+      {result && (
+        <div style={{ borderRadius: 7, border: '1px solid var(--line)', background: 'var(--bg)', padding: '10px 12px' }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>{result.dry_run ? 'Dry run preview' : 'Import result'}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: '4px 12px' }}>
+            <span style={{ fontSize: 11, color: 'var(--fg-4)' }} /><span style={{ fontSize: 11, color: '#22C55E', fontWeight: 600 }}>to create</span><span style={{ fontSize: 11, color: 'var(--fg-4)', fontWeight: 600 }}>skip</span>
+            {Object.entries(result.summary).map(([table, tally]) => (
+              <React.Fragment key={table}>
+                <span style={{ fontSize: 12, color: 'var(--fg-2)', fontFamily: 'var(--font-mono)' }}>{table}</span>
+                <span style={{ fontSize: 12, color: tally.created > 0 ? '#22C55E' : 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>{tally.created}</span>
+                <span style={{ fontSize: 12, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>{tally.skipped}</span>
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main Settings page ────────────────────────────────────────────────────
 
 export function SettingsPage({ onLogout, currentUser }: { onLogout: () => void; currentUser: AuthUser | null }) {
@@ -638,12 +853,14 @@ export function SettingsPage({ onLogout, currentUser }: { onLogout: () => void; 
   const [oldPwd,        setOldPwd]        = useState('')
   const [newPwd,        setNewPwd]        = useState('')
   const [pwdLoading,    setPwdLoading]    = useState(false)
+  const [projects,      setProjects]      = useState<Project[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
 
   const isAdmin = currentUser?.role === 'admin'
 
   useEffect(() => {
     settingsApi.get().then(setSettings).catch(() => {}).finally(() => setLoading(false))
+    projectsApi.list().then(setProjects).catch(() => {})
   }, [])
 
   async function handleBackup() {
@@ -821,6 +1038,21 @@ export function SettingsPage({ onLogout, currentUser }: { onLogout: () => void; 
                   </div>
                 )}
               </div>
+            </Section>
+
+            {/* Export (zip) */}
+            <Section title="Export">
+              <ExportSection projects={projects} />
+            </Section>
+
+            {/* Scheduled Backup */}
+            <Section title="Scheduled Backup">
+              <ScheduledBackupSection />
+            </Section>
+
+            {/* Zip Import */}
+            <Section title="Import from zip">
+              <ZipImportSection />
             </Section>
 
             {/* Integrations (admin only) */}

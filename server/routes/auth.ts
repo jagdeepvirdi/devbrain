@@ -8,6 +8,7 @@ import { env }         from '../lib/env.js'
 import { ldapAuth }    from '../services/ldap.js'
 import { requireAuth } from '../middleware/auth.js'
 import { logAudit }    from '../services/audit.js'
+import { serverError } from '../lib/errors.js'
 
 const router = Router()
 
@@ -184,13 +185,14 @@ router.post('/register', async (req, res) => {
     )
     const u     = rows[0]
     const token = signToken(u.id, u.username, u.role)
+    if (firstRun) res.cookie('devbrain_token', token, COOKIE_OPTS)
     res.status(201).json({ data: { token, user: { id: u.id, username: u.username, role: u.role } } })
   } catch (err: unknown) {
     const msg = (err as Error).message
     if (msg.includes('unique') || msg.includes('duplicate')) {
       res.status(409).json({ error: 'Username already taken' })
     } else {
-      res.status(500).json({ error: msg })
+      serverError(res, err)
     }
   }
 })
@@ -203,15 +205,19 @@ router.get('/me', (req, res) => {
     return
   }
 
-  const header = req.headers.authorization
-  if (!header?.startsWith('Bearer ')) { res.json({ data: { authed: false } }); return }
+  const cookieToken: string | undefined = (req as unknown as Record<string, Record<string, string>>).cookies?.devbrain_token
+  const bearerToken = req.headers.authorization?.startsWith('Bearer ')
+    ? req.headers.authorization.slice(7)
+    : undefined
+  const token = cookieToken ?? bearerToken
+
+  if (!token) { res.json({ data: { authed: false } }); return }
 
   try {
-    const payload = jwt.verify(header.slice(7), env.JWT_SECRET, JWT_VERIFY_OPTS) as Record<string, unknown>
+    const payload = jwt.verify(token, env.JWT_SECRET, JWT_VERIFY_OPTS) as Record<string, unknown>
     if (payload.userId) {
       res.json({ data: { authed: true, devMode: false, user: { id: payload.userId, username: payload.username, role: payload.role } } })
     } else {
-      // Legacy token — expired, force re-login
       res.json({ data: { authed: false } })
     }
   } catch {
@@ -221,12 +227,18 @@ router.get('/me', (req, res) => {
 
 // ── POST /api/auth/change-password ───────────────────────────────────────
 
+const ChangePasswordBody = z.object({
+  currentPassword: z.string().min(1),
+  newPassword:     z.string().min(6).max(128),
+})
+
 router.post('/change-password', requireAuth, async (req, res) => {
-  const { currentPassword, newPassword } = req.body as { currentPassword?: string; newPassword?: string }
-  if (!currentPassword || !newPassword || newPassword.length < 6) {
+  const parsed = ChangePasswordBody.safeParse(req.body)
+  if (!parsed.success) {
     res.status(400).json({ error: 'currentPassword and newPassword (min 6 chars) are required' })
     return
   }
+  const { currentPassword, newPassword } = parsed.data
 
   const userId = req.user!.id
   if (userId === 'legacy' || userId === 'dev') {

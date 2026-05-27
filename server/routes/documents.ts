@@ -1,6 +1,8 @@
 import { Router }   from 'express'
 import multer        from 'multer'
 import fs            from 'fs/promises'
+import os            from 'os'
+import path          from 'path'
 import crypto        from 'crypto'
 import dns           from 'node:dns/promises'
 import { z }         from 'zod'
@@ -9,13 +11,15 @@ import { pool }      from '../db/pool.js'
 import { parseFile, parseUrl } from '../services/parser.js'
 import { embedDocument }       from '../services/embedder.js'
 import { buildSetClause }      from '../lib/db.js'
+import { serverError }         from '../lib/errors.js'
+import { aiChat }              from '../services/ai.js'
 
 const router = Router()
 
 // ── Multer: temp disk storage ─────────────────────────────────────────────
 
 const upload = multer({
-  dest:   '/tmp/devbrain-uploads',
+  dest:   path.join(os.tmpdir(), 'devbrain-uploads'),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
 })
 
@@ -85,7 +89,7 @@ router.get('/', async (req, res) => {
     ])
     res.json({ data: { items: dataRes.rows, total: countRes.rows[0].n } })
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message })
+    serverError(res, err)
   }
 })
 
@@ -103,7 +107,7 @@ router.get('/:id', async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Document not found' })
     res.json({ data: rows[0] })
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message })
+    serverError(res, err)
   }
 })
 
@@ -157,7 +161,7 @@ router.post('/', upload.single('file'), async (req, res) => {
   } catch (err) {
     // Roll back document row if embedding failed mid-way
     if (docId) await pool.query('DELETE FROM documents WHERE id = $1', [docId]).catch(() => {})
-    res.status(500).json({ error: (err as Error).message })
+    serverError(res, err)
   } finally {
     await fs.unlink(tempPath).catch(() => {})
   }
@@ -210,7 +214,7 @@ router.post('/url', async (req, res) => {
     res.status(201).json({ data: { ...doc[0], chunk_count: chunkCount } })
   } catch (err) {
     if (docId) await pool.query('DELETE FROM documents WHERE id = $1', [docId]).catch(() => {})
-    res.status(500).json({ error: (err as Error).message })
+    serverError(res, err)
   }
 })
 
@@ -248,7 +252,7 @@ router.patch('/:id', async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Document not found' })
     res.json({ data: rows[0] })
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message })
+    serverError(res, err)
   }
 })
 
@@ -264,7 +268,7 @@ router.delete('/:id', async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Document not found' })
     res.json({ data: { deleted: rows[0] } })
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message })
+    serverError(res, err)
   }
 })
 
@@ -285,7 +289,28 @@ router.post('/:id/reembed', async (req, res) => {
     res.json({ data: { id, embedding_status: 'processing' } })
   } catch (err) {
     await pool.query(`UPDATE documents SET embedding_status = 'failed' WHERE id = $1`, [id]).catch(() => {})
-    res.status(500).json({ error: (err as Error).message })
+    serverError(res, err)
+  }
+})
+
+// ── POST /api/documents/suggest-tags ─────────────────────────────────────────
+// Suggests up to 5 tags from title + optional hint text using AI.
+
+router.post('/suggest-tags', async (req, res) => {
+  const { title, hint } = req.body as { title?: string; hint?: string }
+  const text = [title, hint].filter(Boolean).join(' ').trim()
+  if (!text) return res.status(400).json({ error: 'title or hint is required' })
+
+  try {
+    const raw = await aiChat(
+      `Suggest up to 5 short, lowercase tags for a document with this title/description:\n"${text.slice(0, 500)}"\n\nReturn ONLY a JSON array of strings, e.g. ["docker","postgres","setup"]. No explanation.`,
+      'You are a tagging assistant. Return only a valid JSON array of short lowercase tags.'
+    )
+    const match = raw.match(/\[[\s\S]*\]/)
+    const tags: string[] = match ? (JSON.parse(match[0]) as string[]).slice(0, 5) : []
+    res.json({ data: { tags } })
+  } catch (err) {
+    serverError(res, err)
   }
 })
 

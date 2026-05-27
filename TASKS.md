@@ -19,89 +19,24 @@
 
 ---
 
-## Phase 19 — Hardening & Quick Wins
-
-> Ten concrete gaps found in the post-Phase-18 review. No new features — fix what's already broken or insecure. Highest score-per-effort of any phase.
-
-### Security
-- [ ] **Complete localStorage → HttpOnly cookie migration on the client** (`client/src/lib/api.ts:10-13`) — Phase 13 added the HttpOnly cookie server-side but the client still reads `localStorage.getItem('devbrain_token')` and sends it as `Authorization: Bearer`. XSS can still steal the token. Remove `getToken()`/`setToken()` localStorage calls; rely solely on the cookie the server sets. Update `authApi.login()` to stop writing to localStorage. Audit all `getToken()` call sites.
-- [ ] **Sanitize 500 error responses in production** (`server/routes/auth.ts:193`, `server/routes/documents.ts:251,267`) — `res.status(500).json({ error: (err as Error).message })` leaks raw PostgreSQL error messages. Add a central Express error-handler middleware: log full error server-side; return `{ error: 'Internal server error' }` when `NODE_ENV=production`, full message in dev only.
-- [ ] **Add Zod to `change-password` route** (`server/routes/auth.ts:225`) — the only mutation route still using a raw `req.body as { ... }` cast. Add a `ChangePasswordBody` Zod schema consistent with every other route.
-- [ ] **Rate-limit mutation and AI endpoints** — add a second `express-rate-limit` instance (60 req/min per IP) on `POST /api/documents`, `POST /api/chat`, `POST /api/issues/:id/summarize`, `POST /api/commands/:id/explain`. Prevents authenticated users from hammering Ollama or the DB.
-
-### Reliability
-- [ ] **Wrap `res.json()` in try/catch in client `api.ts`** (`client/src/lib/api.ts:33`) — server returning HTML (Caddy proxy error, cold-start race) causes `res.json()` to throw a `SyntaxError` with no user-visible feedback. Catch and throw `Error('Unexpected server response')` instead.
-- [ ] **Add idle timeout to SSE streams** — `GET /api/chat` and `GET /api/claude-projects/:id/tasks/watch` hold connections open indefinitely. Add a 5-minute inactivity timeout: if no `res.write()` fires in 5 min, send `data: {"type":"timeout"}\n\n` and call `res.end()`.
-- [ ] **Fix Multer temp directory for cross-platform dev** (`server/routes/documents.ts:18`) — `dest: '/tmp/devbrain-uploads'` does not exist on Windows, silently breaking file uploads in native Windows dev. Replace with `path.join(os.tmpdir(), 'devbrain-uploads')`.
-
-### Database
-- [ ] **Add indexes on `embedding_status` columns** (`server/db/schema.sql`) — `WHERE embedding_status = 'failed'` is a full table scan. Add `CREATE INDEX IF NOT EXISTS idx_documents_embedding_status ON documents (embedding_status)` and the same on `issues`.
-
-### Code Quality
-- [ ] **Audit request deduplication cache key** (`client/src/lib/api.ts:41`) — in-flight map keys on the raw `path` string. Verify every `request()` call site includes the full query string so cache hits only occur on truly identical requests. Fix any call sites that omit query params.
-- [ ] **Parameterize LIMIT/OFFSET in `search.ts`** (`server/routes/search.ts:30,37,44,51,57`) — `LIMIT ${PAGE}` is safe (validated number) but violates the project rule of fully parameterized SQL. Replace with `LIMIT $N` and push `PAGE` into the params array across all five query branches.
-
----
-
-## Phase 20 — E2E Testing & Quality
-
-> Playwright E2E suite covering critical user paths. Safety net before new features land. Includes the resizable sidebar deferred from Phase 15.
-
-### Setup
-- [ ] Add `@playwright/test` to `client/devDependencies`
-- [ ] Add `playwright.config.ts` — baseURL `http://localhost:5173`, Chromium only, screenshots + traces on failure, `webServer` block to auto-start dev servers
-- [ ] Add `test:e2e` script to `client/package.json`; add E2E job to `.github/workflows/ci.yml` that uploads trace artifact on failure
-
-### Test Suites
-- [ ] **Auth flow** — unauthenticated visit → redirect to login; valid login → Dashboard; logout → back to login
-- [ ] **Issue lifecycle** — create issue → appears in list → open detail → add note → change status to resolved → status chip updates
-- [ ] **Document upload** — upload `.md` file → title appears in list → open DocChat → ask question → SSE response streams in
-- [ ] **Command CRUD** — create command → star favorite → search for it by title → delete → verify gone from list
-- [ ] **Global search** — ⌘K → type query → results appear across multiple entity types
-
-### Deferred UX (resizable sidebar from Phase 15)
-- [ ] Resizable sidebar — drag handle on right edge of sidebar; width persisted to `localStorage`; clamp between 180px and 420px; double-click handle to reset to default
-
----
-
-## Phase 21 — Export & Backup
-
-> Protect existing data before building more on top. Full knowledge-base export to portable markdown zip, scheduled auto-backup, and import from backup.
-
-### Export
-- [ ] `GET /api/export/project/:id` — stream a `.zip` containing one `.md` per document (YAML frontmatter + content), `issues.md` (all issues + steps + notes as sections), `commands.md`, `releases.md`, `runbooks.md`
-- [ ] `GET /api/export/all` — same but all projects; one subfolder per project inside the zip
-- [ ] Settings: Export section — project dropdown + "Export project" button; "Export all" button; file downloads as `devbrain-export-YYYY-MM-DD.zip`
-
-### Scheduled Backup
-- [ ] Add `backup_path TEXT` and `backup_schedule TEXT` (`'daily' | 'weekly' | 'off'`) keys to `app_settings`
-- [ ] Server: 24-hour `setInterval` on startup — if schedule enabled and `backup_path` exists, run export and write zip to path; log result; update `last_backup_at` in `app_settings`
-- [ ] Settings: backup path input + schedule dropdown + "Backup now" button + last backup timestamp display
-
-### Import
-- [ ] `POST /api/import` — accept zip upload; parse markdown frontmatter to reconstruct issues / documents / commands; skip duplicates by matching title + project
-- [ ] Settings: Import section — zip file upload input + "Dry run" toggle (returns diff of what would be created without writing); confirmation step before live import
-
----
-
 ## Phase 22 — Dashboard & Analytics
 
 > Insight widgets that surface value from all the data already in the DB. CSS-only bar/grid charts — no chart library dependency.
 
 ### New API Endpoints
-- [ ] `GET /api/dashboard/stats` — open issue count per project, avg resolution time (days) per project, doc count, embedding failure count, commands added this week
-- [ ] `GET /api/dashboard/activity` — daily event counts (issues opened, issues resolved, docs added, commands added) for last 30 days; keyed by date string
+- [x] `GET /api/dashboard/stats` — open issue count per project, avg resolution time (days) per project, doc count, embedding failure count, commands added this week
+- [x] `GET /api/dashboard/activity` — daily event counts (issues opened, issues resolved, docs added, commands added) for last 35 days; keyed by date string
 
 ### Widgets
-- [ ] **Open Issues by Project** — horizontal bar chart; one bar per project, colored with project color, value label on right
-- [ ] **Avg Resolution Time** — bar chart; days per project for last 30 days; "No data" state when no resolved issues
-- [ ] **Activity Heatmap** — 5-week × 7-day grid (GitHub contribution style); cells shaded by total event count; tooltip on hover shows date + count
-- [ ] **Embedding Health** — three labeled counts (done / pending / failed) with colored dots; "Retry all failed" button calls existing `POST /api/documents/:id/reembed` for each failed doc
-- [ ] **Stale Issues** — issues open > 14 days with no note in that period; listed with priority badge + one-click "Mark investigating" action
+- [x] **Open Issues by Project** — horizontal bar chart; one bar per project, colored with project color, value label on right
+- [x] **Avg Resolution Time** — bar chart; days per project for last 30 days; "No data" state when no resolved issues
+- [x] **Activity Heatmap** — 5-week × 7-day grid (GitHub contribution style); cells shaded by total event count; tooltip on hover shows date + count
+- [x] **Embedding Health** — three labeled counts (done / pending / failed) with colored dots; "Retry all failed" button calls existing `POST /api/documents/:id/reembed` for each failed doc
+- [x] **Stale Issues** — issues open > 14 days with no note in that period; listed with priority badge + one-click "Mark investigating" action
 
 ### Layout
-- [ ] Dashboard: 2-column widget grid on screens ≥ 1100px; single column below
-- [ ] Each widget: header with title + refresh icon; React Query `refetchInterval: 300_000` (5 min)
+- [x] Dashboard: responsive widget grid on screens ≥ 420px per column; single column below
+- [x] Each widget: header with title; analytics data fetched on mount alongside main dashboard data
 
 ---
 

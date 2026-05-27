@@ -81,13 +81,18 @@ router.get('/:id/tasks/watch', async (req, res) => {
     res.setHeader('Connection',    'keep-alive')
     res.flushHeaders()
 
+    const idleTimer = setTimeout(() => {
+      res.write('data: {"type":"timeout"}\n\n')
+      res.end()
+    }, 5 * 60 * 1000)
+
     // Send current state immediately
     const initial = await readTaskTree(req.params.id, fsPath)
     res.write(`data: ${JSON.stringify(initial)}\n\n`)
 
     // Subscribe to live updates
     const unsubscribe = subscribe(req.params.id, res)
-    req.on('close', unsubscribe)
+    req.on('close', () => { clearTimeout(idleTimer); unsubscribe() })
   } catch (err) {
     res.status(500).end()
   }

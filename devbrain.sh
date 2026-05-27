@@ -167,7 +167,7 @@ dev_start() {
     echo $! >> "$PID_FILE"
     ok "Server PID $! → logs/server.log"
 
-    step "Starting Vite dev server (:5173)..."
+    step "Starting Vite dev server (:5174)..."
     cd "$ROOT/client"
     npm run dev >> "$LOG_DIR/client.log" 2>&1 &
     echo $! >> "$PID_FILE"
@@ -175,9 +175,9 @@ dev_start() {
 
     printf "\n  \033[32mDevBrain DEV started\033[0m\n"
     printf "  ─────────────────────────────────────────\n"
-    printf "  Frontend  http://localhost:5173\n"
+    printf "  Frontend  http://localhost:5174\n"
     printf "  Backend   http://localhost:3001\n"
-    printf "  Postgres  localhost:5433\n"
+    printf "  Postgres  localhost:5435\n"
     printf "  Ollama    http://localhost:11434\n"
     printf "\n"
     printf "  Logs:  tail -f logs/server.log logs/client.log\n"
@@ -218,7 +218,7 @@ prod_start() {
     printf "\n  \033[32mDevBrain PROD started\033[0m\n"
     printf "  ─────────────────────────────────────────\n"
     printf "  App       http://localhost:3001  (API + static client)\n"
-    printf "  Postgres  localhost:5433\n"
+    printf "  Postgres  localhost:5435\n"
     printf "  Ollama    http://localhost:11434\n"
     printf "\n"
     printf "  Logs:  tail -f logs/server.log\n"

@@ -6,7 +6,7 @@
   4. Opens a new PowerShell window running tsx watch (hot-reload server)
   5. Opens another window running vite dev server
 
-  Frontend  http://localhost:5173
+  Frontend  http://localhost:5174
   Backend   http://localhost:3001
 
   ---

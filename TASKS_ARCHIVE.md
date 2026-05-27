@@ -530,3 +530,68 @@
 - [x] Settings: "Claude Integration" section — scan root input + Save; "Scan Now" → results table with Link / Create / Ignore actions
 - [x] Projects page: "Claude" chip badge on projects with `fs_path` set
 - [x] Project detail: Tasks/Sessions tabs gated on `fs_path`; prompt to link folder when unset
+
+---
+
+## Phase 19 — Hardening & Quick Wins ✅ COMPLETE
+
+> Ten concrete gaps found in the post-Phase-18 review. No new features — fix what's already broken or insecure.
+
+### Security
+- [x] **Complete localStorage → HttpOnly cookie migration on the client** (`client/src/lib/api.ts`) — removed `getToken`/`setToken`/`clearToken`; all fetches now use `credentials: 'include'`; `/me` and `/register` server routes updated to read/set cookie.
+- [x] **Sanitize 500 error responses in production** — added `server/lib/errors.ts` `serverError()` helper + central Express error handler in `index.ts`; `auth.ts` and `documents.ts` updated to use helper.
+- [x] **Add Zod to `change-password` route** (`server/routes/auth.ts`) — `ChangePasswordBody` schema added; raw cast removed.
+- [x] **Rate-limit mutation and AI endpoints** — `mutationLimiter` (60 req/min) applied in `index.ts` on `POST /api/documents`, `/api/chat`, `/api/issues/:id/summarize`, `/api/commands/:id/explain`.
+
+### Reliability
+- [x] **Wrap `res.json()` in try/catch in client `api.ts`** — `_fetch` now catches `SyntaxError` and throws `'Unexpected server response'`.
+- [x] **Add idle timeout to SSE streams** — 5-minute inactivity timeout added to `POST /api/chat` (resets on each write) and `GET /api/claude-projects/:id/tasks/watch`.
+- [x] **Fix Multer temp directory for cross-platform dev** (`server/routes/documents.ts`) — replaced `/tmp/devbrain-uploads` with `path.join(os.tmpdir(), 'devbrain-uploads')`.
+
+### Database
+- [x] **Add indexes on `embedding_status` columns** — already present in `schema.sql` (`documents_emb_status_idx`, `issues_emb_status_idx`) as partial indexes.
+
+### Code Quality
+- [x] **Audit request deduplication cache key** (`client/src/lib/api.ts`) — verified: all list/get call sites build the full URL with query string before passing to `request()`; cache keys are correct.
+- [x] **Parameterize LIMIT/OFFSET in `search.ts`** — all 13 `LIMIT ${PAGE}` occurrences replaced with `LIMIT $N` across both empty-query and non-empty-query branches.
+
+---
+
+## Phase 20 — E2E Testing & Quality ✅ COMPLETE
+
+> Playwright E2E suite covering critical user paths. Safety net before new features land. Includes the resizable sidebar deferred from Phase 15.
+
+### Setup
+- [x] Add `@playwright/test` to `client/devDependencies` (`^1.49.0`)
+- [x] Add `playwright.config.ts` — baseURL `http://localhost:5173`, Chromium only, screenshots + traces on failure, `webServer` block auto-starts Vite dev server
+- [x] Add `test:e2e` script to `client/package.json`; E2E job added to `.github/workflows/ci.yml` with PostgreSQL service, trace upload on failure
+
+### Test Suites
+- [x] **Auth flow** — `e2e/auth.spec.ts`: unauthenticated visit, valid login → Dashboard, wrong password, logout → login; gracefully skips in dev mode
+- [x] **Issue lifecycle** — `e2e/issues.spec.ts`: create → list, open detail → add note, change status to resolved
+- [x] **Document upload** — `e2e/documents.spec.ts`: upload `.md` → appears in list, DocChat loads, SSE response streams in
+- [x] **Command CRUD** — `e2e/commands.spec.ts`: create → star favorite → search by title → delete → verify gone
+- [x] **Global search** — `e2e/search.spec.ts`: ⌘K opens modal, empty state shows recents, query returns results, Escape closes
+
+### Deferred UX (resizable sidebar from Phase 15)
+- [x] Resizable sidebar — drag handle on right edge of sidebar (`App.tsx`); width persisted to `localStorage` (`devbrain_sidebar_w`); clamped 180–420px; double-click resets to 220px
+
+---
+
+## Phase 21 — Export & Backup ✅ COMPLETE
+
+> Protect existing data before building more on top. Full knowledge-base export to portable markdown zip, scheduled auto-backup, and import from backup.
+
+### Export
+- [x] `GET /api/export/project/:id` — stream a `.zip` containing one `.md` per document (YAML frontmatter + content), `issues.md` (all issues + steps + notes as sections), `commands.md`, `releases.md`, `runbooks.md`
+- [x] `GET /api/export/all` — same but all projects; one subfolder per project inside the zip
+- [x] Settings: Export section — project dropdown + "Export project" button; "Export all" button; file downloads as `devbrain-export-YYYY-MM-DD.zip`
+
+### Scheduled Backup
+- [x] Add `backup_path TEXT` and `backup_schedule TEXT` (`'daily' | 'weekly' | 'off'`) keys to `app_settings`
+- [x] Server: 24-hour `setInterval` on startup — if schedule enabled and `backup_path` exists, run export and write zip to path; log result; update `last_backup_at` in `app_settings`
+- [x] Settings: backup path input + schedule dropdown + "Backup now" button + last backup timestamp display
+
+### Import
+- [x] `POST /api/import` — accept zip upload; parse markdown frontmatter to reconstruct issues / documents / commands; skip duplicates by matching title + project
+- [x] Settings: Import section — zip file upload input + "Dry run" toggle (returns diff of what would be created without writing); confirmation step before live import

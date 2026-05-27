@@ -1,181 +1,202 @@
 # DevBrain — Startup Guide
 
 How to run DevBrain from scratch on a fresh machine or after a reboot.
-Two modes are covered: **Development** (hot-reload, recommended during active work)
-and **Production** (Docker-managed server, for stable daily use).
+The unified `devbrain.ps1` (Windows) / `devbrain.sh` (macOS/Linux) scripts handle
+Ollama, Postgres, migrations, and the app servers in a single command.
 
 ---
 
 ## Prerequisites
 
-Make sure the following are installed before you start:
+Install all of the following before running the scripts for the first time.
 
 | Tool | Purpose | Check |
 |------|---------|-------|
-| Docker Desktop | Runs PostgreSQL (and app container in prod) | `docker --version` |
-| Node.js 20+ | Client + server dev mode | `node --version` |
-| Ollama (native) | Local AI — GPU inference on RTX 2060 Max-Q | `ollama --version` |
+| **Node.js 20+** | Client + server | `node --version` |
+| **Docker Desktop** | Runs PostgreSQL via Compose | `docker --version` |
+| **Ollama (native)** | Local AI inference on RTX 2060 Max-Q | `ollama --version` |
+| **npm deps installed** | `server/` and `client/` node_modules | see below |
 
-> **Why Ollama is NOT in Docker:** Running Ollama as a native process gives direct GPU access.
-> The Docker container cannot reliably use the NVIDIA RTX 2060 Max-Q on this machine.
-> Never run a containerised Ollama alongside the native one — they will fight over VRAM.
+> **Why Ollama is NOT in Docker:** Running Ollama as a native process gives direct GPU
+> access. A containerised Ollama cannot reliably use the NVIDIA RTX 2060 Max-Q on this
+> machine. Never run a containerised Ollama alongside the native one — they will fight
+> over VRAM.
 
----
-
-## Step 1 — Start Ollama (native, always required)
-
-Ollama must be running before the server starts, or RAG and AI features will fail silently.
+### First-time dependency install
 
 ```powershell
-# Start Ollama in the background (it binds to port 11434)
-ollama serve
+# Windows
+cd server; npm install; cd ..
+cd client; npm install; cd ..
 ```
 
-Open a new terminal and verify it's up:
-
-```powershell
-curl http://localhost:11434/api/tags
+```bash
+# macOS / Linux
+cd server && npm install && cd ..
+cd client && npm install && cd ..
 ```
 
-### One-time model pull (first run only)
+### First-time `.env` setup
 
 ```powershell
-ollama pull mistral        # RAG Q&A — ~4.5 GB
-ollama pull gemma3:4b      # Classification / summarization — ~3.5 GB
-ollama pull nomic-embed-text  # Embeddings — ~300 MB
+# Windows — copy the example and fill in required values
+Copy-Item .env.example server\.env
 ```
 
----
-
-## Step 2 — Start Docker (PostgreSQL)
-
-The `docker-compose.yml` at the repo root manages PostgreSQL with the pgvector extension.
-
-```powershell
-# From the devbrain/ root directory
-docker compose up -d postgres
+```bash
+# macOS / Linux
+cp .env.example server/.env
 ```
 
-PostgreSQL will be available at `localhost:5433` (host port 5433 → container port 5432).
+Minimum required changes in `server/.env`:
 
-Verify it's healthy:
+| Variable | What to set |
+|----------|------------|
+| `JWT_SECRET` | Any 32+ char random string. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `AUTH_PASSWORD` | Required in **prod** mode. Leave blank in dev to skip the login gate. |
 
-```powershell
-docker compose ps
-# postgres should show "healthy"
-```
+### First-time Ollama model pull
 
-> **Port note:** The host port is **5433**, not 5432. This avoids conflicts if you have
-> another Postgres instance running locally. The `DATABASE_URL` in `server/.env` already
-> reflects this: `postgresql://devbrain:devbrain@localhost:5433/devbrain`
-
----
-
-## Step 3A — Development Mode (recommended)
-
-Run the backend and frontend as separate hot-reload dev servers.
-
-### Backend (Express + tsx watch)
-
-```powershell
-cd server
-npm install        # first time only
-npm run dev
-```
-
-The server starts on **http://localhost:3001**.
-On first run it auto-creates all tables and seeds the 5 default projects.
-
-### Frontend (Vite)
-
-Open a second terminal:
-
-```powershell
-cd client
-npm install        # first time only
-npm run dev
-```
-
-The client starts on **http://localhost:5173**.
-
-### Verify
-
-Open `http://localhost:5173` in your browser.
-The Overview dashboard should load with the 5 seeded projects (PlayCru, WealthView Pro, etc.).
-
----
-
-## Step 3B — Production Mode (Docker app container)
-
-This builds and runs the compiled server inside Docker alongside Postgres.
-The frontend must still be built separately.
-
-```powershell
-# Build and start both postgres + app container
-docker compose up -d --build
-```
-
-The API will be available at **http://localhost:3001**.
-
-To serve the frontend in production, build it first:
-
-```powershell
-cd client
-npm run build
-# Serve the dist/ folder via any static server, e.g.:
-npx serve dist -p 5173
+```bash
+ollama pull mistral          # RAG Q&A — ~4.5 GB VRAM
+ollama pull gemma3:4b        # Classification / summarisation — ~3.5 GB VRAM
+ollama pull nomic-embed-text # Embeddings — ~300 MB VRAM
 ```
 
 ---
 
-## Environment Variables
+## Running the scripts
 
-The server reads from `server/.env`. The file is already configured for local development:
-
-```env
-DATABASE_URL=postgresql://devbrain:devbrain@localhost:5433/devbrain
-OLLAMA_URL=http://localhost:11434
-OLLAMA_CHAT_MODEL=mistral
-PORT=3001
-JWT_SECRET=devbrain-dev-secret-change-in-production
-ANTHROPIC_API_KEY=
-USE_CLAUDE=false
-NODE_ENV=development
-```
-
-To enable Claude API (optional, manual only):
-```env
-ANTHROPIC_API_KEY=sk-ant-...
-USE_CLAUDE=true
-```
-
----
-
-## Full Startup Checklist
-
-```
-[ ] 1. ollama serve                        (terminal 1 — keep running)
-[ ] 2. docker compose up -d postgres       (from devbrain/ root)
-[ ] 3. cd server && npm run dev            (terminal 2 — keep running)
-[ ] 4. cd client && npm run dev            (terminal 3 — keep running)
-[ ] 5. Open http://localhost:5173
-```
-
----
-
-## Stopping Everything
+### Windows — `devbrain.ps1`
 
 ```powershell
-# Stop Docker containers (data is preserved in pg_data volume)
-docker compose down
+# Development (hot-reload — recommended during active work)
+.\devbrain.ps1 dev start
 
-# Stop Ollama
-# Close the terminal running `ollama serve`, or:
-taskkill /IM ollama.exe /F   # Windows
+# Stop development
+.\devbrain.ps1 dev stop
 
-# Stop dev servers
-# Ctrl+C in each terminal
+# Production (build + start)
+.\devbrain.ps1 prod start
+
+# Production — restart without rebuilding (fast)
+.\devbrain.ps1 prod start -SkipBuild
+
+# Stop production
+.\devbrain.ps1 prod stop
 ```
+
+If PowerShell blocks the script with an execution-policy error:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\devbrain.ps1 dev start
+```
+
+### macOS / Linux — `devbrain.sh`
+
+```bash
+# Development (hot-reload — recommended during active work)
+./devbrain.sh dev start
+
+# Development with live log streaming
+./devbrain.sh dev start --follow
+
+# Stop development
+./devbrain.sh dev stop
+
+# Production (build + start)
+./devbrain.sh prod start
+
+# Production — restart without rebuilding (fast)
+./devbrain.sh prod start --skip-build
+
+# Production with live log streaming
+./devbrain.sh prod start --follow
+
+# Stop production
+./devbrain.sh prod stop
+```
+
+If the script is not executable:
+
+```bash
+chmod +x devbrain.sh
+```
+
+---
+
+## What the scripts do automatically
+
+Every `start` command runs these prechecks and steps in order.
+
+### Dev start
+
+| Step | What happens |
+|------|-------------|
+| **Ollama check** | Probes `localhost:11434`. If Ollama is not running, starts `ollama serve` in the background and waits up to 4 s. Fails fast if Ollama is not installed. |
+| **Postgres start** | Runs `docker compose up -d postgres`. Polls the Docker healthcheck every 2 s for up to 50 s. |
+| **Auth warning** | Warns (does not fail) if `AUTH_PASSWORD` is missing from `server/.env` — dev mode runs without a login gate. |
+| **Migrations** | Runs `node server/db/migrate-org-v2.mjs`. Fails if the DB is unreachable or schema errors. |
+| **Server** | Opens `npm run dev` (tsx watch on `:3001`) in a new window (PS) / background log file (sh). |
+| **Client** | Opens `npm run dev` (Vite on `:5174`) in a new window (PS) / background log file (sh). |
+| **PID tracking** | Writes process IDs to `.devbrain-pids` so `dev stop` can kill them cleanly. |
+
+### Prod start (additional steps)
+
+| Step | What happens |
+|------|-------------|
+| **Env check** | Fails if `server/.env` is missing. Warns if `JWT_SECRET` is still the dev default. **Fails** if `AUTH_PASSWORD` is not set. |
+| **Build** | Runs `tsc` for the server, then `vite build` for the client. Copies `client/dist` → `server/public`. Skipped with `-SkipBuild` / `--skip-build` (verifies artifacts exist first). |
+| **Server** | Opens `npm run start` (compiled `node dist/index.js` on `:3001`). Client is served as static files from `server/public`. |
+
+### Stop
+
+`dev stop` / `prod stop` kills all tracked PIDs (and their process trees), then runs
+`docker compose stop postgres`. Data in the `pg_data` Docker volume is preserved.
+
+---
+
+## URLs after start
+
+### Dev mode
+
+| Service | URL |
+|---------|-----|
+| Frontend (Vite) | http://localhost:5174 |
+| Backend API | http://localhost:3001 |
+| PostgreSQL | `localhost:5435` (host) |
+| Ollama API | http://localhost:11434 |
+
+### Prod mode
+
+| Service | URL |
+|---------|-----|
+| App (API + static client) | http://localhost:3001 |
+| PostgreSQL | `localhost:5435` (host) |
+| Ollama API | http://localhost:11434 |
+
+> **Port note:** The Docker Compose host port is **5435**, not 5432. This avoids conflicts
+> with any local Postgres instance. `DATABASE_URL` in `server/.env` already reflects this.
+
+---
+
+## Log files (macOS / Linux only)
+
+The `.sh` script writes all process output to `logs/` at the repo root:
+
+| File | Contents |
+|------|----------|
+| `logs/server.log` | Express server stdout/stderr |
+| `logs/client.log` | Vite dev server stdout/stderr |
+| `logs/ollama.log` | Ollama stdout/stderr (only when the script starts Ollama) |
+
+Tail live:
+
+```bash
+tail -f logs/server.log logs/client.log
+```
+
+On Windows, each process opens in its own PowerShell window.
 
 ---
 
@@ -183,21 +204,47 @@ taskkill /IM ollama.exe /F   # Windows
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| `ECONNREFUSED localhost:5433` | Postgres container not running | `docker compose up -d postgres` |
+| `Ollama failed to start — is it installed?` | Ollama binary not on PATH | Install from https://ollama.com/download or `winget install Ollama.Ollama` |
+| `Docker Compose failed — is Docker Desktop running?` | Docker not started | Open Docker Desktop and wait for the engine to be ready |
+| `Postgres did not become healthy in time` | Slow disk or image not pulled | Run `docker compose pull postgres` then retry |
+| `Migration failed` | DB unreachable or schema mismatch | Confirm Postgres is healthy: `docker compose ps` |
+| `AUTH_PASSWORD not set` (prod) | Missing `.env` value | Add `AUTH_PASSWORD=your-strong-password` to `server/.env` |
+| `server/dist/index.js not found` | Used `-SkipBuild` without a prior build | Run `.\devbrain.ps1 prod start` (without `-SkipBuild`) once |
+| `ECONNREFUSED localhost:5435` | Postgres container not running | `docker compose up -d postgres` |
 | `ECONNREFUSED localhost:11434` | Ollama not running | `ollama serve` |
-| AI responses return errors | Model not pulled | `ollama pull mistral` |
-| Port 5173 already in use | Another Vite dev server | Kill it or change port in `vite.config.ts` |
+| AI features return errors | Model not pulled | `ollama pull mistral` |
+| Port 5174 already in use | Another Vite server running | Kill it or change the port in `vite.config.ts` |
 | Port 3001 already in use | Previous server still running | `netstat -ano \| findstr 3001` then kill the PID |
-| Blank dashboard on first load | DB seeding in progress | Wait 5s and refresh |
-| `pgvector` extension error | Wrong Postgres image | Ensure `pgvector/pgvector:pg16` in compose file |
+| Blank dashboard on first load | DB seeding in progress | Wait 5 s and refresh |
+| PowerShell execution policy error | Script unsigned | `powershell -ExecutionPolicy Bypass -File .\devbrain.ps1 dev start` |
 
 ---
 
-## Port Reference
+## Manual startup (fallback — no scripts)
 
-| Service | URL | Notes |
-|---------|-----|-------|
-| Frontend (dev) | http://localhost:5173 | Vite dev server |
-| Backend API | http://localhost:3001 | Express server |
-| PostgreSQL | localhost:5433 | Host port (container uses 5432 internally) |
-| Ollama API | http://localhost:11434 | Native process |
+If the scripts are unavailable, start each component individually.
+
+```powershell
+# 1. Ollama (terminal 1 — keep running)
+ollama serve
+
+# 2. Postgres
+docker compose up -d postgres
+
+# 3. Server (terminal 2)
+cd server
+npm run dev   # dev mode
+# or: npm run start   # prod (requires prior build)
+
+# 4. Client (terminal 3 — dev only)
+cd client
+npm run dev
+```
+
+Stop:
+
+```powershell
+docker compose stop postgres
+# Ctrl+C in each terminal, or:
+taskkill /IM ollama.exe /F   # Windows
+```

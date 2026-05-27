@@ -9,16 +9,20 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
   const { projects, selectedProject } = useProjectStore()
   const project = selectedProject()
 
-  const [title,      setTitle]      = useState('')
-  const [desc,       setDesc]       = useState('')
-  const [priority,   setPriority]   = useState<Priority>('medium')
-  const [projectId,  setProjectId]  = useState<string | null>(project?.id ?? null)
-  const [saving,     setSaving]     = useState(false)
-  const [error,      setError]      = useState('')
-  const [runbooks,   setRunbooks]   = useState<Runbook[]>([])
-  const [runbookId,  setRunbookId]  = useState<string>('')
-  const [related,    setRelated]    = useState<RelatedIssue[]>([])
+  const [title,         setTitle]         = useState('')
+  const [desc,          setDesc]          = useState('')
+  const [priority,      setPriority]      = useState<Priority>('medium')
+  const [projectId,     setProjectId]     = useState<string | null>(project?.id ?? null)
+  const [saving,        setSaving]        = useState(false)
+  const [error,         setError]         = useState('')
+  const [runbooks,      setRunbooks]      = useState<Runbook[]>([])
+  const [runbookId,     setRunbookId]     = useState<string>('')
+  const [related,       setRelated]       = useState<RelatedIssue[]>([])
+  const [tags,          setTags]          = useState<string[]>([])
+  const [tagInput,      setTagInput]      = useState('')
+  const [suggestedTags, setSuggestedTags] = useState<string[]>([])
   const relatedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const suggestTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     runbooksApi.list().then(setRunbooks).catch(() => {})
@@ -32,6 +36,18 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
     }, 400)
     return () => { if (relatedTimer.current) clearTimeout(relatedTimer.current) }
   }, [title])
+
+  useEffect(() => {
+    if (suggestTimer.current) clearTimeout(suggestTimer.current)
+    if (title.trim().length < 5) { setSuggestedTags([]); return }
+    suggestTimer.current = setTimeout(() => {
+      issuesApi.suggestTags(title.trim(), desc.trim() || undefined)
+        .then(({ tags: suggested }) => setSuggestedTags(suggested.filter(t => !tags.includes(t))))
+        .catch(() => {})
+    }, 800)
+    return () => { if (suggestTimer.current) clearTimeout(suggestTimer.current) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [title, desc])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -58,7 +74,7 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
         status: 'open',
         priority,
         project_id: projectId,
-        tags: [],
+        tags,
         investigation_steps,
       })
       onCreate(issue)
@@ -136,6 +152,51 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
             fontFamily: 'inherit',
           }}
         />
+
+        {/* Tags + AI suggestions */}
+        <div>
+          {tags.length > 0 && (
+            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 6 }}>
+              {tags.map(t => (
+                <span key={t} style={{ fontSize: '11px', padding: '1px 7px', borderRadius: 10, background: 'var(--accent-dim)', border: '1px solid var(--accent-line)', color: 'var(--accent-2)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  {t}
+                  <button onClick={() => setTags(prev => prev.filter(x => x !== t))} style={{ color: 'var(--accent-2)', fontSize: 9, background: 'none', border: 'none', cursor: 'default', padding: 0, lineHeight: 1 }}>✕</button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              value={tagInput}
+              onChange={e => setTagInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === ',') {
+                  e.preventDefault()
+                  const t = tagInput.trim().replace(/,/g, '')
+                  if (t && !tags.includes(t)) setTags(prev => [...prev, t])
+                  setTagInput('')
+                }
+              }}
+              placeholder="Tags (Enter or comma)"
+              style={{ flex: 1, padding: '5px 10px', background: 'var(--bg)', border: '1px solid var(--line-2)', borderRadius: 6, fontSize: '12px', color: 'var(--fg)', outline: 'none' }}
+            />
+          </div>
+          {suggestedTags.length > 0 && (
+            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
+              <span style={{ fontSize: '11px', color: 'var(--fg-3)' }}>✦ Suggested:</span>
+              {suggestedTags.map(t => (
+                <button
+                  key={t}
+                  onClick={() => { setTags(prev => prev.includes(t) ? prev : [...prev, t]); setSuggestedTags(prev => prev.filter(x => x !== t)) }}
+                  style={{ fontSize: '11px', padding: '1px 8px', borderRadius: 10, background: 'rgba(99,102,241,.12)', border: '1px dashed var(--accent-line)', color: 'var(--accent-2)', cursor: 'default' }}
+                >
+                  + {t}
+                </button>
+              ))}
+              <button onClick={() => setSuggestedTags([])} style={{ fontSize: '10px', color: 'var(--fg-3)', background: 'none', border: 'none', cursor: 'default' }}>✕</button>
+            </div>
+          )}
+        </div>
 
         <div style={{ display: 'flex', gap: 10 }}>
           <div style={{ flex: 1 }}>

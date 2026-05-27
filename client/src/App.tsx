@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { useProjectStore } from './store/projectStore'
 import { projectsApi, authApi, getCachedUser, type AuthUser } from './lib/api'
@@ -20,6 +20,11 @@ import { GlobalSearch }  from './components/search/GlobalSearch'
 import { ErrorBoundary } from './components/ErrorBoundary'
 
 type RouteId = 'dashboard' | 'docs' | 'chat' | 'issues' | 'tasks' | 'commands' | 'releases' | 'runbooks' | 'projects' | 'aitask' | 'settings'
+
+const SIDEBAR_DEFAULT = 220
+const SIDEBAR_MIN     = 180
+const SIDEBAR_MAX     = 420
+const SIDEBAR_LS_KEY  = 'devbrain_sidebar_w'
 type Density = 'compact' | 'normal' | 'comfy'
 type Tint    = 'cool' | 'black' | 'warm'
 
@@ -75,6 +80,13 @@ export default function App() {
   const [density,    setDensity]    = useState<Density>('normal')
   const [tint]                      = useState<Tint>('cool')
   const [sidebar,    setSidebar]    = useState<'open' | 'collapsed'>('open')
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const stored = localStorage.getItem(SIDEBAR_LS_KEY)
+    if (!stored) return SIDEBAR_DEFAULT
+    const n = parseInt(stored, 10)
+    return isNaN(n) ? SIDEBAR_DEFAULT : Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, n))
+  })
+  const dragRef = useRef<{ startX: number; startW: number } | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [authed,     setAuthed]     = useState<boolean | null>(null)
@@ -129,6 +141,40 @@ export default function App() {
   }, [setProjects])
 
   useEffect(() => { loadProjects() }, [loadProjects])
+
+  // Persist sidebar width to localStorage
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_LS_KEY, String(sidebarWidth))
+  }, [sidebarWidth])
+
+  function onResizeHandleMouseDown(e: React.MouseEvent) {
+    if (sidebar === 'collapsed') return
+    e.preventDefault()
+    dragRef.current = { startX: e.clientX, startW: sidebarWidth }
+    document.body.style.cursor     = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    function onMouseMove(ev: MouseEvent) {
+      if (!dragRef.current) return
+      const newW = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN,
+        dragRef.current.startW + ev.clientX - dragRef.current.startX
+      ))
+      setSidebarWidth(newW)
+    }
+    function onMouseUp() {
+      dragRef.current = null
+      document.body.style.removeProperty('cursor')
+      document.body.style.removeProperty('user-select')
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup',  onMouseUp)
+    }
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup',  onMouseUp)
+  }
+
+  function onResizeHandleDblClick() {
+    setSidebarWidth(SIDEBAR_DEFAULT)
+  }
 
   // Reload projects when navigating to projects page
   useEffect(() => {
@@ -229,7 +275,13 @@ export default function App() {
 
   return (
     <ToastProvider>
-    <div className="app" data-density={density} data-tint={tint} data-sidebar={sidebar}>
+    <div
+      className="app"
+      data-density={density}
+      data-tint={tint}
+      data-sidebar={sidebar}
+      style={sidebar === 'open' ? { '--sidebar-w': `${sidebarWidth}px` } as React.CSSProperties : {}}
+    >
 
       {/* ── Top bar ──────────────────────────────────────────────────────── */}
       <header style={{
@@ -303,7 +355,7 @@ export default function App() {
       </header>
 
       {/* ── Sidebar ──────────────────────────────────────────────────────── */}
-      <nav style={{ borderRight: '1px solid var(--line)', background: 'var(--panel)', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+      <nav style={{ borderRight: '1px solid var(--line)', background: 'var(--panel)', overflowY: 'auto', display: 'flex', flexDirection: 'column', position: 'relative' }}>
         <div style={{ padding: '10px 8px', display: 'flex', flexDirection: 'column', gap: '1px' }}>
           {NAV_ITEMS.map(item => (
             <div key={item.id}>
@@ -339,6 +391,28 @@ export default function App() {
             </div>
           ))}
         </div>
+
+        {/* Resize handle — drag to resize, double-click to reset */}
+        {sidebar === 'open' && (
+          <div
+            onMouseDown={onResizeHandleMouseDown}
+            onDoubleClick={onResizeHandleDblClick}
+            title="Drag to resize · Double-click to reset"
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              right: -3,
+              top: 0,
+              bottom: 0,
+              width: 6,
+              cursor: 'col-resize',
+              zIndex: 10,
+              transition: 'background .1s',
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = 'rgba(99,102,241,.35)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = '' }}
+          />
+        )}
 
         {/* Sidebar footer */}
         <div style={{ marginTop: 'auto', padding: '10px', borderTop: '1px solid var(--line)' }}>

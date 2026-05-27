@@ -20,43 +20,45 @@ router.get('/', async (req, res) => {
       // ── Empty query: return recent items from each type ──────────────────
       const pidClause = (alias: string, col = 'project_id') =>
         pid ? `WHERE ${alias}.${col} = $1` : ''
-      const params = pid ? [pid] : []
+      const params     = pid ? [pid] : []
+      const limitIdx   = params.length + 1
+      const ap         = [...params, PAGE]
 
       const [docsRes, issuesRes, commandsRes, releasesRes, runbooksRes] = await Promise.all([
         pool.query(
           `SELECT 'doc' AS type, d.id, d.title, d.file_type AS subtype,
                   p.name AS project_name, p.color AS project_color
            FROM documents d LEFT JOIN projects p ON p.id = d.project_id
-           ${pidClause('d')} ORDER BY d.created_at DESC LIMIT ${PAGE}`,
-          params
+           ${pidClause('d')} ORDER BY d.created_at DESC LIMIT $${limitIdx}`,
+          ap
         ),
         pool.query(
           `SELECT 'issue' AS type, i.id, i.title, i.status AS subtype,
                   p.name AS project_name, p.color AS project_color
            FROM issues i LEFT JOIN projects p ON p.id = i.project_id
-           ${pidClause('i')} ORDER BY i.created_at DESC LIMIT ${PAGE}`,
-          params
+           ${pidClause('i')} ORDER BY i.created_at DESC LIMIT $${limitIdx}`,
+          ap
         ),
         pool.query(
           `SELECT 'command' AS type, c.id, c.title, c.language AS subtype,
                   p.name AS project_name, p.color AS project_color, c.command AS body
            FROM commands c LEFT JOIN projects p ON p.id = c.project_id
-           ${pidClause('c')} ORDER BY c.is_favorite DESC, c.last_used DESC NULLS LAST LIMIT ${PAGE}`,
-          params
+           ${pidClause('c')} ORDER BY c.is_favorite DESC, c.last_used DESC NULLS LAST LIMIT $${limitIdx}`,
+          ap
         ),
         pool.query(
           `SELECT 'release' AS type, r.id, r.version AS title, r.type AS subtype,
                   p.name AS project_name, p.color AS project_color
            FROM releases r LEFT JOIN projects p ON p.id = r.project_id
-           ${pidClause('r')} ORDER BY r.date DESC LIMIT ${PAGE}`,
-          params
+           ${pidClause('r')} ORDER BY r.date DESC LIMIT $${limitIdx}`,
+          ap
         ),
         pool.query(
           `SELECT 'runbook' AS type, rb.id, rb.title, NULL::text AS subtype,
                   p.name AS project_name, p.color AS project_color
            FROM runbooks rb LEFT JOIN projects p ON p.id = rb.project_id
-           ${pidClause('rb')} ORDER BY rb.last_used_at DESC NULLS LAST, rb.created_at DESC LIMIT ${PAGE}`,
-          params
+           ${pidClause('rb')} ORDER BY rb.last_used_at DESC NULLS LAST, rb.created_at DESC LIMIT $${limitIdx}`,
+          ap
         ),
       ])
 
@@ -77,8 +79,9 @@ router.get('/', async (req, res) => {
     let docsRes
     try {
       const embedding = await aiEmbed(q)
-      const vec = `[${embedding.join(',')}]`
+      const vec       = `[${embedding.join(',')}]`
       const docParams = pid ? [vec, pid] : [vec]
+      const dq        = [...docParams, PAGE]
 
       docsRes = await pool.query(
         `SELECT type, id, title, subtype, project_name, project_color
@@ -94,24 +97,27 @@ router.get('/', async (req, res) => {
            ORDER BY d.id, dc.embedding <=> $1::vector
          ) sub
          ORDER BY sub.dist
-         LIMIT ${PAGE}`,
-        docParams
+         LIMIT $${docParams.length + 1}`,
+        dq
       )
     } catch {
       // Ollama not running — fall back to tsvector on documents
       const docParams = pid ? [q, pid] : [q]
+      const fbq       = [...docParams, PAGE]
       docsRes = await pool.query(
         `SELECT 'doc' AS type, d.id, d.title, d.file_type AS subtype,
                 p.name AS project_name, p.color AS project_color
          FROM documents d LEFT JOIN projects p ON p.id = d.project_id
          WHERE (d.tsv @@ plainto_tsquery('english', $1) OR d.title ILIKE '%'||$1||'%') ${pf('d')}
          ORDER BY ts_rank(d.tsv, plainto_tsquery('english', $1)) DESC
-         LIMIT ${PAGE}`,
-        docParams
+         LIMIT $${docParams.length + 1}`,
+        fbq
       )
     }
 
-    const textParams = pid ? [q, pid] : [q]
+    const textParams  = pid ? [q, pid] : [q]
+    const tLimitIdx   = textParams.length + 1
+    const tq          = [...textParams, PAGE]
 
     // 2. Issues — tsvector with ts_rank, ILIKE fallback
     let issuesRes = await pool.query(
@@ -120,8 +126,8 @@ router.get('/', async (req, res) => {
        FROM issues i LEFT JOIN projects p ON p.id = i.project_id
        WHERE i.tsv @@ plainto_tsquery('english', $1) ${pf('i')}
        ORDER BY ts_rank(i.tsv, plainto_tsquery('english', $1)) DESC
-       LIMIT ${PAGE}`,
-      textParams
+       LIMIT $${tLimitIdx}`,
+      tq
     )
     if (issuesRes.rows.length === 0) {
       issuesRes = await pool.query(
@@ -129,8 +135,8 @@ router.get('/', async (req, res) => {
                 p.name AS project_name, p.color AS project_color
          FROM issues i LEFT JOIN projects p ON p.id = i.project_id
          WHERE (i.title ILIKE '%'||$1||'%' OR i.description ILIKE '%'||$1||'%') ${pf('i')}
-         ORDER BY i.created_at DESC LIMIT ${PAGE}`,
-        textParams
+         ORDER BY i.created_at DESC LIMIT $${tLimitIdx}`,
+        tq
       )
     }
 
@@ -141,8 +147,8 @@ router.get('/', async (req, res) => {
        FROM commands c LEFT JOIN projects p ON p.id = c.project_id
        WHERE c.tsv @@ plainto_tsquery('english', $1) ${pf('c')}
        ORDER BY ts_rank(c.tsv, plainto_tsquery('english', $1)) DESC
-       LIMIT ${PAGE}`,
-      textParams
+       LIMIT $${tLimitIdx}`,
+      tq
     )
     if (commandsRes.rows.length === 0) {
       commandsRes = await pool.query(
@@ -150,8 +156,8 @@ router.get('/', async (req, res) => {
                 p.name AS project_name, p.color AS project_color, c.command AS body
          FROM commands c LEFT JOIN projects p ON p.id = c.project_id
          WHERE (c.title ILIKE '%'||$1||'%' OR c.command ILIKE '%'||$1||'%') ${pf('c')}
-         ORDER BY c.is_favorite DESC, c.last_used DESC NULLS LAST LIMIT ${PAGE}`,
-        textParams
+         ORDER BY c.is_favorite DESC, c.last_used DESC NULLS LAST LIMIT $${tLimitIdx}`,
+        tq
       )
     }
 
@@ -161,8 +167,8 @@ router.get('/', async (req, res) => {
               p.name AS project_name, p.color AS project_color
        FROM releases r LEFT JOIN projects p ON p.id = r.project_id
        WHERE (r.version ILIKE '%'||$1||'%' OR r.notes ILIKE '%'||$1||'%') ${pf('r')}
-       ORDER BY r.date DESC LIMIT ${PAGE}`,
-      textParams
+       ORDER BY r.date DESC LIMIT $${tLimitIdx}`,
+      tq
     )
 
     // 5. Runbooks — ILIKE (no tsvector column)
@@ -171,8 +177,8 @@ router.get('/', async (req, res) => {
               p.name AS project_name, p.color AS project_color
        FROM runbooks rb LEFT JOIN projects p ON p.id = rb.project_id
        WHERE (rb.title ILIKE '%'||$1||'%' OR $1 = ANY(rb.tags)) ${pf('rb')}
-       ORDER BY rb.last_used_at DESC NULLS LAST, rb.created_at DESC LIMIT ${PAGE}`,
-      textParams
+       ORDER BY rb.last_used_at DESC NULLS LAST, rb.created_at DESC LIMIT $${tLimitIdx}`,
+      tq
     )
 
     res.json({
@@ -187,6 +193,42 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error('search error:', err)
     res.status(500).json({ error: 'Search failed' })
+  }
+})
+
+// ── GET /api/search/suggestions ──────────────────────────────────────────────
+// Returns up to 5 recent items ranked by updated_at for empty-state suggestions.
+
+router.get('/suggestions', async (req, res) => {
+  const pid = (req.query.projectId as string) || null
+  const params = pid ? [pid] : []
+
+  try {
+    const pidClause = (alias: string) => pid ? `AND ${alias}.project_id = $1` : ''
+
+    const [issuesRes, docsRes] = await Promise.all([
+      pool.query(
+        `SELECT 'issue' AS type, i.id, i.title,
+                p.name AS project_name, p.color AS project_color
+         FROM issues i LEFT JOIN projects p ON p.id = i.project_id
+         WHERE i.status IN ('open', 'investigating') ${pidClause('i')}
+         ORDER BY i.updated_at DESC LIMIT 3`,
+        params
+      ),
+      pool.query(
+        `SELECT 'doc' AS type, d.id, d.title,
+                p.name AS project_name, p.color AS project_color
+         FROM documents d LEFT JOIN projects p ON p.id = d.project_id
+         WHERE 1=1 ${pidClause('d')}
+         ORDER BY d.updated_at DESC LIMIT 2`,
+        params
+      ),
+    ])
+
+    res.json({ data: [...issuesRes.rows, ...docsRes.rows] })
+  } catch (err) {
+    console.error('suggestions error:', err)
+    res.status(500).json({ error: 'Suggestions failed' })
   }
 })
 

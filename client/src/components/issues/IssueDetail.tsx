@@ -37,6 +37,7 @@ export function IssueDetail({ issueId, onBack, onDeleted }: { issueId: string; o
   useEffect(() => {
     issuesApi.get(issueId).then(i => {
       setIssue(i)
+      setSummary(i.summary ?? '')
       setLoading(false)
       track({ id: i.id, type: 'issue', title: i.title, projectName: i.project_name ?? undefined, projectColor: i.project_color ?? undefined })
     }).catch(() => setLoading(false))
@@ -135,6 +136,7 @@ export function IssueDetail({ issueId, onBack, onDeleted }: { issueId: string; o
     try {
       const { summary: s } = await issuesApi.summarize(issue.id)
       setSummary(s)
+      setIssue({ ...issue, summary: s })
     } finally {
       setSummarizing(false)
     }

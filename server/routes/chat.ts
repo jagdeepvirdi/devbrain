@@ -28,11 +28,19 @@ router.post('/', async (req, res) => {
   res.setHeader('Connection', 'keep-alive')
   res.flushHeaders()
 
+  const IDLE_MS = 5 * 60 * 1000
+  let idleTimer = setTimeout(onIdle, IDLE_MS)
+  function resetIdle() { clearTimeout(idleTimer); idleTimer = setTimeout(onIdle, IDLE_MS) }
+  function onIdle() { res.write('data: {"type":"timeout"}\n\n'); res.end() }
+  req.on('close', () => clearTimeout(idleTimer))
+
   function send(obj: unknown) {
+    resetIdle()
     res.write(`data: ${JSON.stringify(obj)}\n\n`)
   }
 
   function done() {
+    clearTimeout(idleTimer)
     res.write('data: [DONE]\n\n')
     res.end()
   }

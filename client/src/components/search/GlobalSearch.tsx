@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { searchApi, commandsApi } from '../../lib/api'
-import type { SearchResult, SearchResults } from '../../lib/api'
+import type { SearchResult, SearchResults, SearchSuggestion } from '../../lib/api'
 import { useProjectStore } from '../../store/projectStore'
 import { useRecentlyViewed } from '../../hooks/useRecentlyViewed'
 
@@ -48,6 +48,7 @@ export function GlobalSearch({ onNavigate, open, onClose }: Props) {
   const [copiedId,     setCopiedId]     = useState<string | null>(null)
   const [scopeProject, setScopeProject] = useState<string | null>(null)
   const [limit,        setLimit]        = useState(10)
+  const [suggestions,  setSuggestions]  = useState<SearchSuggestion[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef  = useRef<HTMLDivElement>(null)
 
@@ -61,7 +62,12 @@ export function GlobalSearch({ onNavigate, open, onClose }: Props) {
       setCopiedId(null)
       setScopeProject(currProject?.id ?? null)
       setLimit(10)
+      setSuggestions([])
       setTimeout(() => inputRef.current?.focus(), 30)
+      // Load suggestions on open
+      searchApi.suggestions(currProject?.id ?? null)
+        .then(setSuggestions)
+        .catch(() => {})
     }
   }, [open, currProject?.id])
 
@@ -198,9 +204,40 @@ export function GlobalSearch({ onNavigate, open, onClose }: Props) {
 
         {/* Results */}
         <div ref={listRef} style={{ overflowY: 'auto', flex: 1 }}>
-          {results === null && !loading && recentItems.length === 0 && (
+          {results === null && !loading && recentItems.length === 0 && suggestions.length === 0 && (
             <div style={{ padding: '36px 20px', textAlign: 'center', fontSize: '13px', color: 'var(--fg-4)' }}>
               Start typing to search
+            </div>
+          )}
+
+          {results === null && !loading && !query && suggestions.length > 0 && recentItems.length === 0 && (
+            <div>
+              <div style={{ padding: '8px 14px 3px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--accent-2)' }}>
+                  ✦ Suggestions
+                </span>
+              </div>
+              {suggestions.map(s => (
+                <div
+                  key={`${s.type}-${s.id}`}
+                  onClick={() => {
+                    navigate(`/${s.type === 'issue' ? 'issues' : 'docs'}?open=${s.id}`)
+                    onClose()
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', cursor: 'default' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elev-2)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <span style={{ width: 20, textAlign: 'center', fontSize: '11px', color: s.type === 'issue' ? '#FF9D4D' : '#60A5FA', flexShrink: 0 }}>
+                    {s.type === 'issue' ? '⚠' : '📄'}
+                  </span>
+                  {s.project_color && <span style={{ width: 5, height: 5, borderRadius: '50%', background: s.project_color, flexShrink: 0 }} />}
+                  <span style={{ flex: 1, fontSize: '13px', color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {s.title}
+                  </span>
+                  {s.project_name && <span style={{ fontSize: '11px', color: 'var(--fg-4)', flexShrink: 0 }}>{s.project_name}</span>}
+                </div>
+              ))}
             </div>
           )}
 

@@ -37,7 +37,7 @@ cd server && npm run dev
 cd client && npm run dev
 ```
 
-The app is available at http://localhost:5173 (frontend proxies API calls to port 3001).
+The app is available at http://localhost:5174 (frontend proxies API calls to port 3001).
 
 ## Validation
 

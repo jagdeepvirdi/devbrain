@@ -1,7 +1,16 @@
 import { Router } from 'express'
 import { z } from 'zod'
+import os   from 'os'
+import path from 'path'
+import multer from 'multer'
+import AdmZip from 'adm-zip'
+import matter from 'gray-matter'
 import { pool } from '../db/pool.js'
 import { env } from '../lib/env.js'
+import { serverError } from '../lib/errors.js'
+import { triggerBackupNow } from '../services/backup.js'
+
+const upload = multer({ dest: path.join(os.tmpdir(), 'devbrain-uploads'), limits: { fileSize: 200 * 1024 * 1024 } })
 
 const router = Router()
 
@@ -247,6 +256,206 @@ router.post('/import', async (req, res) => {
     res.status(500).json({ error: (err as Error).message })
   } finally {
     client.release()
+  }
+})
+
+// ── GET /api/settings/backup-config ─────────────────────────────────────────
+
+router.get('/backup-config', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'backup_settings'`)
+    const cfg = rows[0]?.value ?? { path: null, schedule: 'off', last_backup_at: null }
+    res.json({ data: cfg })
+  } catch (err) {
+    serverError(res, err)
+  }
+})
+
+// ── PUT /api/settings/backup-config ─────────────────────────────────────────
+
+const BackupConfigBody = z.object({
+  path:     z.string().nullable(),
+  schedule: z.enum(['daily', 'weekly', 'off']),
+})
+
+router.put('/backup-config', async (req, res) => {
+  const parsed = BackupConfigBody.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
+  try {
+    const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'backup_settings'`)
+    const existing = (rows[0]?.value ?? {}) as Record<string, unknown>
+    const updated  = { ...existing, path: parsed.data.path, schedule: parsed.data.schedule }
+    await pool.query(
+      `INSERT INTO app_settings (key, value)
+       VALUES ('backup_settings', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [JSON.stringify(updated)],
+    )
+    res.json({ data: updated })
+  } catch (err) {
+    serverError(res, err)
+  }
+})
+
+// ── POST /api/settings/backup-now ────────────────────────────────────────────
+
+router.post('/backup-now', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'backup_settings'`)
+    const cfg = rows[0]?.value as { path: string | null } | undefined
+    if (!cfg?.path) return res.status(400).json({ error: 'No backup path configured' })
+    await triggerBackupNow(cfg.path)
+    res.json({ data: { ok: true, path: cfg.path } })
+  } catch (err) {
+    serverError(res, err)
+  }
+})
+
+// ── POST /api/settings/zip-import ────────────────────────────────────────────
+
+router.post('/zip-import', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+  const isDryRun = req.query.dry_run === 'true'
+
+  try {
+    const zip     = new AdmZip(req.file.path)
+    const entries = zip.getEntries()
+
+    type Tally = { created: number; skipped: number }
+    const summary: Record<string, Tally> = { documents: { created: 0, skipped: 0 }, issues: { created: 0, skipped: 0 }, commands: { created: 0, skipped: 0 } }
+
+    // Build a map of short_name → project id (for FK lookups)
+    const { rows: projects } = await pool.query<{ id: string; short_name: string }>('SELECT id, short_name FROM projects')
+    const projectMap = new Map(projects.map(p => [p.short_name, p.id]))
+
+    const client = isDryRun ? null : await pool.connect()
+    if (client) await client.query('BEGIN')
+
+    try {
+      for (const entry of entries) {
+        if (entry.isDirectory) continue
+        const entryName = entry.entryName.replace(/\\/g, '/')
+        const parts     = entryName.split('/')
+        if (parts.length < 3) continue  // need at least {project}/{dir}/{file}.md
+
+        const projectSlug = parts[0]
+        const entityDir   = parts[1]    // 'documents', 'issues', 'commands'
+        const filename    = parts[parts.length - 1]
+
+        if (!filename.endsWith('.md')) continue
+        if (!['documents', 'issues', 'commands'].includes(entityDir)) continue
+
+        const projectId = projectMap.get(projectSlug)
+        if (!projectId) continue  // skip unknown projects
+
+        const content = entry.getData().toString('utf8')
+        let parsed: matter.GrayMatterFile<string>
+        try { parsed = matter(content) } catch { continue }
+
+        const fm = parsed.data as Record<string, unknown>
+        const title = (fm.title as string | undefined) ?? filename.replace(/\.md$/, '')
+
+        if (entityDir === 'documents') {
+          // Check duplicate: same title + project
+          const { rows: existing } = isDryRun
+            ? await pool.query('SELECT id FROM documents WHERE title = $1 AND project_id = $2', [title, projectId])
+            : await client!.query('SELECT id FROM documents WHERE title = $1 AND project_id = $2', [title, projectId])
+
+          if (existing.length > 0) {
+            summary.documents.skipped++
+          } else if (!isDryRun) {
+            await client!.query(
+              `INSERT INTO documents (project_id, title, file_type, tags, source, content, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+              [
+                projectId,
+                title,
+                fm.file_type ?? 'md',
+                Array.isArray(fm.tags) ? fm.tags : [],
+                fm.source ?? '',
+                parsed.content.trim(),
+                fm.created_at ?? new Date().toISOString(),
+              ],
+            )
+            summary.documents.created++
+          } else {
+            summary.documents.created++
+          }
+        } else if (entityDir === 'issues') {
+          const { rows: existing } = isDryRun
+            ? await pool.query('SELECT id FROM issues WHERE title = $1 AND project_id = $2', [title, projectId])
+            : await client!.query('SELECT id FROM issues WHERE title = $1 AND project_id = $2', [title, projectId])
+
+          if (existing.length > 0) {
+            summary.issues.skipped++
+          } else if (!isDryRun) {
+            await client!.query(
+              `INSERT INTO issues (project_id, title, status, priority, tags, description, resolution, created_at, resolved_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+              [
+                projectId,
+                title,
+                fm.status  ?? 'open',
+                fm.priority ?? 'medium',
+                Array.isArray(fm.tags) ? fm.tags : [],
+                fm.description ?? '',
+                fm.resolution  ?? '',
+                fm.created_at  ?? new Date().toISOString(),
+                fm.resolved_at ?? null,
+              ],
+            )
+            summary.issues.created++
+          } else {
+            summary.issues.created++
+          }
+        } else if (entityDir === 'commands') {
+          const { rows: existing } = isDryRun
+            ? await pool.query('SELECT id FROM commands WHERE title = $1 AND project_id = $2', [title, projectId])
+            : await client!.query('SELECT id FROM commands WHERE title = $1 AND project_id = $2', [title, projectId])
+
+          // Extract command from code block in body
+          const cmdMatch = parsed.content.match(/```[^\n]*\n([\s\S]*?)```/)
+          const cmdText  = cmdMatch ? cmdMatch[1].trim() : parsed.content.trim()
+
+          if (existing.length > 0) {
+            summary.commands.skipped++
+          } else if (!isDryRun) {
+            await client!.query(
+              `INSERT INTO commands (project_id, title, command, language, description, tags, is_favorite, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+              [
+                projectId,
+                title,
+                cmdText,
+                fm.language   ?? 'bash',
+                fm.description ?? '',
+                Array.isArray(fm.tags) ? fm.tags : [],
+                fm.is_favorite ?? false,
+                fm.created_at  ?? new Date().toISOString(),
+              ],
+            )
+            summary.commands.created++
+          } else {
+            summary.commands.created++
+          }
+        }
+      }
+
+      if (client) {
+        await client.query('COMMIT')
+        client.release()
+      }
+    } catch (err) {
+      if (client) {
+        await client.query('ROLLBACK')
+        client.release()
+      }
+      throw err
+    }
+
+    res.json({ data: { dry_run: isDryRun, summary } })
+  } catch (err) {
+    serverError(res, err)
   }
 })
 

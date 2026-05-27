@@ -198,6 +198,94 @@ Rules:
   }
 })
 
+// ── POST /api/releases/draft ──────────────────────────────────────────────────
+// Must come before /:id to avoid param collision.
+
+const DraftBody = z.object({
+  projectId: z.string().min(1),
+  from:      z.string().min(1),
+  to:        z.string().min(1),
+  issueIds:  z.array(z.string()).optional(),
+})
+
+router.post('/draft', async (req, res) => {
+  const parsed = DraftBody.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
+
+  const { projectId, from, to, issueIds } = parsed.data
+
+  try {
+    let issueRows: Array<{ title: string; resolution: string; tags: string[] }>
+    if (issueIds && issueIds.length > 0) {
+      const { rows } = await pool.query(
+        `SELECT title, resolution, tags FROM issues WHERE id = ANY($1::text[])`,
+        [issueIds]
+      )
+      issueRows = rows
+    } else {
+      const { rows } = await pool.query(
+        `SELECT title, resolution, tags FROM issues
+         WHERE project_id = $1 AND status = 'resolved'
+           AND resolved_at >= $2 AND resolved_at <= $3`,
+        [projectId, from, to]
+      )
+      issueRows = rows
+    }
+
+    if (!issueRows.length) {
+      return res.status(422).json({ error: 'No resolved issues found in the given range' })
+    }
+
+    const issueList = issueRows
+      .map(i => `- ${i.title}${i.resolution ? ` (Resolution: ${i.resolution})` : ''}`)
+      .join('\n')
+
+    const prompt = `Draft release notes based on these resolved issues:
+
+${issueList}
+
+Return ONLY a JSON object with this exact structure (no markdown, no explanation):
+{
+  "features": ["user-facing description of new feature or improvement"],
+  "fixes": ["user-facing description of bug fix"],
+  "breaking_changes": ["description of any breaking change"],
+  "notes": "1-2 sentence overall summary of this release"
+}
+
+Rules:
+- features: resolved issues that added functionality or improvements
+- fixes: resolved issues that fixed bugs, errors, or problems
+- breaking_changes: anything that changes existing behavior developers rely on
+- Return empty arrays for categories with no items`
+
+    const raw = await aiChat(prompt, 'You are a technical writer drafting release notes from resolved issues. Return only valid JSON.')
+
+    const match = raw.match(/\{[\s\S]*\}/)
+    if (!match) throw new Error('AI returned no JSON object')
+
+    const ai = JSON.parse(match[0]) as {
+      features: string[]; fixes: string[]; breaking_changes: string[]; notes: string
+    }
+
+    const today = new Date().toISOString().split('T')[0]
+    res.json({
+      data: {
+        project_id:       projectId,
+        version:          '',
+        date:             today,
+        type:             'patch' as const,
+        features:         ai.features ?? [],
+        fixes:            ai.fixes ?? [],
+        breaking_changes: ai.breaking_changes ?? [],
+        notes:            ai.notes ?? '',
+        linked_issues:    issueIds ?? [],
+      }
+    })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
 // ── GET /api/releases ────────────────────────────────────────────────────────
 
 router.get('/', async (req, res) => {

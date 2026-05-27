@@ -209,6 +209,7 @@ router.post('/:id/explain', async (req, res) => {
       `Explain what this ${cmd.language} command does:\n\n\`\`\`${cmd.language}\n${cmd.command}\n\`\`\``,
       'You are a technical assistant that explains commands and code snippets clearly and concisely. Use Markdown for formatting. Cover what it does, what each flag or argument means, and when you would use it. Keep it under 200 words.'
     )
+    await pool.query('UPDATE commands SET explanation = $2 WHERE id = $1', [req.params.id, explanation])
     res.json({ data: { explanation } })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })

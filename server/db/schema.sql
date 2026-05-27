@@ -342,3 +342,11 @@ CREATE TABLE IF NOT EXISTS app_settings (
 INSERT INTO app_settings (key, value)
 VALUES ('claude_scan_root', '{"scan_root": null}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO app_settings (key, value)
+VALUES ('backup_settings', '{"path": null, "schedule": "off", "last_backup_at": null}'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
+-- Phase 23: AI Enhancements — persistent explanation and summary fields
+ALTER TABLE commands ADD COLUMN IF NOT EXISTS explanation TEXT;
+ALTER TABLE issues   ADD COLUMN IF NOT EXISTS summary     TEXT;

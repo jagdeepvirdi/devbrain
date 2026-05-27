@@ -60,7 +60,7 @@ const DEVBRAIN_COMMANDS = [
     title: 'Start Dev Client (frontend)',
     command: 'cd client && npm run dev',
     language: 'bash',
-    description: 'Start the Vite React frontend (auto-assigns port 5173+).',
+    description: 'Start the Vite React frontend (port 5174).',
     tags: ['dev', 'client', 'frontend', 'vite'],
     is_favorite: true,
   },
