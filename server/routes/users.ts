@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import bcrypt     from 'bcryptjs'
+import crypto     from 'node:crypto'
 import { z }      from 'zod'
 import { pool }   from '../db/pool.js'
 import { requireRole } from '../middleware/auth.js'
@@ -16,7 +17,7 @@ router.use(requireRole('admin'))
 router.get('/', async (_req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, username, email, role, ldap_dn IS NOT NULL AS is_ldap, created_at
+      `SELECT id, username, email, role, is_active, ldap_dn IS NOT NULL AS is_ldap, created_at
        FROM users ORDER BY created_at ASC`,
     )
     res.json({ data: rows })
@@ -65,11 +66,12 @@ router.post('/', async (req, res) => {
 const UpdateBody = z.object({
   email:         z.string().email().optional(),
   role:          z.enum(['admin', 'member', 'viewer']).optional(),
+  is_active:     z.boolean().optional(),
   password:      z.string().min(6).max(128).optional(),
   adminPassword: z.string().optional(),  // required when resetting another user's password
 })
 
-const USER_UPDATABLE_COLS = new Set(['email', 'role', 'password_hash'])
+const USER_UPDATABLE_COLS = new Set(['email', 'role', 'is_active', 'password_hash'])
 
 router.put('/:id', async (req, res) => {
   const parsed = UpdateBody.safeParse(req.body)
@@ -100,9 +102,10 @@ router.put('/:id', async (req, res) => {
 
   // Build update map using explicit allowlist
   const updateMap: Record<string, unknown> = {}
-  if (email    !== undefined) updateMap.email         = email
-  if (role     !== undefined) updateMap.role          = role
-  if (password !== undefined) updateMap.password_hash = await bcrypt.hash(password, 10)
+  if (email     !== undefined) updateMap.email         = email
+  if (role      !== undefined) updateMap.role          = role
+  if (is_active !== undefined) updateMap.is_active     = is_active
+  if (password  !== undefined) updateMap.password_hash = await bcrypt.hash(password, 10)
 
   const cols = Object.keys(updateMap).filter(k => USER_UPDATABLE_COLS.has(k))
   if (!cols.length) { res.status(400).json({ error: 'Nothing to update' }); return }
@@ -153,6 +156,64 @@ router.get('/me/projects', requireRole('viewer'), async (req, res) => {
       [req.user!.id],
     )
     res.json({ data: rows })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── Invites ───────────────────────────────────────────────────────────────
+
+router.get('/invites', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, email, role, expires_at, created_at FROM user_invites
+       WHERE expires_at > now()
+       ORDER BY created_at DESC`
+    )
+    res.json({ data: rows })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+const InviteBody = z.object({
+  email: z.string().email(),
+  role:  z.enum(['admin', 'member', 'viewer']).default('member'),
+})
+
+router.post('/invite', async (req, res) => {
+  const parsed = InviteBody.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
+
+  const token = crypto.randomBytes(32).toString('hex')
+  const hash  = crypto.createHash('sha256').update(token).digest('hex')
+  const expires = new Date(Date.now() + 48 * 60 * 60 * 1000) // 48 hours
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO user_invites (email, role, token_hash, expires_at, created_by)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (email) DO UPDATE SET
+         role = EXCLUDED.role,
+         token_hash = EXCLUDED.token_hash,
+         expires_at = EXCLUDED.expires_at,
+         created_at = now()
+       RETURNING id, email, role, expires_at`,
+      [parsed.data.email, parsed.data.role, hash, expires, req.user!.id]
+    )
+    
+    // In a real app, we'd send an email here.
+    // For DevBrain, we'll return the token so the admin can copy it.
+    res.status(201).json({ data: { ...rows[0], token } })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+router.delete('/invites/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM user_invites WHERE id = $1', [req.params.id])
+    res.json({ data: { ok: true } })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
   }

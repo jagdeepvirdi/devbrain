@@ -44,7 +44,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 // ── Auth ──────────────────────────────────────────────────────────────────
 
-export type AuthUser = { id: string; username: string; role: 'admin' | 'editor' | 'viewer' }
+export type AuthUser = { id: string; username: string; role: 'admin' | 'member' | 'viewer' }
 
 const USER_KEY = 'devbrain_user'
 export function getCachedUser(): AuthUser | null {
@@ -67,12 +67,12 @@ export const authApi = {
     return { devMode: json.data!.devMode, user: json.data!.user }
   },
 
-  register: async (username: string, password: string, role?: string): Promise<{ user: AuthUser }> => {
+  register: async (username: string, password: string, role?: string, token?: string, email?: string): Promise<{ user: AuthUser }> => {
     const res = await fetch(`${BASE}/auth/register`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password, role }),
+      body: JSON.stringify({ username, password, role, token, email }),
     })
     const json = await res.json() as { data?: { user: AuthUser }; error?: string }
     if (!res.ok) throw new Error(json.error ?? 'Registration failed')
@@ -103,19 +103,29 @@ export type User = {
   id:          string
   username:    string
   email:       string | null
-  role:        'admin' | 'editor' | 'viewer'
+  role:        'admin' | 'member' | 'viewer'
+  is_active:   boolean
   is_ldap:     boolean
   created_at:  string
 }
 
-export type UserInput = Pick<User, 'username' | 'role'> & { password: string; email?: string }
+export type UserInput = Pick<User, 'username' | 'role' | 'email'> & { password?: string; is_active?: boolean }
+
+export type Invite = {
+  id:         string
+  email:      string
+  role:       'admin' | 'member' | 'viewer'
+  expires_at: string
+  created_at: string
+  token?:     string // Only present when just created
+}
 
 export type ProjectMember = {
   id:          string
   username:    string
   email:       string | null
   global_role: string
-  member_role: 'admin' | 'editor' | 'viewer'
+  member_role: 'admin' | 'member' | 'viewer'
   added_at:    string
 }
 
@@ -125,6 +135,11 @@ export const usersApi = {
   update: (id: string, body: Partial<UserInput> & { password?: string }) =>
     request<User>(`/users/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   remove: (id: string)                    => request<{ deleted: { id: string; username: string } }>(`/users/${id}`, { method: 'DELETE' }),
+
+  listInvites:   () => request<Invite[]>('/users/invites'),
+  createInvite: (body: { email: string; role: string }) => request<Invite & { token: string }>('/users/invite', { method: 'POST', body: JSON.stringify(body) }),
+  removeInvite: (id: string) => request<{ ok: boolean }>(`/users/invites/${id}`, { method: 'DELETE' }),
+
   listProjectMembers: (projectId: string) => request<ProjectMember[]>(`/projects/${projectId}/members`),
   addProjectMember:   (projectId: string, userId: string, role: string) =>
     request<ProjectMember>(`/projects/${projectId}/members`, { method: 'POST', body: JSON.stringify({ user_id: userId, role }) }),

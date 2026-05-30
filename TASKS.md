@@ -118,7 +118,7 @@
 ### Users & Roles
 - [x] Add `role TEXT` column (`'admin' | 'member' | 'viewer'`) to `users` table
 - [x] Enforce role in `requireAuth` middleware: viewers — GET only; members — create/edit; admins — full access including user management
-- [ ] Settings: User Management section — list users with role badge; invite by email (one-time token); deactivate / reactivate; admin password reset
+- [x] Settings: User Management section — list users with role badge; invite by email (one-time token); deactivate / reactivate; admin password reset
 
 ### LDAP Configuration
 - [ ] Settings: LDAP section — host, port, base DN, bind DN, bind password (stored encrypted); "Test connection" button

@@ -1,6 +1,7 @@
 import { Router }     from 'express'
 import jwt             from 'jsonwebtoken'
 import bcrypt          from 'bcryptjs'
+import crypto          from 'node:crypto'
 import rateLimit       from 'express-rate-limit'
 import { z }           from 'zod'
 import { pool }        from '../db/pool.js'
@@ -96,13 +97,15 @@ router.post('/login', loginLimiter, async (req, res) => {
   const uname = username.trim()
 
   const { rows: userRows } = await pool.query<{
-    id: string; username: string; role: string; password_hash: string | null
-  }>('SELECT id, username, role, password_hash FROM users WHERE username = $1', [uname])
+    id: string; username: string; role: string; is_active: boolean; password_hash: string | null
+  }>('SELECT id, username, role, is_active, password_hash FROM users WHERE username = $1', [uname])
 
   if (userRows.length && userRows[0].password_hash) {
-    const ok = await bcrypt.compare(password, userRows[0].password_hash)
+    const u = userRows[0]
+    if (!u.is_active) { res.status(403).json({ error: 'Account is deactivated' }); return }
+
+    const ok = await bcrypt.compare(password, u.password_hash)
     if (!ok) { res.status(401).json({ error: 'Invalid credentials' }); return }
-    const u     = userRows[0]
     const token = signToken(u.id, u.username, u.role)
     res.cookie('devbrain_token', token, COOKIE_OPTS)
     res.json({ data: { token, devMode: false, user: { id: u.id, username: u.username, role: u.role } } })
@@ -147,6 +150,7 @@ const RegisterBody = z.object({
   password: z.string().min(6).max(128),
   email:    z.string().email().optional(),
   role:     z.enum(['admin', 'member', 'viewer']).default('member'),
+  token:    z.string().optional(),
 })
 
 const JWT_VERIFY_OPTS: jwt.VerifyOptions = {
@@ -158,22 +162,41 @@ router.post('/register', async (req, res) => {
   const { rows: countRows } = await pool.query<{ n: number }>('SELECT COUNT(*)::int AS n FROM users')
   const firstRun = countRows[0].n === 0
 
-  if (!firstRun) {
-    const header = req.headers.authorization
-    if (!header?.startsWith('Bearer ')) { res.status(401).json({ error: 'Unauthorized' }); return }
-    try {
-      const payload = jwt.verify(header.slice(7), env.JWT_SECRET, JWT_VERIFY_OPTS) as Record<string, unknown>
-      if (payload.role !== 'admin') { res.status(403).json({ error: 'Admin role required' }); return }
-    } catch {
-      res.status(401).json({ error: 'Invalid token' })
-      return
-    }
-  }
-
   const parsed = RegisterBody.safeParse(req.body)
   if (!parsed.success) { res.status(400).json({ error: 'Validation error', issues: parsed.error.issues }); return }
 
-  const { username, password, email, role } = parsed.data
+  const { username, password, email, role, token } = parsed.data
+  let finalRole  = firstRun ? 'admin' : role
+  let finalEmail = email ?? null
+
+  if (!firstRun) {
+    if (token) {
+      // Validate invite token
+      const hash = crypto.createHash('sha256').update(token).digest('hex')
+      const { rows: inviteRows } = await pool.query(
+        'SELECT email, role FROM user_invites WHERE token_hash = $1 AND expires_at > now()',
+        [hash]
+      )
+      if (!inviteRows.length) { res.status(401).json({ error: 'Invalid or expired invite token' }); return }
+      
+      finalRole  = inviteRows[0].role
+      finalEmail = inviteRows[0].email
+      
+      // Cleanup invite
+      await pool.query('DELETE FROM user_invites WHERE token_hash = $1', [hash])
+    } else {
+      // Standard admin registration (admin must be authed)
+      const header = req.headers.authorization
+      if (!header?.startsWith('Bearer ')) { res.status(401).json({ error: 'Unauthorized' }); return }
+      try {
+        const payload = jwt.verify(header.slice(7), env.JWT_SECRET, JWT_VERIFY_OPTS) as Record<string, unknown>
+        if (payload.role !== 'admin') { res.status(403).json({ error: 'Admin role required' }); return }
+      } catch {
+        res.status(401).json({ error: 'Invalid session' }); return
+      }
+    }
+  }
+
   const hash = await bcrypt.hash(password, 10)
 
   try {
@@ -181,12 +204,12 @@ router.post('/register', async (req, res) => {
       `INSERT INTO users (username, email, password_hash, role)
        VALUES ($1, $2, $3, $4)
        RETURNING id, username, role`,
-      [username, email ?? null, hash, firstRun ? 'admin' : role],
+      [username, finalEmail, hash, finalRole],
     )
     const u     = rows[0]
-    const token = signToken(u.id, u.username, u.role)
-    if (firstRun) res.cookie('devbrain_token', token, COOKIE_OPTS)
-    res.status(201).json({ data: { token, user: { id: u.id, username: u.username, role: u.role } } })
+    const signedToken = signToken(u.id, u.username, u.role)
+    if (firstRun || token) res.cookie('devbrain_token', signedToken, COOKIE_OPTS)
+    res.status(201).json({ data: { token: signedToken, user: { id: u.id, username: u.username, role: u.role } } })
   } catch (err: unknown) {
     const msg = (err as Error).message
     if (msg.includes('unique') || msg.includes('duplicate')) {
