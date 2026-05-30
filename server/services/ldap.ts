@@ -1,11 +1,17 @@
 /**
  * Optional LDAP authentication service.
- * Activated when LDAP_URL is set in the environment.
- * ldapjs is now a declared dependency; this module is always importable.
+ * Supports enterprise directory integration.
  */
 
 import ldap from 'ldapjs'
-import { env } from '../lib/env.js'
+
+export interface LdapConfig {
+  url:         string
+  bindDn:      string
+  bindPassword: string
+  searchBase:  string
+  userAttr:    string
+}
 
 export interface LdapUser {
   username: string
@@ -13,48 +19,75 @@ export interface LdapUser {
   dn:       string
 }
 
-export function ldapEnabled(): boolean {
-  return !!env.LDAP_URL
-}
-
-export async function ldapAuth(username: string, password: string): Promise<LdapUser | null> {
-  if (!env.LDAP_URL) return null
+/**
+ * Authenticates a user against an LDAP directory.
+ * Returns LdapUser on success, null on failure.
+ */
+export async function ldapAuth(username: string, password: string, config: LdapConfig): Promise<LdapUser | null> {
+  if (!config.url) return null
 
   return new Promise<LdapUser | null>((resolve) => {
-    const client = ldap.createClient({ url: env.LDAP_URL! })
+    let client: ldap.Client
+    try {
+      client = ldap.createClient({ url: config.url })
+    } catch (err) {
+      console.error('LDAP client creation failed:', err)
+      return resolve(null)
+    }
 
-    client.on('error', () => { client.destroy(); resolve(null) })
+    client.on('error', (err) => { 
+      console.error('LDAP client error:', err.message)
+      client.destroy()
+      resolve(null) 
+    })
 
-    const bindDn  = env.LDAP_BIND_DN       ?? ''
-    const bindPwd = env.LDAP_BIND_PASSWORD  ?? ''
+    client.bind(config.bindDn, config.bindPassword, (err) => {
+      if (err) { 
+        console.error('LDAP bind failed:', err.message)
+        client.destroy()
+        resolve(null)
+        return 
+      }
 
-    client.bind(bindDn, bindPwd, (err) => {
-      if (err) { client.destroy(); resolve(null); return }
+      const searchFilter = `(${config.userAttr ?? 'uid'}=${username})`
 
-      const searchBase   = env.LDAP_SEARCH_BASE ?? ''
-      const userAttr     = env.LDAP_USER_ATTR   ?? 'uid'
-      const searchFilter = `(${userAttr}=${username})`
-
-      client.search(searchBase, { filter: searchFilter, scope: 'sub', attributes: ['dn', 'mail', userAttr] }, (searchErr, res) => {
-        if (searchErr) { client.destroy(); resolve(null); return }
+      client.search(config.searchBase, { filter: searchFilter, scope: 'sub', attributes: ['dn', 'mail', config.userAttr] }, (searchErr, res) => {
+        if (searchErr) { 
+          console.error('LDAP search failed:', searchErr.message)
+          client.destroy()
+          resolve(null)
+          return 
+        }
 
         let userDn: string | null = null
         let email:  string | null = null
 
         res.on('searchEntry', (entry) => {
           userDn = entry.objectName as string
-          const mailAttr = entry.attributes.find(a => a.type === 'mail')
+          const mailAttr = (entry as any).attributes.find((a: any) => a.type === 'mail')
           email = mailAttr ? (mailAttr.values[0] ?? null) : null
         })
 
-        res.on('error', () => { client.destroy(); resolve(null) })
+        res.on('error', (err) => { 
+          console.error('LDAP search result error:', err.message)
+          client.destroy()
+          resolve(null) 
+        })
 
         res.on('end', () => {
-          if (!userDn) { client.destroy(); resolve(null); return }
+          if (!userDn) { 
+            client.destroy()
+            resolve(null)
+            return 
+          }
 
           client.bind(userDn, password, (bindErr) => {
             client.destroy()
-            if (bindErr) { resolve(null); return }
+            if (bindErr) { 
+              console.warn('LDAP user bind failed:', bindErr.message)
+              resolve(null)
+              return 
+            }
             resolve({ username, email, dn: userDn! })
           })
         })

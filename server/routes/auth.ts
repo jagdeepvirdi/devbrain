@@ -6,7 +6,8 @@ import rateLimit       from 'express-rate-limit'
 import { z }           from 'zod'
 import { pool }        from '../db/pool.js'
 import { env }         from '../lib/env.js'
-import { ldapAuth }    from '../services/ldap.js'
+import { decrypt }     from '../services/crypto.js'
+import { ldapAuth, type LdapConfig } from '../services/ldap.js'
 import { requireAuth } from '../middleware/auth.js'
 import { logAudit }    from '../services/audit.js'
 import { serverError } from '../lib/errors.js'
@@ -115,22 +116,37 @@ router.post('/login', loginLimiter, async (req, res) => {
   // User not found or LDAP-only — run dummy bcrypt to equalize response time
   await bcrypt.compare(password, DUMMY_HASH)
 
-  // Try LDAP if configured
-  const ldapUser = await ldapAuth(uname, password)
-  if (ldapUser) {
-    const { rows: ldapRows } = await pool.query<{ id: string; role: string }>(
-      `INSERT INTO users (username, email, ldap_dn, role)
-       VALUES ($1, $2, $3, 'member')
-       ON CONFLICT (username) DO UPDATE
-         SET email = EXCLUDED.email, ldap_dn = EXCLUDED.ldap_dn
-       RETURNING id, username, role`,
-      [ldapUser.username, ldapUser.email, ldapUser.dn],
-    )
-    const u     = ldapRows[0]
-    const token = signToken(u.id, ldapUser.username, u.role)
-    res.cookie('devbrain_token', token, COOKIE_OPTS)
-    res.json({ data: { token, devMode: false, user: { id: u.id, username: ldapUser.username, role: u.role } } })
-    return
+  // Try LDAP if configured in database
+  try {
+    const { rows: ldapSettings } = await pool.query(`SELECT value FROM app_settings WHERE key = 'ldap_settings'`)
+    if (ldapSettings.length) {
+      const cfg = ldapSettings[0].value as LdapConfig & { bindPasswordEnc?: string }
+      const config: LdapConfig = {
+        ...cfg,
+        bindPassword: cfg.bindPasswordEnc ? decrypt(cfg.bindPasswordEnc) : ''
+      }
+
+      const ldapUser = await ldapAuth(uname, password, config)
+      if (ldapUser) {
+        const { rows: ldapRows } = await pool.query<{ id: string; role: string; is_active: boolean }>(
+          `INSERT INTO users (username, email, ldap_dn, role)
+           VALUES ($1, $2, $3, 'member')
+           ON CONFLICT (username) DO UPDATE
+             SET email = EXCLUDED.email, ldap_dn = EXCLUDED.ldap_dn
+           RETURNING id, username, role, is_active`,
+          [ldapUser.username, ldapUser.email, ldapUser.dn],
+        )
+        const u = ldapRows[0]
+        if (!u.is_active) { res.status(403).json({ error: 'Account is deactivated' }); return }
+
+        const token = signToken(u.id, ldapUser.username, u.role)
+        res.cookie('devbrain_token', token, COOKIE_OPTS)
+        res.json({ data: { token, devMode: false, user: { id: u.id, username: ldapUser.username, role: u.role } } })
+        return
+      }
+    }
+  } catch (err) {
+    console.error('LDAP login check failed:', err)
   }
 
   res.status(401).json({ error: 'Invalid credentials' })

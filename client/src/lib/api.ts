@@ -1021,13 +1021,28 @@ export type ImportSummary = {
 }
 
 export type BackupConfig = {
-  path:           string | null
-  schedule:       'daily' | 'weekly' | 'off'
-  last_backup_at: string | null
+  path:            string | null
+  schedule:        'daily' | 'weekly' | 'off'
+  last_backup_at:  string | null
 }
+
+export type LdapSettings = {
+  url:         string
+  bindDn:      string
+  searchBase:  string
+  userAttr:    string
+  hasPassword: boolean
+}
+
 
 export const settingsApi = {
   get: () => request<SettingsData>('/settings'),
+
+  getLdapSettings: () => request<LdapSettings | null>('/settings/ldap'),
+  saveLdapSettings: (body: Partial<LdapSettings> & { bindPassword?: string }) =>
+    request<{ ok: boolean }>('/settings/ldap', { method: 'PUT', body: JSON.stringify(body) }),
+  testLdap: (body: Partial<LdapSettings> & { bindPassword?: string; username: string; password: string }) =>
+    request<{ ok: boolean; user: object }>('/settings/ldap/test', { method: 'POST', body: JSON.stringify(body) }),
 
   getClaudeSettings: () =>
     request<{ scan_root: string | null }>('/settings/claude'),

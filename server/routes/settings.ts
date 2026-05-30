@@ -10,10 +10,96 @@ import { env } from '../lib/env.js'
 import { serverError } from '../lib/errors.js'
 import { triggerBackupNow } from '../services/backup.js'
 import { requireRole } from '../middleware/auth.js'
+import { encrypt, decrypt } from '../services/crypto.js'
+import { ldapAuth, type LdapConfig } from '../services/ldap.js'
 
 const upload = multer({ dest: path.join(os.tmpdir(), 'devbrain-uploads'), limits: { fileSize: 200 * 1024 * 1024 } })
 
 const router = Router()
+
+// ── GET /api/settings/ldap ────────────────────────────────────────────────
+
+router.get('/ldap', requireRole('admin'), async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'ldap_settings'`)
+    const cfg = rows[0]?.value as (LdapConfig & { bindPasswordEnc?: string }) | undefined
+    if (!cfg) return res.json({ data: null })
+    
+    res.json({ data: { 
+      url:        cfg.url, 
+      bindDn:     cfg.bindDn, 
+      searchBase: cfg.searchBase, 
+      userAttr:   cfg.userAttr,
+      hasPassword: !!cfg.bindPasswordEnc 
+    } })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── PUT /api/settings/ldap ────────────────────────────────────────────────
+
+const LdapBody = z.object({
+  url:          z.string().min(1),
+  bindDn:       z.string().min(1),
+  bindPassword: z.string().optional(),
+  searchBase:   z.string().min(1),
+  userAttr:     z.string().min(1).default('uid'),
+})
+
+router.put('/ldap', requireRole('admin'), async (req, res) => {
+  const parsed = LdapBody.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
+
+  try {
+    const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'ldap_settings'`)
+    const existing = (rows[0]?.value ?? {}) as LdapConfig & { bindPasswordEnc?: string }
+    
+    const value = {
+      ...parsed.data,
+      bindPasswordEnc: parsed.data.bindPassword ? encrypt(parsed.data.bindPassword) : existing.bindPasswordEnc
+    }
+    delete (value as any).bindPassword
+
+    await pool.query(
+      `INSERT INTO app_settings (key, value) VALUES ('ldap_settings', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [JSON.stringify(value)],
+    )
+    res.json({ data: { ok: true } })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── POST /api/settings/ldap/test ──────────────────────────────────────────
+
+router.post('/ldap/test', requireRole('admin'), async (req, res) => {
+  const { username, password, ...config } = req.body as any
+  if (!username || !password) return res.status(400).json({ error: 'Test username and password required' })
+
+  try {
+    const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'ldap_settings'`)
+    const existing = (rows[0]?.value ?? {}) as LdapConfig & { bindPasswordEnc?: string }
+
+    const testConfig: LdapConfig = {
+      url:          config.url        ?? existing.url,
+      bindDn:       config.bindDn     ?? existing.bindDn,
+      searchBase:   config.searchBase ?? existing.searchBase,
+      userAttr:     config.userAttr   ?? existing.userAttr ?? 'uid',
+      bindPassword: config.bindPassword ?? (existing.bindPasswordEnc ? decrypt(existing.bindPasswordEnc) : ''),
+    }
+
+    const user = await ldapAuth(username, password, testConfig)
+    if (user) {
+      res.json({ data: { ok: true, user } })
+    } else {
+      res.status(401).json({ error: 'LDAP authentication failed with these settings' })
+    }
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
 
 // GET /api/settings
 router.get('/', (_req, res) => {

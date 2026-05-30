@@ -121,8 +121,8 @@
 - [x] Settings: User Management section — list users with role badge; invite by email (one-time token); deactivate / reactivate; admin password reset
 
 ### LDAP Configuration
-- [ ] Settings: LDAP section — host, port, base DN, bind DN, bind password (stored encrypted); "Test connection" button
-- [ ] On login: if LDAP configured, try LDAP bind first; fall back to local bcrypt; auto-provision LDAP user on first successful bind
+- [x] Settings: LDAP section — host, port, base DN, bind DN, bind password (stored encrypted); "Test connection" button
+- [x] On login: if LDAP configured, try LDAP bind first; fall back to local bcrypt; auto-provision LDAP user on first successful bind
 
 ### Per-project Access Control
 - [x] Add `project_members` table: `(project_id UUID, user_id UUID, role TEXT)`
