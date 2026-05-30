@@ -9,6 +9,7 @@ import { pool } from '../db/pool.js'
 import { env } from '../lib/env.js'
 import { serverError } from '../lib/errors.js'
 import { triggerBackupNow } from '../services/backup.js'
+import { requireRole } from '../middleware/auth.js'
 
 const upload = multer({ dest: path.join(os.tmpdir(), 'devbrain-uploads'), limits: { fileSize: 200 * 1024 * 1024 } })
 
@@ -52,7 +53,7 @@ const ClaudeSettingsBody = z.object({
   scan_root: z.string().min(1).nullable(),
 })
 
-router.put('/claude', async (req, res) => {
+router.put('/claude', requireRole('admin'), async (req, res) => {
   const parsed = ClaudeSettingsBody.safeParse(req.body)
   if (!parsed.success) {
     return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
@@ -109,7 +110,7 @@ router.get('/backup', async (_req, res) => {
 
 // ── POST /api/settings/import ────────────────────────────────────────────────
 
-router.post('/import', async (req, res) => {
+router.post('/import', requireRole('admin'), async (req, res) => {
   const isDryRun = req.query.dry_run === 'true'
   const backup   = req.body
 
@@ -278,7 +279,7 @@ const BackupConfigBody = z.object({
   schedule: z.enum(['daily', 'weekly', 'off']),
 })
 
-router.put('/backup-config', async (req, res) => {
+router.put('/backup-config', requireRole('admin'), async (req, res) => {
   const parsed = BackupConfigBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
   try {
@@ -299,7 +300,7 @@ router.put('/backup-config', async (req, res) => {
 
 // ── POST /api/settings/backup-now ────────────────────────────────────────────
 
-router.post('/backup-now', async (_req, res) => {
+router.post('/backup-now', requireRole('admin'), async (_req, res) => {
   try {
     const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'backup_settings'`)
     const cfg = rows[0]?.value as { path: string | null } | undefined
@@ -313,7 +314,7 @@ router.post('/backup-now', async (_req, res) => {
 
 // ── POST /api/settings/zip-import ────────────────────────────────────────────
 
-router.post('/zip-import', upload.single('file'), async (req, res) => {
+router.post('/zip-import', requireRole('admin'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   const isDryRun = req.query.dry_run === 'true'
 

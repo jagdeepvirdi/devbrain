@@ -69,7 +69,7 @@ router.delete('/:id', requireRole('admin'), async (req, res) => {
 
 // ── POST /api/integrations/:id/sync ───────────────────────────────────────
 
-router.post('/:id/sync', requireRole('editor'), async (req, res) => {
+router.post('/:id/sync', requireRole('member'), async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM integrations WHERE id = $1', [req.params.id])
     if (!rows.length) return res.status(404).json({ error: 'Integration not found' })

@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { z }      from 'zod'
 import { pool }   from '../db/pool.js'
+import { requireRole } from '../middleware/auth.js'
 
 const router = Router()
 
@@ -79,7 +80,7 @@ router.get('/:id', async (req, res) => {
 
 // ── POST /api/runbooks ────────────────────────────────────────────────────
 
-router.post('/', async (req, res) => {
+router.post('/', requireRole('member'), async (req, res) => {
   const parsed = RunbookBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
@@ -100,7 +101,7 @@ router.post('/', async (req, res) => {
 
 // ── PUT /api/runbooks/:id ─────────────────────────────────────────────────
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', requireRole('member'), async (req, res) => {
   const parsed = RunbookBody.partial().safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
@@ -130,7 +131,7 @@ router.put('/:id', async (req, res) => {
 
 // ── DELETE /api/runbooks/:id ──────────────────────────────────────────────
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireRole('member'), async (req, res) => {
   try {
     const { rows } = await pool.query(
       'DELETE FROM runbooks WHERE id = $1 RETURNING id, title',
@@ -145,7 +146,7 @@ router.delete('/:id', async (req, res) => {
 
 // ── POST /api/runbooks/:id/use ────────────────────────────────────────────
 
-router.post('/:id/use', async (req, res) => {
+router.post('/:id/use', requireRole('member'), async (req, res) => {
   try {
     const { rows } = await pool.query(
       'UPDATE runbooks SET last_used_at = now() WHERE id = $1 RETURNING *',

@@ -4,6 +4,7 @@ import crypto      from 'crypto'
 import { pool }   from '../db/pool.js'
 import { aiChat, aiEmbed } from '../services/ai.js'
 import { buildSetClause }  from '../lib/db.js'
+import { requireRole } from '../middleware/auth.js'
 
 function embedIssueAsync(id: string, title: string, description: string): void {
   const text = [title, description].filter(Boolean).join('. ')
@@ -204,7 +205,7 @@ router.get('/:id', async (req, res) => {
 
 // ── POST /api/issues ──────────────────────────────────────────────────────
 
-router.post('/', async (req, res) => {
+router.post('/', requireRole('member'), async (req, res) => {
   const parsed = CreateBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
@@ -250,7 +251,7 @@ router.post('/', async (req, res) => {
 
 const ISSUE_UPDATABLE_COLS = new Set(['title', 'description', 'status', 'priority', 'project_id', 'tags', 'resolution', 'pr_url'])
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', requireRole('member'), async (req, res) => {
   const parsed = UpdateBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
@@ -326,7 +327,7 @@ router.put('/:id', async (req, res) => {
 
 // ── DELETE /api/issues/:id ────────────────────────────────────────────────
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireRole('member'), async (req, res) => {
   try {
     const { rows } = await pool.query(
       'DELETE FROM issues WHERE id = $1 RETURNING id, title',
@@ -341,7 +342,7 @@ router.delete('/:id', async (req, res) => {
 
 // ── POST /api/issues/:id/notes ────────────────────────────────────────────
 
-router.post('/:id/notes', async (req, res) => {
+router.post('/:id/notes', requireRole('member'), async (req, res) => {
   const parsed = NoteBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
@@ -367,7 +368,7 @@ router.post('/:id/notes', async (req, res) => {
 
 // ── DELETE /api/issues/:id/notes/:noteId ─────────────────────────────────
 
-router.delete('/:id/notes/:noteId', async (req, res) => {
+router.delete('/:id/notes/:noteId', requireRole('member'), async (req, res) => {
   try {
     const { rowCount } = await pool.query(
       'DELETE FROM issue_notes WHERE id = $1 AND issue_id = $2',
@@ -420,7 +421,7 @@ router.get('/:id/related-commands', async (req, res) => {
 
 // ── POST /api/issues/:id/commits — link a commit SHA ─────────────────────
 
-router.post('/:id/commits', async (req, res) => {
+router.post('/:id/commits', requireRole('member'), async (req, res) => {
   const { sha } = req.body as { sha?: string }
   if (!sha || !/^[0-9a-f]{4,40}$/i.test(sha)) {
     res.status(400).json({ error: 'sha must be a valid git SHA' }); return
@@ -444,7 +445,7 @@ router.post('/:id/commits', async (req, res) => {
 
 // ── DELETE /api/issues/:id/commits/:sha — unlink a commit ────────────────
 
-router.delete('/:id/commits/:sha', async (req, res) => {
+router.delete('/:id/commits/:sha', requireRole('member'), async (req, res) => {
   try {
     await pool.query(
       'DELETE FROM issue_commits WHERE issue_id = $1 AND sha = $2',
@@ -457,7 +458,7 @@ router.delete('/:id/commits/:sha', async (req, res) => {
 
 // ── POST /api/issues/:id/suggest-steps ───────────────────────────────────
 
-router.post('/:id/suggest-steps', async (req, res) => {
+router.post('/:id/suggest-steps', requireRole('member'), async (req, res) => {
   try {
     const { rows } = await pool.query(
       'SELECT title, description FROM issues WHERE id = $1',
@@ -534,7 +535,7 @@ router.get('/:id/related-docs', async (req, res) => {
 
 // ── POST /api/issues/:id/summarize ────────────────────────────────────────
 
-router.post('/:id/summarize', async (req, res) => {
+router.post('/:id/summarize', requireRole('member'), async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT ${ISSUE_COLS} FROM issues i ${ISSUE_JOINS} WHERE i.id = $1 GROUP BY i.id, p.name, p.color`,
@@ -576,7 +577,7 @@ Please provide a concise summary of:
 
 // ── POST /api/issues/:id/reembed ──────────────────────────────────────────
 
-router.post('/:id/reembed', async (req, res) => {
+router.post('/:id/reembed', requireRole('member'), async (req, res) => {
   const { id } = req.params
   try {
     const { rows } = await pool.query(
@@ -597,7 +598,7 @@ router.post('/:id/reembed', async (req, res) => {
 // Must come before /:id param routes — but all /:id routes are defined above,
 // so appending here is safe (Express matches routes in registration order).
 
-router.post('/suggest-tags', async (req, res) => {
+router.post('/suggest-tags', requireRole('member'), async (req, res) => {
   const { title, description } = req.body as { title?: string; description?: string }
   const text = [title, description].filter(Boolean).join(' ').trim()
   if (!text) return res.status(400).json({ error: 'title or description is required' })

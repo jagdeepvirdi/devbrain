@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { z }      from 'zod'
 import { pool }   from '../db/pool.js'
+import { requireRole } from '../middleware/auth.js'
 
 const router = Router()
 
@@ -78,7 +79,7 @@ router.get('/', async (req, res) => {
 // ── POST /api/tasks/import-md ─────────────────────────────────────────────
 // Must come before /:id routes.
 
-router.post('/import-md', async (req, res) => {
+router.post('/import-md', requireRole('member'), async (req, res) => {
   const { content, projectId } = req.body as { content?: string; projectId?: string }
   if (!content?.trim()) return res.status(400).json({ error: 'content is required' })
 
@@ -123,7 +124,7 @@ router.post('/import-md', async (req, res) => {
 
 // ── POST /api/tasks ───────────────────────────────────────────────────────
 
-router.post('/', async (req, res) => {
+router.post('/', requireRole('member'), async (req, res) => {
   const parsed = TaskBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
@@ -144,7 +145,7 @@ router.post('/', async (req, res) => {
 
 // ── PUT /api/tasks/:id ────────────────────────────────────────────────────
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', requireRole('member'), async (req, res) => {
   const parsed = TaskBody.partial().safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
@@ -178,7 +179,7 @@ router.put('/:id', async (req, res) => {
 
 // ── DELETE /api/tasks/:id ─────────────────────────────────────────────────
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireRole('member'), async (req, res) => {
   try {
     const { rows } = await pool.query(
       'DELETE FROM tasks WHERE id = $1 RETURNING id, title',

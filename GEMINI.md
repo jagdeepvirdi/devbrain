@@ -30,6 +30,10 @@
 - **Audit Logging**: Log all mutations (create/update/delete) and security-sensitive events (login/password change) using the `audit_events` system.
 - **Encryption**: sensitive external tokens (GitHub PATs, API keys) must be stored encrypted using AES-256-GCM in `server/services/crypto.ts`.
 
+### Users & Roles
+- **Roles**: `admin` (full access), `member` (create/edit), `viewer` (read-only).
+- **Enforcement**: Role check middleware must be applied to all mutating routes.
+
 ### Testing
 - **Test-Driven Development (TDD)**: New features should include unit tests.
 - **Testing Stack**: Use Vitest for server/client unit tests and Playwright for E2E tests.

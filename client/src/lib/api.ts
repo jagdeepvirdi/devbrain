@@ -159,6 +159,17 @@ export const auditApi = {
     const q = qs.toString()
     return request<Paged<AuditEvent>>(`/audit${q ? `?${q}` : ''}`)
   },
+  export: async () => {
+    const res = await fetch(`${BASE}/audit/export`, { credentials: 'include' })
+    if (!res.ok) throw new Error('Audit export failed')
+    const blob = await res.blob()
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `devbrain-audit-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
 }
 
 // ── Projects ──────────────────────────────────────────────────────────────

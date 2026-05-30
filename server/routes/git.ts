@@ -38,7 +38,7 @@ const RepoBody = z.object({
   github_pat: z.string().optional(),  // plaintext — stored encrypted
 })
 
-router.post('/:projectId/repo', requireRole('editor'), async (req, res) => {
+router.post('/:projectId/repo', requireRole('member'), async (req, res) => {
   const parsed = RepoBody.safeParse(req.body)
   if (!parsed.success) { res.status(400).json({ error: 'Validation error', issues: parsed.error.issues }); return }
 
@@ -201,7 +201,7 @@ const LinkBody = z.object({
   issueId: z.string().uuid(),
 })
 
-router.post('/:projectId/link', requireRole('editor'), async (req, res) => {
+router.post('/:projectId/link', requireRole('member'), async (req, res) => {
   const parsed = LinkBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
@@ -220,7 +220,7 @@ router.post('/:projectId/link', requireRole('editor'), async (req, res) => {
 
 // ── DELETE /api/git/:projectId/link/:sha — unlink a commit ────────────────
 
-router.delete('/:projectId/link/:sha', requireRole('editor'), async (req, res) => {
+router.delete('/:projectId/link/:sha', requireRole('member'), async (req, res) => {
   const { sha, projectId } = req.params
   const { issueId } = req.query as { issueId?: string }
   if (!issueId) return res.status(400).json({ error: 'issueId query param required' })

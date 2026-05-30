@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express'
 import jwt from 'jsonwebtoken'
 import { env } from '../lib/env.js'
 
-export type UserRole = 'admin' | 'editor' | 'viewer'
+export type UserRole = 'admin' | 'member' | 'viewer'
 
 export interface AuthUser {
   id:       string
@@ -16,7 +16,7 @@ declare global {
   }
 }
 
-const ROLE_RANK: Record<UserRole, number> = { viewer: 0, editor: 1, admin: 2 }
+const ROLE_RANK: Record<UserRole, number> = { viewer: 0, member: 1, admin: 2 }
 
 const JWT_VERIFY_OPTS: jwt.VerifyOptions = {
   issuer:   'devbrain',

@@ -67,7 +67,7 @@ router.get('/:id', async (req, res) => {
 
 // ── POST /api/projects ────────────────────────────────────────────────────
 
-router.post('/', async (req, res) => {
+router.post('/', requireRole('member'), async (req, res) => {
   const parsed = ProjectBody.safeParse(req.body)
   if (!parsed.success) {
     return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
@@ -94,7 +94,7 @@ router.post('/', async (req, res) => {
 
 // ── PUT /api/projects/:id ─────────────────────────────────────────────────
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', requireRole('member'), async (req, res) => {
   const parsed = ProjectBody.partial().safeParse(req.body)
   if (!parsed.success) {
     return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
@@ -135,7 +135,7 @@ const LinkBody = z.object({
   fs_path: z.string().min(1).nullable(),
 })
 
-router.put('/:id/link', async (req, res) => {
+router.put('/:id/link', requireRole('member'), async (req, res) => {
   const parsed = LinkBody.safeParse(req.body)
   if (!parsed.success) {
     return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
@@ -172,7 +172,7 @@ router.put('/:id/link', async (req, res) => {
 
 // ── DELETE /api/projects/:id ──────────────────────────────────────────────
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireRole('admin'), async (req, res) => {
   try {
     const { rows } = await pool.query(
       `DELETE FROM projects WHERE id = $1 RETURNING id, name`,
@@ -223,7 +223,7 @@ router.get('/:id/members', async (req, res) => {
 
 const MemberBody = z.object({
   user_id: z.string().min(1),
-  role:    z.enum(['admin', 'editor', 'viewer']).default('editor'),
+  role:    z.enum(['admin', 'member', 'viewer']).default('member'),
 })
 
 // POST /api/projects/:id/members
@@ -248,8 +248,8 @@ router.post('/:id/members', requireRole('admin'), async (req, res) => {
 // PUT /api/projects/:id/members/:userId
 router.put('/:id/members/:userId', requireRole('admin'), async (req, res) => {
   const { role } = req.body as { role?: string }
-  if (!role || !['admin', 'editor', 'viewer'].includes(role)) {
-    res.status(400).json({ error: 'role must be admin | editor | viewer' }); return
+  if (!role || !['admin', 'member', 'viewer'].includes(role)) {
+    res.status(400).json({ error: 'role must be admin | member | viewer' }); return
   }
   try {
     const { rows } = await pool.query(

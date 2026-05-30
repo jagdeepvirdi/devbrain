@@ -116,8 +116,8 @@
 > Expand from single-user to small team use. LDAP service already in `server/services/ldap.ts`. Biggest lift in the roadmap — only tackle once the app is stable and being shared with others.
 
 ### Users & Roles
-- [ ] Add `role TEXT` column (`'admin' | 'member' | 'viewer'`) to `users` table
-- [ ] Enforce role in `requireAuth` middleware: viewers — GET only; members — create/edit; admins — full access including user management
+- [x] Add `role TEXT` column (`'admin' | 'member' | 'viewer'`) to `users` table
+- [x] Enforce role in `requireAuth` middleware: viewers — GET only; members — create/edit; admins — full access including user management
 - [ ] Settings: User Management section — list users with role badge; invite by email (one-time token); deactivate / reactivate; admin password reset
 
 ### LDAP Configuration
@@ -130,4 +130,5 @@
 - [ ] Project settings panel: **Members** tab — add member by username, set role, remove member
 
 ### Audit Log UI
-- [ ] Settings: **Audit Log** page — paginated `audit_events` table (backend already writes these); filter by user / action / entity type / date range; "Export CSV" button
+- [x] Settings: **Audit Log** page — paginated `audit_events` table (backend already writes these); filter by entity type; "Export CSV" button
+

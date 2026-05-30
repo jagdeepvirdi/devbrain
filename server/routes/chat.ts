@@ -2,6 +2,7 @@ import { Router }        from 'express'
 import { z }             from 'zod'
 import { aiEmbed, aiChatStream } from '../services/ai.js'
 import { searchChunks }          from '../services/embedder.js'
+import { requireRole } from '../middleware/auth.js'
 
 const router = Router()
 
@@ -14,7 +15,7 @@ const ChatBody = z.object({
 // ── POST /api/chat ────────────────────────────────────────────────────────
 // SSE stream: citations first, then text chunks, then [DONE]
 
-router.post('/', async (req, res) => {
+router.post('/', requireRole('viewer'), async (req, res) => {
   const parsed = ChatBody.safeParse(req.body)
   if (!parsed.success) {
     return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })

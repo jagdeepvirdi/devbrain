@@ -117,7 +117,7 @@ router.post('/login', loginLimiter, async (req, res) => {
   if (ldapUser) {
     const { rows: ldapRows } = await pool.query<{ id: string; role: string }>(
       `INSERT INTO users (username, email, ldap_dn, role)
-       VALUES ($1, $2, $3, 'editor')
+       VALUES ($1, $2, $3, 'member')
        ON CONFLICT (username) DO UPDATE
          SET email = EXCLUDED.email, ldap_dn = EXCLUDED.ldap_dn
        RETURNING id, username, role`,
@@ -146,7 +146,7 @@ const RegisterBody = z.object({
   username: z.string().min(2).max(64).trim(),
   password: z.string().min(6).max(128),
   email:    z.string().email().optional(),
-  role:     z.enum(['admin', 'editor', 'viewer']).default('editor'),
+  role:     z.enum(['admin', 'member', 'viewer']).default('member'),
 })
 
 const JWT_VERIFY_OPTS: jwt.VerifyOptions = {

@@ -31,7 +31,7 @@ const CreateBody = z.object({
   username: z.string().min(2).max(64).trim(),
   password: z.string().min(6).max(128),
   email:    z.string().email().optional(),
-  role:     z.enum(['admin', 'editor', 'viewer']).default('editor'),
+  role:     z.enum(['admin', 'member', 'viewer']).default('member'),
 })
 
 router.post('/', async (req, res) => {
@@ -64,7 +64,7 @@ router.post('/', async (req, res) => {
 
 const UpdateBody = z.object({
   email:         z.string().email().optional(),
-  role:          z.enum(['admin', 'editor', 'viewer']).optional(),
+  role:          z.enum(['admin', 'member', 'viewer']).optional(),
   password:      z.string().min(6).max(128).optional(),
   adminPassword: z.string().optional(),  // required when resetting another user's password
 })

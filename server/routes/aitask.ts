@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { aiChat, aiChatStream } from '../services/ai.js'
+import { requireRole } from '../middleware/auth.js'
 
 const router = Router()
 
@@ -28,7 +29,7 @@ Focus on practical, actionable output.`
 
 // ── POST /api/aitask  (non-streaming) ────────────────────────────────────
 
-router.post('/', async (req, res) => {
+router.post('/', requireRole('member'), async (req, res) => {
   const parsed = TaskBody.safeParse(req.body)
   if (!parsed.success) {
     return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })

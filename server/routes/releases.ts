@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { z }      from 'zod'
 import { pool }   from '../db/pool.js'
 import { aiChat } from '../services/ai.js'
+import { requireRole } from '../middleware/auth.js'
 
 const router = Router()
 
@@ -23,7 +24,7 @@ const UPDATABLE = ['version', 'date', 'type', 'features', 'fixes', 'breaking_cha
 // ── POST /api/releases/ai-generate ──────────────────────────────────────────
 // Must come before /:id routes to avoid param collision on POST.
 
-router.post('/ai-generate', async (req, res) => {
+router.post('/ai-generate', requireRole('member'), async (req, res) => {
   const { commits } = req.body as { commits?: string }
   if (!commits?.trim()) return res.status(400).json({ error: 'commits is required' })
 
@@ -81,7 +82,7 @@ function releaseContext(r: Record<string, unknown>): string {
   return lines.join('\n\n')
 }
 
-router.post('/compare', async (req, res) => {
+router.post('/compare', requireRole('member'), async (req, res) => {
   const { id1, id2 } = req.body as { id1?: string; id2?: string }
   if (!id1 || !id2) return res.status(400).json({ error: 'id1 and id2 are required' })
   if (id1 === id2)  return res.status(400).json({ error: 'Select two different releases' })
@@ -116,7 +117,7 @@ Provide a concise Markdown summary covering: overall changes, new features, fixe
 
 // ── POST /api/releases/:id/qa ─────────────────────────────────────────────────
 
-router.post('/:id/qa', async (req, res) => {
+router.post('/:id/qa', requireRole('member'), async (req, res) => {
   const { question } = req.body as { question?: string }
   if (!question?.trim()) return res.status(400).json({ error: 'question is required' })
 
@@ -144,7 +145,7 @@ const ImportGitBody = z.object({
   type:       z.enum(['major', 'minor', 'patch', 'hotfix']).default('patch'),
 })
 
-router.post('/import-git', async (req, res) => {
+router.post('/import-git', requireRole('member'), async (req, res) => {
   const parsed = ImportGitBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
@@ -208,7 +209,7 @@ const DraftBody = z.object({
   issueIds:  z.array(z.string()).optional(),
 })
 
-router.post('/draft', async (req, res) => {
+router.post('/draft', requireRole('member'), async (req, res) => {
   const parsed = DraftBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
@@ -336,7 +337,7 @@ router.get('/:id', async (req, res) => {
 
 // ── POST /api/releases ───────────────────────────────────────────────────────
 
-router.post('/', async (req, res) => {
+router.post('/', requireRole('member'), async (req, res) => {
   const parsed = ReleaseBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
@@ -362,7 +363,7 @@ router.post('/', async (req, res) => {
 
 // ── PUT /api/releases/:id ────────────────────────────────────────────────────
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', requireRole('member'), async (req, res) => {
   const parsed = ReleaseBody.partial().safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
@@ -386,7 +387,7 @@ router.put('/:id', async (req, res) => {
 
 // ── DELETE /api/releases/:id ─────────────────────────────────────────────────
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireRole('member'), async (req, res) => {
   try {
     const { rows } = await pool.query(
       'DELETE FROM releases WHERE id = $1 RETURNING id, version',

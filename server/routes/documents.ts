@@ -7,12 +7,12 @@ import crypto        from 'crypto'
 import dns           from 'node:dns/promises'
 import { z }         from 'zod'
 import * as ipaddr   from 'ipaddr.js'
-import { pool }      from '../db/pool.js'
+import { pool }          from '../db/pool.js'
 import { parseFile, parseUrl } from '../services/parser.js'
-import { embedDocument }       from '../services/embedder.js'
-import { buildSetClause }      from '../lib/db.js'
-import { serverError }         from '../lib/errors.js'
-import { aiChat }              from '../services/ai.js'
+import { aiEmbed, aiChat }    from '../services/ai.js'
+import { buildWhereClause }   from '../lib/db.js'
+import { serverError }        from '../lib/errors.js'
+import { requireRole } from '../middleware/auth.js'
 
 const router = Router()
 
@@ -113,7 +113,7 @@ router.get('/:id', async (req, res) => {
 
 // ── POST /api/documents  (file upload) ────────────────────────────────────
 
-router.post('/', upload.single('file'), async (req, res) => {
+router.post('/', requireRole('member'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
 
   const projectId = req.body.projectId || null
@@ -175,7 +175,7 @@ const UrlBody = z.object({
   tags:      z.array(z.string()).default([]),
 })
 
-router.post('/url', async (req, res) => {
+router.post('/url', requireRole('member'), async (req, res) => {
   const parsed = UrlBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
@@ -258,7 +258,7 @@ router.patch('/:id', async (req, res) => {
 
 // ── DELETE /api/documents/:id ─────────────────────────────────────────────
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireRole('member'), async (req, res) => {
   try {
     // Chunks deleted via ON DELETE CASCADE
     const { rows } = await pool.query(
@@ -274,7 +274,7 @@ router.delete('/:id', async (req, res) => {
 
 // ── POST /api/documents/:id/reembed ──────────────────────────────────────
 
-router.post('/:id/reembed', async (req, res) => {
+router.post('/:id/reembed', requireRole('member'), async (req, res) => {
   const { id } = req.params
   try {
     const { rows } = await pool.query('SELECT id, content FROM documents WHERE id = $1', [id])
@@ -296,7 +296,7 @@ router.post('/:id/reembed', async (req, res) => {
 // ── POST /api/documents/suggest-tags ─────────────────────────────────────────
 // Suggests up to 5 tags from title + optional hint text using AI.
 
-router.post('/suggest-tags', async (req, res) => {
+router.post('/suggest-tags', requireRole('member'), async (req, res) => {
   const { title, hint } = req.body as { title?: string; hint?: string }
   const text = [title, hint].filter(Boolean).join(' ').trim()
   if (!text) return res.status(400).json({ error: 'title or hint is required' })

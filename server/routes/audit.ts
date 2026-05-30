@@ -39,4 +39,27 @@ router.get('/', requireRole('admin'), async (req, res) => {
   }
 })
 
+// ── GET /api/audit/export ─────────────────────────────────────────────────
+// Admin only. Exports all audit events as CSV.
+
+router.get('/export', requireRole('admin'), async (_req, res) => {
+  try {
+    const { rows } = await pool.query<AuditEvent>(
+      'SELECT a.* FROM audit_events a ORDER BY a.created_at DESC'
+    )
+    
+    let csv = 'ID,Date,User,Action,Entity,Entity Name,Metadata\n'
+    for (const r of rows) {
+      const meta = r.metadata ? JSON.stringify(r.metadata).replace(/"/g, '""') : ''
+      csv += `${r.id},${r.created_at},${r.username ?? 'system'},${r.action},${r.entity_type},"${(r.entity_name ?? '').replace(/"/g, '""')}","${meta}"\n`
+    }
+
+    res.setHeader('Content-Type', 'text/csv')
+    res.setHeader('Content-Disposition', `attachment; filename="devbrain-audit-${new Date().toISOString().slice(0, 10)}.csv"`)
+    res.send(csv)
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
 export default router
