@@ -132,3 +132,22 @@
 ### Audit Log UI
 - [x] Settings: **Audit Log** page — paginated `audit_events` table (backend already writes these); filter by entity type; "Export CSV" button
 
+---
+
+## Phase 27 — Testing & Hardening (Missing Coverage) — COMPLETED
+
+> Fill the testing gaps for Phase 26 features to ensure enterprise reliability.
+
+### Backend Unit Tests (Vitest)
+- [x] **LDAP Service**: Mock `ldapjs` to verify bind and search logic; test error handling for connection timeouts
+- [x] **Audit Service**: Verify entity-based filtering and CSV generation formatting in `audit.test.ts`
+- [x] **Project Access**: Unit test membership-based visibility logic in `projects.test.ts`
+- [x] **User Invitations**: Test token generation, hashing, and consumption during registration in `auth_tokens.test.ts`
+
+### E2E Tests (Playwright)
+- [x] **Audit UI**: Verify the filter dropdown correctly updates the event list
+- [x] **Invitation Flow**: Full flow from generating an invite link to registering a new user via token
+- [ ] **Permissions**: Verify that a 'viewer' cannot see "Create Project" or "Delete" buttons
+- [ ] **Project Privacy**: Log in as two different users and verify User A cannot see User B's private project
+- [ ] **Account Status**: Verify that deactivating a user prevents login
+
