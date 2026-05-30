@@ -1,8 +1,20 @@
-import { describe, it, expect, afterAll } from 'vitest'
+import { describe, it, expect, afterAll, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { parseFile } from '../../services/parser.js'
+
+// Mock exec before module loads
+vi.mock('node:child_process', () => ({
+  exec: vi.fn((cmd, cb) => {
+    if (cmd.includes('markitdown_bridge.py')) {
+      cb(null, { stdout: 'Mocked Markdown Content' })
+    } else {
+      cb(new Error('Unknown command'))
+    }
+  }),
+}))
+
+const { parseFile } = await import('../../services/parser.js')
 
 // ── Temp file helpers ─────────────────────────────────────────────────────────
 
@@ -55,13 +67,25 @@ describe('parseFile — .txt', () => {
   })
 })
 
+// ── PPTX (via MarkItDown) ─────────────────────────────────────────────────────
+
+describe('parseFile — .pptx', () => {
+  it('calls MarkItDown bridge and returns the converted text', async () => {
+    const p = await writeTmp('presentation.pptx', 'binary-junk')
+    const result = await parseFile(p, 'presentation.pptx')
+
+    expect(result.fileType).toBe('pdf') // We mapped unknown MD types to pdf
+    expect(result.text).toBe('Mocked Markdown Content')
+  })
+})
+
 // ── Unsupported extension ─────────────────────────────────────────────────────
 
 describe('parseFile — unsupported type', () => {
   it('throws an error for unsupported extensions', async () => {
-    const p = await writeTmp('data.csv', 'a,b,c')
+    const p = await writeTmp('program.exe', 'binary')
 
-    await expect(parseFile(p, 'data.csv')).rejects.toThrow(/Unsupported file type/)
+    await expect(parseFile(p, 'program.exe')).rejects.toThrow(/Unsupported file type/)
   })
 })
 
