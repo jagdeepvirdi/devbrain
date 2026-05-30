@@ -25,18 +25,24 @@ const ProjectBody = z.object({
 
 // ── GET /api/projects ─────────────────────────────────────────────────────
 
-router.get('/', async (_req, res) => {
+router.get('/', async (req, res) => {
+  const isAdmin = req.user?.role === 'admin'
+  const userId  = req.user?.id
+
   try {
-    const { rows } = await pool.query(
-      `SELECT
+    const query = `
+      SELECT
          p.*,
          (SELECT COUNT(*)::int FROM documents d WHERE d.project_id = p.id) AS doc_count,
          (SELECT COUNT(*)::int FROM issues    i WHERE i.project_id = p.id) AS issue_count,
          (SELECT COUNT(*)::int FROM commands  c WHERE c.project_id = p.id) AS command_count,
          (SELECT COUNT(*)::int FROM releases  r WHERE r.project_id = p.id) AS release_count
        FROM projects p
+       ${isAdmin ? '' : 'JOIN project_members pm ON pm.project_id = p.id'}
+       ${isAdmin ? '' : 'WHERE pm.user_id = $1'}
        ORDER BY p.created_at ASC`
-    )
+    
+    const { rows } = await pool.query(query, isAdmin ? [] : [userId])
     res.json({ data: rows })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
@@ -46,18 +52,22 @@ router.get('/', async (_req, res) => {
 // ── GET /api/projects/:id ─────────────────────────────────────────────────
 
 router.get('/:id', async (req, res) => {
+  const isAdmin = req.user?.role === 'admin'
+  const userId  = req.user?.id
+
   try {
-    const { rows } = await pool.query(
-      `SELECT
+    const query = `
+      SELECT
          p.*,
          (SELECT COUNT(*)::int FROM documents d WHERE d.project_id = p.id) AS doc_count,
          (SELECT COUNT(*)::int FROM issues    i WHERE i.project_id = p.id) AS issue_count,
          (SELECT COUNT(*)::int FROM commands  c WHERE c.project_id = p.id) AS command_count,
          (SELECT COUNT(*)::int FROM releases  r WHERE r.project_id = p.id) AS release_count
        FROM projects p
-       WHERE p.id = $1`,
-      [req.params.id]
-    )
+       ${isAdmin ? '' : 'JOIN project_members pm ON pm.project_id = p.id'}
+       WHERE p.id = $1 ${isAdmin ? '' : 'AND pm.user_id = $2'}`
+    
+    const { rows } = await pool.query(query, isAdmin ? [req.params.id] : [req.params.id, userId])
     if (rows.length === 0) return res.status(404).json({ error: 'Project not found' })
     res.json({ data: rows[0] })
   } catch (err) {

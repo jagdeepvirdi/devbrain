@@ -5,6 +5,7 @@ import { ProjectModal } from '../components/projects/ProjectModal'
 import TasksTab from '../components/projects/TasksTab'
 import SessionsTab from '../components/projects/SessionsTab'
 import GitTab from '../components/projects/GitTab'
+import MembersTab from '../components/projects/MembersTab'
 import { useToast } from '../components/Toast'
 
 const STATUS_STYLE: Record<string, { color: string; bg: string; border: string }> = {
@@ -15,7 +16,7 @@ const STATUS_STYLE: Record<string, { color: string; bg: string; border: string }
 
 type DeleteState   = { id: string; name: string } | null
 type LinkingState  = { id: string; current: string | null } | null
-type PanelTab      = 'tasks' | 'sessions' | 'git'
+type PanelTab      = 'tasks' | 'sessions' | 'git' | 'members'
 type PanelState    = { projectId: string; tab: PanelTab } | null
 
 export function ProjectsPage() {
@@ -29,6 +30,12 @@ export function ProjectsPage() {
   const [linking, setLinking] = useState<LinkingState>(null)
   const [linkPath, setLinkPath]     = useState('')
   const [linkSaving, setLinkSaving] = useState(false)
+
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null)
+  useEffect(() => {
+    authApi.me().then(d => setCurrentUser(d.user))
+  }, [])
+  const isAdmin = currentUser?.role === 'admin'
 
   const load = useCallback(async () => {
     try {
@@ -308,7 +315,7 @@ export function ProjectsPage() {
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: panelProject.color, flexShrink: 0 }} />
               <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', flex: 1 }}>{panelProject.name}</span>
               {/* Tab switcher */}
-              {(['tasks', 'sessions', 'git'] as const).map(t => (
+              {(['tasks', 'sessions', 'git', 'members'] as const).map(t => (
                 <button
                   key={t}
                   onClick={() => setPanel({ projectId: panel.projectId, tab: t })}
@@ -336,6 +343,7 @@ export function ProjectsPage() {
               {panel.tab === 'tasks' && <TasksTab projectId={panel.projectId} />}
               {panel.tab === 'sessions' && <SessionsTab projectId={panel.projectId} />}
               {panel.tab === 'git' && <GitTab projectId={panel.projectId} />}
+              {panel.tab === 'members' && <MembersTab projectId={panel.projectId} isAdmin={isAdmin} />}
             </div>
           </div>
         )}

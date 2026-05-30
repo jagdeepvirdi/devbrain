@@ -125,9 +125,9 @@
 - [ ] On login: if LDAP configured, try LDAP bind first; fall back to local bcrypt; auto-provision LDAP user on first successful bind
 
 ### Per-project Access Control
-- [ ] Add `project_members` table: `(project_id UUID, user_id UUID, role TEXT)`
-- [ ] `GET /api/projects`: admins see all; members see assigned projects only
-- [ ] Project settings panel: **Members** tab — add member by username, set role, remove member
+- [x] Add `project_members` table: `(project_id UUID, user_id UUID, role TEXT)`
+- [x] `GET /api/projects`: admins see all; members see assigned projects only
+- [x] Project settings panel: **Members** tab — add member by username, set role, remove member
 
 ### Audit Log UI
 - [x] Settings: **Audit Log** page — paginated `audit_events` table (backend already writes these); filter by entity type; "Export CSV" button
