@@ -4,6 +4,7 @@ import { useProjectStore } from '../store/projectStore'
 import { ProjectModal } from '../components/projects/ProjectModal'
 import TasksTab from '../components/projects/TasksTab'
 import SessionsTab from '../components/projects/SessionsTab'
+import GitTab from '../components/projects/GitTab'
 import { useToast } from '../components/Toast'
 
 const STATUS_STYLE: Record<string, { color: string; bg: string; border: string }> = {
@@ -14,7 +15,7 @@ const STATUS_STYLE: Record<string, { color: string; bg: string; border: string }
 
 type DeleteState   = { id: string; name: string } | null
 type LinkingState  = { id: string; current: string | null } | null
-type PanelTab      = 'tasks' | 'sessions'
+type PanelTab      = 'tasks' | 'sessions' | 'git'
 type PanelState    = { projectId: string; tab: PanelTab } | null
 
 export function ProjectsPage() {
@@ -251,6 +252,18 @@ export function ProjectsPage() {
                       >
                         Sessions
                       </button>
+                      <button
+                        onClick={() => setPanel(panelOpen && panel?.tab === 'git' ? null : { projectId: p.id, tab: 'git' })}
+                        style={{
+                          height: 24, padding: '0 10px', borderRadius: 'var(--radius)',
+                          border:     `1px solid ${panelOpen && panel?.tab === 'git' ? 'rgba(99,102,241,.4)' : 'var(--line-2)'}`,
+                          background: panelOpen && panel?.tab === 'git' ? 'rgba(99,102,241,.15)' : 'var(--bg-elev)',
+                          color:      panelOpen && panel?.tab === 'git' ? '#818CF8' : 'var(--fg-2)',
+                          fontSize: '11.5px',
+                        }}
+                      >
+                        Git
+                      </button>
                     </>
                   )}
                   {!isLinked && (
@@ -295,7 +308,7 @@ export function ProjectsPage() {
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: panelProject.color, flexShrink: 0 }} />
               <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', flex: 1 }}>{panelProject.name}</span>
               {/* Tab switcher */}
-              {(['tasks', 'sessions'] as const).map(t => (
+              {(['tasks', 'sessions', 'git'] as const).map(t => (
                 <button
                   key={t}
                   onClick={() => setPanel({ projectId: panel.projectId, tab: t })}
@@ -320,10 +333,9 @@ export function ProjectsPage() {
             </div>
             {/* Panel body */}
             <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
-              {panel.tab === 'tasks'
-                ? <TasksTab    projectId={panel.projectId} />
-                : <SessionsTab projectId={panel.projectId} />
-              }
+              {panel.tab === 'tasks' && <TasksTab projectId={panel.projectId} />}
+              {panel.tab === 'sessions' && <SessionsTab projectId={panel.projectId} />}
+              {panel.tab === 'git' && <GitTab projectId={panel.projectId} />}
             </div>
           </div>
         )}

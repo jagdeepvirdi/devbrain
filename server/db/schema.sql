@@ -350,3 +350,34 @@ ON CONFLICT (key) DO NOTHING;
 -- Phase 23: AI Enhancements — persistent explanation and summary fields
 ALTER TABLE commands ADD COLUMN IF NOT EXISTS explanation TEXT;
 ALTER TABLE issues   ADD COLUMN IF NOT EXISTS summary     TEXT;
+
+-- Phase 24: Git Integration
+CREATE TABLE IF NOT EXISTS issue_commits (
+  issue_id   TEXT        NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  sha        TEXT        NOT NULL,
+  project_id TEXT        NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  linked_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (issue_id, sha)
+);
+CREATE INDEX IF NOT EXISTS issue_commits_issue_idx ON issue_commits (issue_id);
+
+-- Phase 25: External Issue Sync
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS source      TEXT NOT NULL DEFAULT 'devbrain';
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS external_id TEXT;
+CREATE INDEX IF NOT EXISTS issues_external_id_idx ON issues (external_id) WHERE external_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS integrations (
+  id                  TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  provider            TEXT        NOT NULL,
+  project_id          TEXT        REFERENCES projects(id) ON DELETE CASCADE,
+  external_project_id TEXT,
+  token_enc           TEXT,
+  last_synced_at      TIMESTAMPTZ,
+  config              JSONB       NOT NULL DEFAULT '{}',
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE OR REPLACE TRIGGER trg_integrations_updated_at
+  BEFORE UPDATE ON integrations
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE INDEX IF NOT EXISTS integrations_project_provider_idx ON integrations (project_id, provider);

@@ -50,7 +50,17 @@ export function IssueRow({ issue, onClick, selected, onToggleSelect }: {
         {pm.label}
       </span>
 
-      <span style={{ flex: 1, fontSize: '13px', color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <span style={{ flex: 1, fontSize: '13px', color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
+        {issue.source !== 'devbrain' && (
+          <span style={{ 
+            fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', 
+            padding: '1px 4px', borderRadius: 3, 
+            background: issue.source === 'github' ? '#24292e' : issue.source === 'jira' ? '#0052cc' : '#5e6ad2',
+            color: 'white', letterSpacing: '0.02em'
+          }}>
+            {issue.source}
+          </span>
+        )}
         {issue.title}
       </span>
 

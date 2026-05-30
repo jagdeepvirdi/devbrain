@@ -255,7 +255,17 @@ export function IssueDetail({ issueId, onBack, onDeleted }: { issueId: string; o
           </button>
         </div>
 
-        <h2 style={{ margin: '0 0 10px', fontSize: '16px', fontWeight: 600, color: 'var(--fg)', lineHeight: 1.4 }}>
+        <h2 style={{ margin: '0 0 10px', fontSize: '16px', fontWeight: 600, color: 'var(--fg)', lineHeight: 1.4, display: 'flex', alignItems: 'center', gap: 8 }}>
+          {issue.source !== 'devbrain' && (
+            <span style={{ 
+              fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', 
+              padding: '2px 6px', borderRadius: 4, 
+              background: issue.source === 'github' ? '#24292e' : issue.source === 'jira' ? '#0052cc' : '#5e6ad2',
+              color: 'white', letterSpacing: '0.04em'
+            }}>
+              {issue.source}
+            </span>
+          )}
           {issue.title}
         </h2>
 
@@ -530,7 +540,7 @@ export function IssueDetail({ issueId, onBack, onDeleted }: { issueId: string; o
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
                 {(issue.linked_commits ?? []).map(sha => (
                   <div key={sha} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', borderRadius: 5, background: 'var(--bg-elev)', border: '1px solid var(--line)' }}>
-                    <code style={{ flex: 1, fontSize: '12px', fontFamily: 'var(--font-mono)', color: 'var(--fg-2)' }}>{sha}</code>
+                    <code style={{ flex: 1, fontSize: '12px', fontFamily: 'var(--font-mono)', color: '#818CF8' }}>{sha.slice(0, 7)}</code>
                     <button onClick={() => unlinkCommit(sha)} style={{ color: 'var(--fg-4)', fontSize: '13px', cursor: 'default', opacity: 0.6 }}>×</button>
                   </div>
                 ))}

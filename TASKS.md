@@ -9,6 +9,7 @@
 | pgvector slow past ~500k chunks | HNSW index live from day one |
 | Ollama streaming cut off mid-response | SSE parser handles partial lines; `[DONE]` sentinel closes stream cleanly |
 | Port 5432 conflict (local PG14 on Windows) | Docker postgres mapped to 5433; DATABASE_URL updated accordingly |
+| Python environment missing | Parser includes JS fallbacks for all formats; markitdown is preferred but optional |
 
 ---
 
@@ -34,86 +35,79 @@
 - [x] **Embedding Health** — three labeled counts (done / pending / failed) with colored dots; "Retry all failed" button calls existing `POST /api/documents/:id/reembed` for each failed doc
 - [x] **Stale Issues** — issues open > 14 days with no note in that period; listed with priority badge + one-click "Mark investigating" action
 
-### Layout
+### layout
 - [x] Dashboard: responsive widget grid on screens ≥ 420px per column; single column below
 - [x] Each widget: header with title; analytics data fetched on mount alongside main dashboard data
 
 ---
 
-## Phase 23 — AI Enhancements
+## Phase 22.5 — Enhanced Ingestion (MarkItDown) — COMPLETED
 
-> Expand local AI capabilities using existing `services/ai.ts` infrastructure. `gemma3:4b` for fast classification, `mistral:7b` for generation. All local, zero cost.
+> Improve RAG quality by converting all ingested files to structured Markdown.
+
+- [x] Create Python bridge `server/scripts/markitdown_bridge.py` to interface with Microsoft MarkItDown
+- [x] Update `server/services/parser.ts` to prefer MarkItDown for PDF, DOCX, XLSX, PPTX
+- [x] Implement JS fallbacks for all formats to ensure system works without Python environment
+- [x] Add PPTX/PPT support via MarkItDown
+
+---
+
+## Phase 23 — AI Enhancements — COMPLETED
 
 ### Auto-tagging
-- [ ] On document upload: call `gemma3:4b` with title + first 500 chars → suggest up to 5 tags; show as dismissable "Suggested" chips in the upload form before save
-- [ ] On issue create: same pattern — suggest tags from title + description; chips appear below the tags input
+- [x] On document upload: call `gemma3:4b` with title + first 500 chars → suggest up to 5 tags; show as dismissable "Suggested" chips in the upload form before save
+- [x] On issue create: same pattern — suggest tags from title + description; chips appear below the tags input
 
 ### Command Explanation
-- [ ] Add `explanation TEXT` column to `commands` table in `schema.sql`
-- [ ] Add `POST /api/commands/:id/explain` — send command text to `gemma3:4b`; store + return explanation
-- [ ] Command detail panel: "✦ Explain" button; explanation rendered below the code block; "Regenerate" icon to refresh
+- [x] Add `explanation TEXT` column to `commands` table in `schema.sql`
+- [x] Add `POST /api/commands/:id/explain` — send command text to `gemma3:4b`; store + return explanation
+- [x] Command detail panel: "✦ Explain" button; explanation rendered below the code block; "Regenerate" icon to refresh
 
 ### Issue Summarization
-- [ ] Add `summary TEXT` column to `issues` table in `schema.sql`
-- [ ] Add `POST /api/issues/:id/summarize` — run `mistral:7b` over steps + notes → produce 3-bullet TL;DR; store in `summary` column
-- [ ] Issue detail: "✦ Summarize" button; summary card rendered above steps accordion; "Regenerate" icon
+- [x] Add `summary TEXT` column to `issues` table in `schema.sql`
+- [x] Add `POST /api/issues/:id/summarize` — run `mistral:7b` over steps + notes → produce 3-bullet TL;DR; store in `summary` column
+- [x] Issue detail: "✦ Summarize" button; summary card rendered above steps accordion; "Regenerate" icon
 
 ### Release Note Drafting
-- [ ] Add `POST /api/releases/draft` — accepts `{ projectId, from: ISO, to: ISO, issueIds?: string[] }`; fetches resolved issues in range; runs `mistral:7b` to draft Features / Fixes / Breaking Changes sections; returns a pre-filled `Release` object
-- [ ] Releases page: "✦ Draft with AI" button → modal with date range picker + resolved issue multi-select → inserts draft into the new release form
+- [x] Add `POST /api/releases/draft` — accepts `{ projectId, from: ISO, to: ISO, issueIds?: string[] }`; fetches resolved issues in range; runs `mistral:7b` to draft Features / Fixes / Breaking Changes sections; returns a pre-filled `Release` object
+- [x] Releases page: "✦ Draft with AI" button → modal with date range picker + resolved issue multi-select → inserts draft into the new release form
 
 ### Smart Search Suggestions
-- [ ] On empty ⌘K query: `GET /api/search/suggestions` returns up to 5 suggestions ranked by `updated_at` from recent issue titles and document names
-- [ ] GlobalSearch: show suggestions list when query is empty instead of blank state
+- [x] On empty ⌘K query: `GET /api/search/suggestions` returns up to 5 suggestions ranked by `updated_at` from recent issue titles and document names
+- [x] GlobalSearch: show suggestions list when query is empty instead of blank state
 
 ---
 
-## Phase 24 — Git Integration
-
-> Read-only git integration scoped to linked projects. Surfaces commit history, branches, and commit↔issue linking without any external service. Shells out to `git` via `child_process` — stub route already wired in `index.ts`.
+## Phase 24 — Git Integration (Local & GH) — COMPLETED
 
 ### Server
-- [ ] Implement `server/routes/git.ts` handlers (stub already imported in `index.ts`):
-  - `GET /api/git/:id/log` — run `git log --format="%H|%s|%an|%aI" -n 50` in project `fs_path`; return parsed commit array
-  - `GET /api/git/:id/branches` — run `git branch -a --format="%(refname:short)"`; return list + current branch
-  - `GET /api/git/:id/diff/:sha` — run `git show <sha> --stat --patch`; return raw diff string
-- [ ] Add `issue_commits` join table to `schema.sql`: `(issue_id UUID, sha TEXT, project_id UUID, linked_at TIMESTAMPTZ)`
-- [ ] Add `POST /api/git/:id/link` — link a sha to an issue (`{ sha, issueId }`)
-- [ ] Add `DELETE /api/git/:id/link/:sha` — unlink a commit from an issue
+- [x] Add `issue_commits` join table to `schema.sql`: `(issue_id UUID, sha TEXT, project_id UUID, linked_at TIMESTAMPTZ)`
+- [x] Add `POST /api/git/:id/link` — link a sha to an issue (`{ sha, issueId }`)
+- [x] Add `DELETE /api/git/:id/link/:sha` — unlink a commit from an issue
+- [x] Support local git `log`, `show`, `branch` in `server/routes/git.ts`
 
 ### Client
-- [ ] Add **Git** tab to project detail panel (only when `fs_path` is set and `git rev-parse` succeeds)
-- [ ] `CommitList` component — sha chip, message, author initial avatar, relative date
-- [ ] `CommitCard` expandable — `--stat` output + "Link to issue" action with issue search dropdown
-- [ ] `BranchBadge` in project card header — shows current branch name
-- [ ] Issue detail: linked commits shown as sha chips below description; clicking opens `CommitCard` inline
-- [ ] Add `GitCommit`, `GitBranch`, `IssueCommit` types and `gitApi.*` methods to `client/src/lib/api.ts`
+- [x] Add **Git** tab to project detail panel (shows when project has `fs_path`)
+- [x] `GitTab` component — commit history, link to issue dropdown
+- [x] Issue detail: linked commits shown as sha chips
+- [x] Add `GitCommit`, `GitBranch`, `IssueCommit` types and `gitApi.*` methods to `client/src/lib/api.ts`
 
----
-
-## Phase 25 — External Issue Sync (GitHub / Linear)
-
-> One-way import of issues from GitHub and Linear. OAuth tokens stored AES-256-GCM encrypted. Stub files `crypto.ts` and `integrations.ts` already exist in server.
+## Phase 25 — External Issue Sync (GitHub / Linear / Jira) — COMPLETED
 
 ### Infrastructure
-- [ ] `server/services/crypto.ts` (stub exists) — implement AES-256-GCM `encrypt(text)` / `decrypt(ciphertext)` using `JWT_SECRET`; used for all stored OAuth tokens
-- [ ] Add `integrations` table to `schema.sql`: `(id UUID, provider TEXT, project_id UUID, external_project_id TEXT, token_enc TEXT, last_synced_at TIMESTAMPTZ, config JSONB)`
-- [ ] `server/routes/integrations.ts` (stub exists) — implement handlers listed below
+- [x] `server/services/crypto.ts` — implement AES-256-GCM `encrypt(text)` / `decrypt(ciphertext)` using `JWT_SECRET`; used for all stored OAuth tokens
+- [x] Add `integrations` table to `schema.sql`: `(id UUID, provider TEXT, project_id UUID, external_project_id TEXT, token_enc TEXT, last_synced_at TIMESTAMPTZ, config JSONB)`
+- [x] `server/routes/integrations.ts` — implement sync handlers for GH, Linear, Jira
 
-### GitHub Integration
-- [ ] Settings: GitHub section — "Connect GitHub" → OAuth PKCE flow → exchange code → store token encrypted
-- [ ] `POST /api/integrations/github/sync` — fetch open issues via GitHub REST API; upsert with `source: 'github'` + `external_id` to prevent duplicates
-- [ ] Map GitHub labels → DevBrain tags; `priority:*` label → priority field; closed → `resolved`
-- [ ] Settings UI: last sync timestamp + "Sync now" button per connected repo
-
-### Linear Integration
-- [ ] Settings: Linear section — API key input (stored encrypted, never returned to client)
-- [ ] `POST /api/integrations/linear/sync` — fetch via Linear GraphQL API; upsert with `source: 'linear'`
-- [ ] Map Linear priority (Urgent / High / Medium / Low) → DevBrain (critical / high / medium / low)
+### Integrations
+- [x] GitHub: Fetch issues via REST API; upsert with `source: 'github'`
+- [x] Linear: Fetch via Linear GraphQL API; upsert with `source: 'linear'`
+- [x] Jira: Basic auth + JQL search; upsert with `source: 'jira'`
 
 ### Client
-- [ ] Issue list: source badge chip (`GH` / `LN`) on imported issues
-- [ ] Issue detail: "View on GitHub" / "View on Linear" link when `external_id` is present
+- [x] Issue list: source badge chip (`github` / `linear` / `jira`) on imported issues
+- [x] Issue detail: source badge + external ID display
+- [x] Settings > Integrations: Manage project-specific integrations; "Sync Now" trigger
 
 ---
 

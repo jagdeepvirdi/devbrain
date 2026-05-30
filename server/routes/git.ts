@@ -1,10 +1,13 @@
 import { Router } from 'express'
 import { z }      from 'zod'
+import { exec }   from 'node:child_process'
+import { promisify } from 'node:util'
 import { pool }   from '../db/pool.js'
 import { encrypt, decrypt } from '../services/crypto.js'
 import { requireRole } from '../middleware/auth.js'
 
 const router = Router()
+const execAsync = promisify(exec)
 
 function parseGitHubRepo(url: string): { owner: string; repo: string } | null {
   try {
@@ -86,12 +89,35 @@ router.get('/:projectId/commits', async (req, res) => {
 
   try {
     const { rows } = await pool.query(
-      'SELECT repo_url, github_pat_enc FROM projects WHERE id = $1',
+      'SELECT repo_url, github_pat_enc, fs_path FROM projects WHERE id = $1',
       [req.params.projectId],
     )
     if (!rows.length) { res.status(404).json({ error: 'Project not found' }); return }
 
-    const { repo_url, github_pat_enc } = rows[0] as { repo_url: string | null; github_pat_enc: string | null }
+    const { repo_url, github_pat_enc, fs_path } = rows[0] as { repo_url: string | null; github_pat_enc: string | null; fs_path: string | null }
+
+    // Prefer local git if fs_path is set
+    if (fs_path) {
+      try {
+        const { stdout } = await execAsync(`git log --format="%H|%s|%an|%aI" -n ${limit}`, { cwd: fs_path })
+        const commits = stdout.trim().split('\n').filter(Boolean).map(line => {
+          const [full_sha, message, author, date] = line.split('|')
+          return {
+            sha: full_sha.slice(0, 7),
+            full_sha,
+            message,
+            author,
+            date,
+            url: repo_url ? `${repo_url.replace(/\.git$/, '')}/commit/${full_sha}` : null
+          }
+        })
+        res.json({ data: commits }); return
+      } catch (err) {
+        console.warn(`Local git failed for ${fs_path}:`, err)
+        // Fall back to GitHub if local fails
+      }
+    }
+
     if (!repo_url) { res.json({ data: [] }); return }
 
     const parsed = parseGitHubRepo(repo_url)
@@ -129,6 +155,87 @@ router.get('/:projectId/commits', async (req, res) => {
   }
 })
 
+// ── GET /api/git/:projectId/branches  — fetch branches ─────────────────────
+
+router.get('/:projectId/branches', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT fs_path FROM projects WHERE id = $1', [req.params.projectId])
+    if (!rows.length) return res.status(404).json({ error: 'Project not found' })
+
+    const { fs_path } = rows[0]
+    if (!fs_path) return res.json({ data: [] })
+
+    const { stdout } = await execAsync('git branch -a --format="%(refname:short)"', { cwd: fs_path })
+    const branches = stdout.trim().split('\n').filter(Boolean)
+    
+    // Get current branch
+    const { stdout: current } = await execAsync('git branch --show-current', { cwd: fs_path })
+
+    res.json({ data: { branches, current: current.trim() } })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── GET /api/git/:projectId/diff/:sha  — fetch commit diff ────────────────
+
+router.get('/:projectId/diff/:sha', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT fs_path FROM projects WHERE id = $1', [req.params.projectId])
+    if (!rows.length) return res.status(404).json({ error: 'Project not found' })
+
+    const { fs_path } = rows[0]
+    if (!fs_path) return res.status(400).json({ error: 'Project has no linked local path' })
+
+    const { stdout } = await execAsync(`git show ${req.params.sha} --stat --patch`, { cwd: fs_path })
+    res.json({ data: { diff: stdout } })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── POST /api/git/:projectId/link — link a SHA to an issue ────────────────
+
+const LinkBody = z.object({
+  sha:     z.string().min(4).max(40),
+  issueId: z.string().uuid(),
+})
+
+router.post('/:projectId/link', requireRole('editor'), async (req, res) => {
+  const parsed = LinkBody.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
+
+  try {
+    await pool.query(
+      `INSERT INTO issue_commits (issue_id, sha, project_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (issue_id, sha) DO NOTHING`,
+      [parsed.data.issueId, parsed.data.sha, req.params.projectId]
+    )
+    res.json({ data: { ok: true } })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── DELETE /api/git/:projectId/link/:sha — unlink a commit ────────────────
+
+router.delete('/:projectId/link/:sha', requireRole('editor'), async (req, res) => {
+  const { sha, projectId } = req.params
+  const { issueId } = req.query as { issueId?: string }
+  if (!issueId) return res.status(400).json({ error: 'issueId query param required' })
+
+  try {
+    await pool.query(
+      'DELETE FROM issue_commits WHERE issue_id = $1 AND sha = $2 AND project_id = $3',
+      [issueId, sha, projectId]
+    )
+    res.json({ data: { ok: true } })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
 // ── GET /api/git/:projectId/compare  — commits between two refs (for releases)
 
 router.get('/:projectId/compare', async (req, res) => {
@@ -137,12 +244,23 @@ router.get('/:projectId/compare', async (req, res) => {
 
   try {
     const { rows } = await pool.query(
-      'SELECT repo_url, github_pat_enc FROM projects WHERE id = $1',
+      'SELECT repo_url, github_pat_enc, fs_path FROM projects WHERE id = $1',
       [req.params.projectId],
     )
     if (!rows.length) { res.status(404).json({ error: 'Project not found' }); return }
 
-    const { repo_url, github_pat_enc } = rows[0] as { repo_url: string | null; github_pat_enc: string | null }
+    const { repo_url, github_pat_enc, fs_path } = rows[0] as { repo_url: string | null; github_pat_enc: string | null; fs_path: string | null }
+
+    if (fs_path) {
+      try {
+        const { stdout } = await execAsync(`git log ${base}..${head} --format="%h %s"`, { cwd: fs_path })
+        res.json({ data: { commits: stdout.trim(), count: stdout.trim().split('\n').filter(Boolean).length } })
+        return
+      } catch (err) {
+        console.warn(`Local git compare failed for ${fs_path}:`, err)
+      }
+    }
+
     if (!repo_url) { res.json({ data: { commits: '', count: 0 } }); return }
 
     const parsed = parseGitHubRepo(repo_url)

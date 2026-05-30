@@ -59,8 +59,9 @@ const NoteBody = z.object({
 
 const ISSUE_COLS = `
   i.id, i.project_id, i.title, i.description, i.status, i.priority,
-  i.linked_docs, i.linked_commands, i.linked_commits, i.pr_url,
+  i.linked_docs, i.linked_commands, i.pr_url,
   i.resolution, i.tags, i.embedding_status, i.summary,
+  i.source, i.external_id,
   i.created_at, i.updated_at, i.resolved_at,
   p.name  AS project_name,
   p.color AS project_color,
@@ -75,7 +76,11 @@ const ISSUE_COLS = `
       DISTINCT jsonb_build_object('id', n.id, 'content', n.content, 'created_at', n.created_at)
     ) FILTER (WHERE n.id IS NOT NULL),
     '[]'::json
-  ) AS notes
+  ) AS notes,
+  COALESCE(
+    (SELECT json_agg(sha) FROM issue_commits ic WHERE ic.issue_id = i.id),
+    '[]'::json
+  ) AS linked_commits
 `
 
 const ISSUE_JOINS = `
@@ -421,13 +426,19 @@ router.post('/:id/commits', async (req, res) => {
     res.status(400).json({ error: 'sha must be a valid git SHA' }); return
   }
   try {
-    const { rows } = await pool.query(
-      `UPDATE issues SET linked_commits = array_append(array_remove(linked_commits, $2), $2)
-       WHERE id = $1 RETURNING linked_commits`,
-      [req.params.id, sha]
+    // Get project_id for the issue
+    const { rows: issue } = await pool.query('SELECT project_id FROM issues WHERE id = $1', [req.params.id])
+    if (!issue.length) { res.status(404).json({ error: 'Issue not found' }); return }
+
+    await pool.query(
+      `INSERT INTO issue_commits (issue_id, sha, project_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (issue_id, sha) DO NOTHING`,
+      [req.params.id, sha, issue[0].project_id]
     )
-    if (!rows.length) { res.status(404).json({ error: 'Issue not found' }); return }
-    res.json({ data: rows[0].linked_commits })
+
+    const { rows } = await pool.query('SELECT sha FROM issue_commits WHERE issue_id = $1', [req.params.id])
+    res.json({ data: rows.map(r => r.sha) })
   } catch (err) { res.status(500).json({ error: (err as Error).message }) }
 })
 
@@ -435,13 +446,12 @@ router.post('/:id/commits', async (req, res) => {
 
 router.delete('/:id/commits/:sha', async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `UPDATE issues SET linked_commits = array_remove(linked_commits, $2)
-       WHERE id = $1 RETURNING linked_commits`,
+    await pool.query(
+      'DELETE FROM issue_commits WHERE issue_id = $1 AND sha = $2',
       [req.params.id, req.params.sha]
     )
-    if (!rows.length) { res.status(404).json({ error: 'Issue not found' }); return }
-    res.json({ data: rows[0].linked_commits })
+    const { rows } = await pool.query('SELECT sha FROM issue_commits WHERE issue_id = $1', [req.params.id])
+    res.json({ data: rows.map(r => r.sha) })
   } catch (err) { res.status(500).json({ error: (err as Error).message }) }
 })
 

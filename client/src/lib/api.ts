@@ -416,6 +416,8 @@ export type Issue = {
   pr_url:              string | null
   tags:                string[]
   summary:             string | null
+  source:              string
+  external_id:         string | null
   created_at:          string
   resolved_at:         string | null
   project_name:        string | null
@@ -897,11 +899,29 @@ export const gitApi = {
     request<GitRepoConfig>(`/git/${projectId}/repo`, { method: 'POST', body: JSON.stringify(body) }),
   listCommits: (projectId: string, limit = 20)                             =>
     request<GitCommit[]>(`/git/${projectId}/commits?limit=${limit}`),
+  getBranches: (projectId: string)                                         =>
+    request<{ branches: string[]; current: string }>(`/git/${projectId}/branches`),
+  getDiff:     (projectId: string, sha: string)                            =>
+    request<{ diff: string }>(`/git/${projectId}/diff/${sha}`),
+  link:        (projectId: string, sha: string, issueId: string)           =>
+    request<{ ok: boolean }>(`/git/${projectId}/link`, { method: 'POST', body: JSON.stringify({ sha, issueId }) }),
+  unlink:      (projectId: string, sha: string, issueId: string)           =>
+    request<{ ok: boolean }>(`/git/${projectId}/link/${sha}?issueId=${issueId}`, { method: 'DELETE' }),
   compare:     (projectId: string, base: string, head: string)             =>
     request<{ commits: string; count: number }>(`/git/${projectId}/compare?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}`),
 }
 
 // ── Integrations ──────────────────────────────────────────────────────────
+
+export type Integration = {
+  id:                  string
+  provider:            'github' | 'jira' | 'linear'
+  project_id:          string
+  external_project_id: string
+  has_token:           boolean
+  last_synced_at:      string | null
+  config:              Record<string, any>
+}
 
 export type IntegrationsConfig = {
   jira:   { baseUrl: string; email: string; hasToken: boolean } | null
@@ -912,7 +932,16 @@ export type JiraIssuePreview = { key: string; summary: string; priority: string;
 export type LinearIssuePreview = { id: string; title: string; state: string }
 
 export const integrationsApi = {
-  getConfig: () => request<IntegrationsConfig>('/integrations/config'),
+  list: () => request<Integration[]>('/integrations/config'),
+
+  create: (body: { provider: string; project_id: string; external_project_id: string; token?: string; config?: any }) =>
+    request<Integration>('/integrations', { method: 'POST', body: JSON.stringify(body) }),
+
+  remove: (id: string) =>
+    request<{ ok: boolean }>(`/integrations/${id}`, { method: 'DELETE' }),
+
+  sync: (id: string) =>
+    request<{ created: number; skipped: number; total: number }>(`/integrations/${id}/sync`, { method: 'POST' }),
 
   saveJira: (body: { baseUrl: string; email: string; apiToken: string }) =>
     request<{ ok: boolean }>('/integrations/config/jira', { method: 'PUT', body: JSON.stringify(body) }),

@@ -11,220 +11,244 @@ const router = Router()
 router.get('/config', async (_req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT key, value FROM app_settings WHERE key IN ('jira', 'linear')`,
+      `SELECT id, provider, project_id, external_project_id, token_enc IS NOT NULL AS has_token, last_synced_at, config 
+       FROM integrations`,
     )
-    const config: Record<string, unknown> = { jira: null, linear: null }
-    for (const row of rows) {
-      const v = row.value as Record<string, unknown>
-      if (row.key === 'jira') {
-        config.jira = { baseUrl: v.baseUrl, email: v.email, hasToken: !!v.apiTokenEnc }
-      } else if (row.key === 'linear') {
-        config.linear = { hasKey: !!v.apiKeyEnc }
-      }
-    }
-    res.json({ data: config })
+    res.json({ data: rows })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
   }
 })
 
-// ── PUT /api/integrations/config/jira ────────────────────────────────────
+// ── POST /api/integrations — create or update an integration ──────────────
 
-const JiraConfigBody = z.object({
-  baseUrl:  z.string().url(),
-  email:    z.string().email(),
-  apiToken: z.string().min(1),
+const IntegrationBody = z.object({
+  provider:            z.enum(['github', 'jira', 'linear']),
+  project_id:          z.string().uuid(),
+  external_project_id: z.string().min(1),
+  token:               z.string().optional(),
+  config:              z.record(z.unknown()).default({}),
 })
 
-router.put('/config/jira', requireRole('admin'), async (req, res) => {
-  const parsed = JiraConfigBody.safeParse(req.body)
-  if (!parsed.success) { res.status(400).json({ error: 'Validation error', issues: parsed.error.issues }); return }
+router.post('/', requireRole('admin'), async (req, res) => {
+  const parsed = IntegrationBody.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
-  const value = {
-    baseUrl:     parsed.data.baseUrl,
-    email:       parsed.data.email,
-    apiTokenEnc: encrypt(parsed.data.apiToken),
-  }
+  const { provider, project_id, external_project_id, token, config } = parsed.data
+  const tokenEnc = token ? encrypt(token) : null
+
   try {
-    await pool.query(
-      `INSERT INTO app_settings (key, value) VALUES ('jira', $1)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [JSON.stringify(value)],
+    const { rows } = await pool.query(
+      `INSERT INTO integrations (provider, project_id, external_project_id, token_enc, config)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (project_id, provider) DO UPDATE SET
+         external_project_id = EXCLUDED.external_project_id,
+         token_enc = COALESCE(EXCLUDED.token_enc, integrations.token_enc),
+         config = EXCLUDED.config,
+         updated_at = now()
+       RETURNING id, provider, project_id, external_project_id, last_synced_at, config`,
+      [provider, project_id, external_project_id, tokenEnc, config]
     )
+    res.json({ data: rows[0] })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── DELETE /api/integrations/:id ──────────────────────────────────────────
+
+router.delete('/:id', requireRole('admin'), async (req, res) => {
+  try {
+    await pool.query('DELETE FROM integrations WHERE id = $1', [req.params.id])
     res.json({ data: { ok: true } })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
   }
 })
 
-// ── PUT /api/integrations/config/linear ──────────────────────────────────
+// ── POST /api/integrations/:id/sync ───────────────────────────────────────
 
-const LinearConfigBody = z.object({ apiKey: z.string().min(1) })
-
-router.put('/config/linear', requireRole('admin'), async (req, res) => {
-  const parsed = LinearConfigBody.safeParse(req.body)
-  if (!parsed.success) { res.status(400).json({ error: 'Validation error', issues: parsed.error.issues }); return }
-
-  const value = { apiKeyEnc: encrypt(parsed.data.apiKey) }
+router.post('/:id/sync', requireRole('editor'), async (req, res) => {
   try {
-    await pool.query(
-      `INSERT INTO app_settings (key, value) VALUES ('linear', $1)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [JSON.stringify(value)],
-    )
-    res.json({ data: { ok: true } })
+    const { rows } = await pool.query('SELECT * FROM integrations WHERE id = $1', [req.params.id])
+    if (!rows.length) return res.status(404).json({ error: 'Integration not found' })
+
+    const integration = rows[0]
+    const token = integration.token_enc ? decrypt(integration.token_enc) : null
+
+    let result = { created: 0, skipped: 0, total: 0 }
+
+    if (integration.provider === 'github') {
+      result = await syncGitHub(integration, token)
+    } else if (integration.provider === 'jira') {
+      result = await syncJira(integration, token)
+    } else if (integration.provider === 'linear') {
+      result = await syncLinear(integration, token)
+    }
+
+    await pool.query('UPDATE integrations SET last_synced_at = now() WHERE id = $1', [req.params.id])
+    res.json({ data: result })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
   }
 })
 
-// ── POST /api/integrations/jira/preview ──────────────────────────────────
+// ── GitHub Sync ───────────────────────────────────────────────────────────
 
-async function getJiraConfig() {
-  const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'jira'`)
-  if (!rows.length) throw new Error('Jira not configured — go to Settings > Integrations')
-  const v = rows[0].value as { baseUrl: string; email: string; apiTokenEnc: string }
-  return { baseUrl: v.baseUrl, email: v.email, token: decrypt(v.apiTokenEnc) }
+async function syncGitHub(integration: any, token: string | null) {
+  const [owner, repo] = integration.external_project_id.split('/')
+  const headers: any = { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'devbrain' }
+  if (token) headers['Authorization'] = `token ${token}`
+
+  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues?state=all&per_page=100`, { headers })
+  if (!res.ok) throw new Error(`GitHub API error: ${res.status}`)
+
+  const issues = await res.json() as any[]
+  let created = 0, skipped = 0
+
+  for (const gh of issues) {
+    if (gh.pull_request) continue // skip PRs
+
+    const r = await pool.query(
+      `INSERT INTO issues (project_id, title, description, status, priority, tags, source, external_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO UPDATE SET
+         title = EXCLUDED.title,
+         description = EXCLUDED.description,
+         status = EXCLUDED.status,
+         updated_at = now()
+       RETURNING id`,
+      [
+        integration.project_id,
+        gh.title,
+        gh.body || '',
+        gh.state === 'closed' ? 'resolved' : 'open',
+        'medium', // GH issues don't have a direct priority field
+        ['github', ...gh.labels.map((l: any) => l.name)],
+        'github',
+        `github:${gh.id}`
+      ]
+    )
+    if (r.rowCount) created++; else skipped++
+  }
+  return { created, skipped, total: issues.length }
 }
 
-const JiraImportBody = z.object({
-  project_id:  z.string().optional(),
-  jql:         z.string().default('order by created DESC'),
-  max_results: z.number().int().min(1).max(100).default(50),
-})
+// ── Jira Sync ─────────────────────────────────────────────────────────────
 
-router.post('/jira/preview', requireRole('editor'), async (req, res) => {
-  const parsed = JiraImportBody.safeParse(req.body)
-  if (!parsed.success) { res.status(400).json({ error: 'Validation error', issues: parsed.error.issues }); return }
-  try {
-    const cfg  = await getJiraConfig()
-    const auth = Buffer.from(`${cfg.email}:${cfg.token}`).toString('base64')
-    const jiraRes = await fetch(
-      `${cfg.baseUrl}/rest/api/3/search?jql=${encodeURIComponent(parsed.data.jql)}&maxResults=${parsed.data.max_results}&fields=summary,priority,status`,
-      { headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) },
-    )
-    if (!jiraRes.ok) { res.status(jiraRes.status).json({ error: `Jira API: ${jiraRes.status}` }); return }
-    const data = await jiraRes.json() as { total: number; issues: Array<{ key: string; fields: { summary: string; priority: { name: string } | null; status: { name: string } } }> }
-    res.json({ data: { total: data.total, issues: data.issues.map(i => ({ key: i.key, summary: i.fields.summary, priority: i.fields.priority?.name ?? 'Medium', status: i.fields.status.name })) } })
-  } catch (err) { res.status(500).json({ error: (err as Error).message }) }
-})
-
-router.post('/jira/import', requireRole('editor'), async (req, res) => {
-  const parsed = JiraImportBody.safeParse(req.body)
-  if (!parsed.success) { res.status(400).json({ error: 'Validation error', issues: parsed.error.issues }); return }
-  try {
-    const cfg  = await getJiraConfig()
-    const auth = Buffer.from(`${cfg.email}:${cfg.token}`).toString('base64')
-    const jiraRes = await fetch(
-      `${cfg.baseUrl}/rest/api/3/search?jql=${encodeURIComponent(parsed.data.jql)}&maxResults=${parsed.data.max_results}&fields=summary,description,priority,status`,
-      { headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) },
-    )
-    if (!jiraRes.ok) { res.status(jiraRes.status).json({ error: `Jira API: ${jiraRes.status}` }); return }
-
-    const data = await jiraRes.json() as { issues: Array<{ key: string; fields: { summary: string; priority: { name: string } | null; status: { name: string } } }> }
-
-    function mapPriority(p?: string): string {
-      const lp = (p ?? '').toLowerCase()
-      if (lp.includes('critical') || lp.includes('blocker')) return 'critical'
-      if (lp.includes('high')     || lp.includes('major'))   return 'high'
-      if (lp.includes('low')      || lp.includes('minor') || lp.includes('trivial')) return 'low'
-      return 'medium'
-    }
-    function mapStatus(s: string): string {
-      const ls = s.toLowerCase()
-      if (ls.includes('done') || ls.includes('closed') || ls.includes('resolved')) return 'resolved'
-      if (ls.includes('progress') || ls.includes('review'))                         return 'investigating'
-      if (ls.includes("won't") || ls.includes('wont') || ls.includes('duplicate')) return 'wont-fix'
-      return 'open'
-    }
-
-    let created = 0, skipped = 0
-    for (const ji of data.issues) {
-      const r = await pool.query(
-        `INSERT INTO issues (project_id, title, priority, status, tags)
-         VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
-        [parsed.data.project_id ?? null, `[${ji.key}] ${ji.fields.summary}`, mapPriority(ji.fields.priority?.name), mapStatus(ji.fields.status.name), ['jira', ji.key]],
-      )
-      if ((r.rowCount ?? 0) > 0) created++; else skipped++
-    }
-    res.json({ data: { created, skipped, total: data.issues.length } })
-  } catch (err) { res.status(500).json({ error: (err as Error).message }) }
-})
-
-// ── POST /api/integrations/linear/preview + import ───────────────────────
-
-async function getLinearConfig() {
-  const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'linear'`)
-  if (!rows.length) throw new Error('Linear not configured — go to Settings > Integrations')
-  return decrypt((rows[0].value as { apiKeyEnc: string }).apiKeyEnc)
-}
-
-const LinearImportBody = z.object({
-  project_id:  z.string().optional(),
-  team_key:    z.string().min(1),
-  max_results: z.number().int().min(1).max(100).default(50),
-})
-
-const LINEAR_ISSUES_QUERY = `
-  query($teamKey: String!, $first: Int!) {
-    issues(filter: { team: { key: { eq: $teamKey } } }, first: $first, orderBy: createdAt) {
-      nodes { id title priority state { name } labels { nodes { name } } }
-    }
-  }`
-
-async function queryLinear(apiKey: string, teamKey: string, maxResults: number) {
-  const r = await fetch('https://api.linear.app/graphql', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: apiKey },
-    body: JSON.stringify({ query: LINEAR_ISSUES_QUERY, variables: { teamKey, first: maxResults } }),
-    signal: AbortSignal.timeout(20_000),
+async function syncJira(integration: any, token: string | null) {
+  const { baseUrl, email } = integration.config
+  const auth = Buffer.from(`${email}:${token}`).toString('base64')
+  const jql = encodeURIComponent(`project = "${integration.external_project_id}" ORDER BY created DESC`)
+  
+  const res = await fetch(`${baseUrl}/rest/api/3/search?jql=${jql}&maxResults=100&fields=summary,description,priority,status`, {
+    headers: { 'Authorization': `Basic ${auth}`, 'Accept': 'application/json' }
   })
-  if (!r.ok) throw new Error(`Linear API: ${r.status}`)
-  const d = await r.json() as { data?: { issues: { nodes: Array<{ id: string; title: string; priority: number; state: { name: string }; labels: { nodes: { name: string }[] } }> } }; errors?: Array<{ message: string }> }
-  if (d.errors?.length) throw new Error(d.errors[0].message)
-  return d.data?.issues.nodes ?? []
+  if (!res.ok) throw new Error(`Jira API error: ${res.status}`)
+
+  const data = await res.json() as any
+  let created = 0, skipped = 0
+
+  for (const ji of data.issues) {
+    const r = await pool.query(
+      `INSERT INTO issues (project_id, title, description, status, priority, tags, source, external_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO UPDATE SET
+         title = EXCLUDED.title,
+         description = EXCLUDED.description,
+         status = EXCLUDED.status,
+         updated_at = now()
+       RETURNING id`,
+      [
+        integration.project_id,
+        ji.fields.summary,
+        ji.fields.description?.content?.[0]?.content?.[0]?.text || '', // Simplified v3 parser
+        mapJiraStatus(ji.fields.status.name),
+        mapJiraPriority(ji.fields.priority?.name),
+        ['jira', ji.key],
+        'jira',
+        `jira:${ji.id}`
+      ]
+    )
+    if (r.rowCount) created++; else skipped++
+  }
+  return { created, skipped, total: data.issues.length }
 }
 
-router.post('/linear/preview', requireRole('editor'), async (req, res) => {
-  const parsed = LinearImportBody.safeParse(req.body)
-  if (!parsed.success) { res.status(400).json({ error: 'Validation error', issues: parsed.error.issues }); return }
-  try {
-    const apiKey  = await getLinearConfig()
-    const issues  = await queryLinear(apiKey, parsed.data.team_key, parsed.data.max_results)
-    res.json({ data: { total: issues.length, issues: issues.map(i => ({ id: i.id, title: i.title, state: i.state.name })) } })
-  } catch (err) { res.status(500).json({ error: (err as Error).message }) }
-})
+function mapJiraPriority(p?: string): string {
+  const lp = (p ?? '').toLowerCase()
+  if (lp.includes('critical') || lp.includes('blocker')) return 'critical'
+  if (lp.includes('high') || lp.includes('major')) return 'high'
+  if (lp.includes('low') || lp.includes('minor')) return 'low'
+  return 'medium'
+}
 
-router.post('/linear/import', requireRole('editor'), async (req, res) => {
-  const parsed = LinearImportBody.safeParse(req.body)
-  if (!parsed.success) { res.status(400).json({ error: 'Validation error', issues: parsed.error.issues }); return }
+function mapJiraStatus(s: string): string {
+  const ls = s.toLowerCase()
+  if (ls.includes('done') || ls.includes('closed') || ls.includes('resolved')) return 'resolved'
+  if (ls.includes('progress') || ls.includes('review')) return 'investigating'
+  return 'open'
+}
 
-  function mapPriority(p: number): string {
-    if (p === 1) return 'critical'; if (p === 2) return 'high'; if (p === 4) return 'low'; return 'medium'
+// ── Linear Sync ───────────────────────────────────────────────────────────
+
+async function syncLinear(integration: any, token: string | null) {
+  const teamKey = integration.external_project_id
+  const query = `
+    query($teamKey: String!, $first: Int!) {
+      issues(filter: { team: { key: { eq: $teamKey } } }, first: $first, orderBy: createdAt) {
+        nodes { id title description priority state { name } labels { nodes { name } } }
+      }
+    }`
+
+  const res = await fetch('https://api.linear.app/graphql', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': token! },
+    body: JSON.stringify({ query, variables: { teamKey, first: 100 } })
+  })
+  if (!res.ok) throw new Error(`Linear API error: ${res.status}`)
+
+  const d = await res.json() as any
+  if (d.errors?.length) throw new Error(d.errors[0].message)
+  
+  const issues = d.data.issues.nodes
+  let created = 0, skipped = 0
+
+  for (const li of issues) {
+    const r = await pool.query(
+      `INSERT INTO issues (project_id, title, description, status, priority, tags, source, external_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO UPDATE SET
+         title = EXCLUDED.title,
+         description = EXCLUDED.description,
+         status = EXCLUDED.status,
+         updated_at = now()
+       RETURNING id`,
+      [
+        integration.project_id,
+        li.title,
+        li.description || '',
+        mapLinearStatus(li.state.name),
+        mapLinearPriority(li.priority),
+        ['linear', ...li.labels.nodes.map((l: any) => l.name)],
+        'linear',
+        `linear:${li.id}`
+      ]
+    )
+    if (r.rowCount) created++; else skipped++
   }
-  function mapStatus(s: string): string {
-    const ls = s.toLowerCase()
-    if (ls.includes('done') || ls.includes('completed'))          return 'resolved'
-    if (ls.includes('progress') || ls.includes('review'))         return 'investigating'
-    if (ls.includes('cancel')   || ls.includes('duplicate'))      return 'wont-fix'
-    return 'open'
-  }
+  return { created, skipped, total: issues.length }
+}
 
-  try {
-    const apiKey = await getLinearConfig()
-    const issues = await queryLinear(apiKey, parsed.data.team_key, parsed.data.max_results)
-    let created = 0, skipped = 0
-    for (const li of issues) {
-      const tags = ['linear', ...li.labels.nodes.map((l: { name: string }) => l.name)]
-      const r = await pool.query(
-        `INSERT INTO issues (project_id, title, priority, status, tags)
-         VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
-        [parsed.data.project_id ?? null, li.title, mapPriority(li.priority), mapStatus(li.state.name), tags],
-      )
-      if ((r.rowCount ?? 0) > 0) created++; else skipped++
-    }
-    res.json({ data: { created, skipped, total: issues.length } })
-  } catch (err) { res.status(500).json({ error: (err as Error).message }) }
-})
+function mapLinearPriority(p: number): string {
+  if (p === 1) return 'critical'; if (p === 2) return 'high'; if (p === 4) return 'low'; return 'medium'
+}
+
+function mapLinearStatus(s: string): string {
+  const ls = s.toLowerCase()
+  if (ls.includes('done') || ls.includes('completed')) return 'resolved'
+  if (ls.includes('progress') || ls.includes('review')) return 'investigating'
+  return 'open'
+}
 
 export default router

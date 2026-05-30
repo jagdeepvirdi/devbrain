@@ -215,114 +215,191 @@ function AuditLog() {
 
 // ── Integrations section ─────────────────────────────────────────────────
 
-function IntegrationsSection() {
+function IntegrationsSection({ projects }: { projects: Project[] }) {
   const { toast } = useToast()
-  const [config,      setConfig]      = useState<IntegrationsConfig | null>(null)
-  const [loading,     setLoading]     = useState(true)
-  const [jiraOpen,    setJiraOpen]    = useState(false)
-  const [linearOpen,  setLinearOpen]  = useState(false)
-  const [jiraForm,    setJiraForm]    = useState({ baseUrl: '', email: '', apiToken: '' })
-  const [linearKey,   setLinearKey]   = useState('')
-  const [saving,      setSaving]      = useState(false)
+  const [integrations, setIntegrations] = useState<Integration[]>([])
+  const [loading,      setLoading]      = useState(true)
+  const [showAdd,      setShowAdd]      = useState(false)
+  const [adding,       setAdding]       = useState(false)
+  const [syncingId,    setSyncingId]    = useState<string | null>(null)
+  
+  const [newIntegration, setNewIntegration] = useState({
+    provider: 'github' as Integration['provider'],
+    project_id: '',
+    external_project_id: '',
+    token: '',
+    config: {} as any
+  })
 
   useEffect(() => {
-    integrationsApi.getConfig()
-      .then(setConfig)
-      .catch(() => {})
-      .finally(() => setLoading(false))
+    integrationsApi.list().then(setIntegrations).catch(() => {}).finally(() => setLoading(false))
   }, [])
 
-  async function saveJira(e: React.FormEvent) {
+  async function handleAdd(e: React.FormEvent) {
     e.preventDefault()
-    setSaving(true)
+    if (!newIntegration.project_id || !newIntegration.external_project_id) return
+    setAdding(true)
     try {
-      await integrationsApi.saveJira(jiraForm)
-      const cfg = await integrationsApi.getConfig()
-      setConfig(cfg)
-      setJiraOpen(false)
-      setJiraForm({ baseUrl: '', email: '', apiToken: '' })
-      toast('Jira integration saved', 'success')
-    } catch (err) { toast((err as Error).message, 'error') }
-    finally { setSaving(false) }
+      const it = await integrationsApi.create(newIntegration)
+      setIntegrations(prev => [...prev, it])
+      setShowAdd(false)
+      setNewIntegration({ provider: 'github', project_id: '', external_project_id: '', token: '', config: {} })
+      toast(`Integration for ${newIntegration.provider} created`)
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    } finally {
+      setAdding(false)
+    }
   }
 
-  async function saveLinear(e: React.FormEvent) {
-    e.preventDefault()
-    if (!linearKey.trim()) return
-    setSaving(true)
+  async function handleRemove(id: string) {
+    if (!confirm('Remove this integration?')) return
     try {
-      await integrationsApi.saveLinear(linearKey)
-      const cfg = await integrationsApi.getConfig()
-      setConfig(cfg)
-      setLinearOpen(false)
-      setLinearKey('')
-      toast('Linear integration saved', 'success')
-    } catch (err) { toast((err as Error).message, 'error') }
-    finally { setSaving(false) }
+      await integrationsApi.remove(id)
+      setIntegrations(prev => prev.filter(x => x.id !== id))
+      toast('Integration removed')
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    }
+  }
+
+  async function handleSync(id: string) {
+    setSyncingId(id)
+    try {
+      const res = await integrationsApi.sync(id)
+      toast(`Sync complete: ${res.created} created, ${res.skipped} skipped`)
+      const updated = await integrationsApi.list()
+      setIntegrations(updated)
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    } finally {
+      setSyncingId(null)
+    }
   }
 
   const inp: React.CSSProperties = { width: '100%', background: 'var(--bg)', border: '1px solid var(--line-2)', borderRadius: 5, padding: '5px 8px', color: 'var(--fg)', fontSize: 12.5, boxSizing: 'border-box', outline: 'none' }
 
-  if (loading) return <div style={{ fontSize: 12, color: 'var(--fg-4)', padding: '4px 0' }}>Loading…</div>
+  if (loading) return <div style={{ fontSize: 12, color: 'var(--fg-4)', padding: '4px 0' }}>Loading integrations…</div>
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-
-      {/* Jira */}
-      <div style={{ padding: '10px 12px', borderRadius: 6, border: '1px solid var(--line)', background: 'var(--bg)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)' }}>Jira</div>
-            {config?.jira
-              ? <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>{config.jira.email} · {config.jira.baseUrl}</div>
-              : <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>Not configured</div>
-            }
-          </div>
-          {config?.jira && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 3, background: 'rgba(34,197,94,.12)', border: '1px solid rgba(34,197,94,.25)', color: '#22C55E' }}>Connected</span>}
-          <button onClick={() => { setJiraOpen(o => !o); setLinearOpen(false) }} style={{ fontSize: 11.5, padding: '3px 10px', borderRadius: 4, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)', cursor: 'default' }}>
-            {jiraOpen ? 'Cancel' : config?.jira ? 'Update' : 'Configure'}
-          </button>
-        </div>
-        {jiraOpen && (
-          <form onSubmit={saveJira} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
-            <input value={jiraForm.baseUrl} onChange={e => setJiraForm(p => ({ ...p, baseUrl: e.target.value }))} placeholder="https://yourorg.atlassian.net" style={inp} />
-            <input value={jiraForm.email} onChange={e => setJiraForm(p => ({ ...p, email: e.target.value }))} placeholder="your@email.com" style={inp} />
-            <input type="password" value={jiraForm.apiToken} onChange={e => setJiraForm(p => ({ ...p, apiToken: e.target.value }))} placeholder="Jira API token" style={inp} />
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button type="submit" disabled={saving || !jiraForm.baseUrl || !jiraForm.email || !jiraForm.apiToken} style={{ fontSize: 12, padding: '4px 12px', borderRadius: 4, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'white', cursor: 'default', opacity: saving ? 0.6 : 1 }}>
-                {saving ? 'Saving…' : 'Save'}
-              </button>
+      {integrations.map(it => {
+        const p = projects.find(x => x.id === it.project_id)
+        return (
+          <div key={it.id} style={{ padding: '10px 12px', borderRadius: 6, border: '1px solid var(--line)', background: 'var(--bg)', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ 
+              fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', 
+              padding: '2px 6px', borderRadius: 4, 
+              background: it.provider === 'github' ? '#24292e' : it.provider === 'jira' ? '#0052cc' : '#5e6ad2',
+              color: 'white', letterSpacing: '0.04em', width: 50, textAlign: 'center'
+            }}>
+              {it.provider}
             </div>
-          </form>
-        )}
-      </div>
-
-      {/* Linear */}
-      <div style={{ padding: '10px 12px', borderRadius: 6, border: '1px solid var(--line)', background: 'var(--bg)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)' }}>Linear</div>
-            {config?.linear
-              ? <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>API key saved</div>
-              : <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>Not configured</div>
-            }
-          </div>
-          {config?.linear && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 3, background: 'rgba(34,197,94,.12)', border: '1px solid rgba(34,197,94,.25)', color: '#22C55E' }}>Connected</span>}
-          <button onClick={() => { setLinearOpen(o => !o); setJiraOpen(false) }} style={{ fontSize: 11.5, padding: '3px 10px', borderRadius: 4, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)', cursor: 'default' }}>
-            {linearOpen ? 'Cancel' : config?.linear ? 'Update' : 'Configure'}
-          </button>
-        </div>
-        {linearOpen && (
-          <form onSubmit={saveLinear} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
-            <input type="password" value={linearKey} onChange={e => setLinearKey(e.target.value)} placeholder="lin_api_xxxx…" style={inp} />
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button type="submit" disabled={saving || !linearKey.trim()} style={{ fontSize: 12, padding: '4px 12px', borderRadius: 4, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'white', cursor: 'default', opacity: saving ? 0.6 : 1 }}>
-                {saving ? 'Saving…' : 'Save'}
-              </button>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)' }}>{p?.name ?? 'Unknown project'}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--fg-4)', marginTop: 2 }}>{it.external_project_id}</div>
             </div>
-          </form>
-        )}
-      </div>
+            {it.last_synced_at && (
+              <div style={{ fontSize: 10.5, color: 'var(--fg-4)', textAlign: 'right' }}>
+                Synced: {new Date(it.last_synced_at).toLocaleDateString()}
+              </div>
+            )}
+            <button 
+              onClick={() => handleSync(it.id)} 
+              disabled={!!syncingId}
+              style={{ fontSize: 11, padding: '3px 10px', borderRadius: 4, border: '1px solid var(--accent)', background: 'none', color: 'var(--accent-2)', cursor: 'default' }}
+            >
+              {syncingId === it.id ? 'Syncing...' : 'Sync Now'}
+            </button>
+            <button onClick={() => handleRemove(it.id)} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 4, border: '1px solid rgba(239,68,68,.3)', background: 'none', color: '#EF4444', cursor: 'default' }}>
+              Remove
+            </button>
+          </div>
+        )
+      })}
+
+      {showAdd ? (
+        <form onSubmit={handleAdd} style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px', borderRadius: 6, border: '1px solid var(--accent-line)', background: 'var(--accent-dim)' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent-2)' }}>Add Integration</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--fg-4)', marginBottom: 4 }}>Provider</div>
+              <select 
+                value={newIntegration.provider} 
+                onChange={e => setNewIntegration(p => ({ ...p, provider: e.target.value as any }))}
+                style={{ ...inp, height: 30 }}
+              >
+                <option value="github">GitHub</option>
+                <option value="jira">Jira</option>
+                <option value="linear">Linear</option>
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--fg-4)', marginBottom: 4 }}>Project</div>
+              <select 
+                value={newIntegration.project_id} 
+                onChange={e => setNewIntegration(p => ({ ...p, project_id: e.target.value }))}
+                style={{ ...inp, height: 30 }}
+              >
+                <option value="">Select project...</option>
+                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--fg-4)', marginBottom: 4 }}>
+              {newIntegration.provider === 'github' ? 'Repo (owner/repo)' : newIntegration.provider === 'jira' ? 'Project Key' : 'Team Key'}
+            </div>
+            <input 
+              value={newIntegration.external_project_id} 
+              onChange={e => setNewIntegration(p => ({ ...p, external_project_id: e.target.value }))}
+              placeholder={newIntegration.provider === 'github' ? 'facebook/react' : 'PROJ'} 
+              style={inp} 
+            />
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--fg-4)', marginBottom: 4 }}>Auth Token (Optional)</div>
+            <input 
+              type="password" 
+              value={newIntegration.token} 
+              onChange={e => setNewIntegration(p => ({ ...p, token: e.target.value }))}
+              placeholder="API Key or PAT" 
+              style={inp} 
+            />
+          </div>
+          {newIntegration.provider === 'jira' && (
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--fg-4)', marginBottom: 4 }}>Jira Base URL & Email</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input 
+                  value={newIntegration.config.baseUrl || ''} 
+                  onChange={e => setNewIntegration(p => ({ ...p, config: { ...p.config, baseUrl: e.target.value } }))}
+                  placeholder="https://yourorg.atlassian.net" 
+                  style={inp} 
+                />
+                <input 
+                  value={newIntegration.config.email || ''} 
+                  onChange={e => setNewIntegration(p => ({ ...p, config: { ...p.config, email: e.target.value } }))}
+                  placeholder="your@email.com" 
+                  style={inp} 
+                />
+              </div>
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+            <button type="submit" disabled={adding} style={{ fontSize: 12, padding: '5px 15px', borderRadius: 4, border: 'none', background: 'var(--accent)', color: 'white', cursor: 'default' }}>
+              {adding ? 'Adding...' : 'Add Integration'}
+            </button>
+            <button type="button" onClick={() => setShowAdd(false)} style={{ fontSize: 12, padding: '5px 12px', borderRadius: 4, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)', cursor: 'default' }}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : (
+        <button onClick={() => setShowAdd(true)} style={{ fontSize: 12, padding: '5px 12px', borderRadius: 5, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)', cursor: 'default', alignSelf: 'flex-start' }}>
+          + Add integration
+        </button>
+      )}
     </div>
   )
 }
@@ -1058,7 +1135,7 @@ export function SettingsPage({ onLogout, currentUser }: { onLogout: () => void; 
             {/* Integrations (admin only) */}
             {isAdmin && (
               <Section title="Integrations">
-                <IntegrationsSection />
+                <IntegrationsSection projects={projects} />
               </Section>
             )}
 
