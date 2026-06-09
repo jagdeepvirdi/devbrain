@@ -80,7 +80,10 @@ test.describe('Command CRUD', () => {
       await confirmBtn.click()
     }
 
-    // Command should be gone
+    // Clear the search filter so the "No commands matching X" message disappears
+    if (await searchInput.isVisible()) await searchInput.clear()
+
+    // Command should be gone from the full list
     await expect(page.getByText(CMD_TITLE)).not.toBeVisible({ timeout: 8_000 })
   })
 })

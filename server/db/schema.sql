@@ -69,6 +69,9 @@ CREATE OR REPLACE TRIGGER trg_projects_updated_at
 -- Phase 18: linked filesystem path for Claude Code integration
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS fs_path TEXT;
 
+-- Phase 27: add updated_at to projects (trigger was added but column may be missing on existing DBs)
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
 -- ── Documents ─────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS documents (

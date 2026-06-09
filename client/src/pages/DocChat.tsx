@@ -121,7 +121,7 @@ function CitationCard({ c }: { c: ChatCitation }) {
 
 function AiMessage({ msg }: { msg: Extract<Message, { role: 'ai' }> }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+    <div data-testid="ai-message" style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
       <div style={{
         display: 'flex', alignItems: 'flex-start', gap: 8,
         maxWidth: '88%',
