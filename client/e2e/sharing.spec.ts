@@ -45,6 +45,6 @@ test.describe('Org Sharing & Multi-user', () => {
     await expect(page.getByText(/invite created/i)).toBeVisible()
     
     // Check pending invites list
-    await expect(page.getByText(email)).toBeVisible()
+    await expect(page.getByText(email, { exact: true })).toBeVisible()
   })
 })

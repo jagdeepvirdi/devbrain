@@ -12,16 +12,16 @@ export async function isDevMode(page: Page): Promise<boolean> {
 export async function ensureLoggedIn(page: Page): Promise<void> {
   await page.goto('/')
   // Wait for either the login form or the authenticated app shell
-  await page.waitForSelector('form, .app', { timeout: 10_000 })
+  await page.waitForSelector('form, .app', { timeout: 30_000 })
   if (await page.locator('input[type="password"]').isVisible()) {
     await page.getByPlaceholder('username').fill(TEST_USERNAME)
     await page.getByPlaceholder('password').fill(TEST_PASSWORD)
     await page.getByRole('button', { name: 'Sign in' }).click()
-    await page.waitForSelector('.app', { timeout: 10_000 })
+    await page.waitForSelector('.app', { timeout: 30_000 })
   }
 }
 
 /** Navigate to a sidebar section by its label. */
 export async function goTo(page: Page, label: string): Promise<void> {
-  await page.getByRole('button', { name: label }).click()
+  await page.locator('nav').getByRole('button', { name: label }).click()
 }

@@ -43,14 +43,14 @@ test.describe('Document upload', () => {
     // Navigate to Ask AI
     await goTo(page, 'Ask AI')
     // The DocChat page should load
-    await expect(page.getByPlaceholder(/ask a question/i)).toBeVisible({ timeout: 5_000 })
+    await expect(page.getByPlaceholder(/ask about/i)).toBeVisible({ timeout: 5_000 })
   })
 
   test('DocChat streams an SSE response', async ({ page }) => {
     await goTo(page, 'Ask AI')
-    await expect(page.getByPlaceholder(/ask a question/i)).toBeVisible({ timeout: 5_000 })
+    await expect(page.getByPlaceholder(/ask about/i)).toBeVisible({ timeout: 5_000 })
 
-    await page.getByPlaceholder(/ask a question/i).fill('What is in the E2E test document?')
+    await page.getByPlaceholder(/ask about/i).fill('What is in the E2E test document?')
     await page.keyboard.press('Enter')
 
     // Some response should stream in (even if Ollama is unavailable, an error/fallback message appears)

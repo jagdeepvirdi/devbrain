@@ -203,7 +203,7 @@ export function GlobalSearch({ onNavigate, open, onClose }: Props) {
         </div>
 
         {/* Results */}
-        <div ref={listRef} style={{ overflowY: 'auto', flex: 1 }}>
+        <div ref={listRef} data-search-results role="listbox" style={{ overflowY: 'auto', flex: 1 }}>
           {results === null && !loading && recentItems.length === 0 && suggestions.length === 0 && (
             <div style={{ padding: '36px 20px', textAlign: 'center', fontSize: '13px', color: 'var(--fg-4)' }}>
               Start typing to search

@@ -14,12 +14,12 @@ test.describe('Command CRUD', () => {
     await page.getByRole('button', { name: /new command|new|add/i }).first().click()
 
     // Fill title
-    const titleInput = page.getByPlaceholder(/title/i).first()
+    const titleInput = page.getByPlaceholder(/start dev server/i).first()
     await expect(titleInput).toBeVisible({ timeout: 5_000 })
     await titleInput.fill(CMD_TITLE)
 
     // Fill command
-    const cmdInput = page.getByPlaceholder(/command|snippet/i).first()
+    const cmdInput = page.getByPlaceholder(/npm run dev/i).first()
     await cmdInput.fill(CMD_COMMAND)
 
     // Save

@@ -5,7 +5,7 @@ import { aiChat, aiEmbed } from '../services/ai.js'
 import { buildSetClause }  from '../lib/db.js'
 import { requireRole } from '../middleware/auth.js'
 
-function embedCommandAsync(id: string, title: string, command: string): void {
+function embedCommandAsync(id: string, title: string, description: string, command: string): void {
 
   const text = [title, description, command.slice(0, 400)].filter(Boolean).join('. ')
   aiEmbed(text)

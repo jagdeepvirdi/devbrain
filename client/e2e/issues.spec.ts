@@ -15,7 +15,7 @@ test.describe('Issue lifecycle', () => {
 
     // Fill in the form
     await page.getByPlaceholder(/title/i).fill(ISSUE_TITLE)
-    await page.getByPlaceholder(/describe/i).fill('E2E test issue description')
+    await page.getByPlaceholder(/description/i).fill('E2E test issue description')
 
     // Save
     await page.getByRole('button', { name: /create|save/i }).last().click()

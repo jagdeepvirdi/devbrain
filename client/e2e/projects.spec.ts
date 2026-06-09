@@ -9,7 +9,7 @@ test.describe('Projects page features', () => {
 
   test('open git tab in project detail panel', async ({ page }) => {
     // Click on a project to open the detail panel
-    const projectCard = page.locator('div[style*="grid-template-columns"]').locator('> div').first()
+    const projectCard = page.getByTestId('project-card').first()
     await expect(projectCard).toBeVisible({ timeout: 5000 })
     
     // Click the "Git" button on the card
@@ -25,7 +25,7 @@ test.describe('Projects page features', () => {
   })
 
   test('toggle between tasks, sessions and git tabs', async ({ page }) => {
-    const projectCard = page.locator('div[style*="grid-template-columns"]').locator('> div').first()
+    const projectCard = page.getByTestId('project-card').first()
     await projectCard.getByRole('button', { name: /sessions/i }).click()
 
     // Click tabs in the header

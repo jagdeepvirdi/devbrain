@@ -145,7 +145,7 @@ export function ProjectsPage() {
 
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         {/* Project grid */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '18px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '14px', alignContent: 'start' }}>
+        <div data-testid="project-grid" style={{ flex: 1, overflowY: 'auto', padding: '18px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '14px', alignContent: 'start' }}>
           {projects.length === 0 && (
             <div style={{ gridColumn: '1/-1', padding: '48px', textAlign: 'center', color: 'var(--fg-3)', fontSize: '13px' }}>
               No projects yet. Create one above.
@@ -156,7 +156,7 @@ export function ProjectsPage() {
             const isLinked   = !!p.fs_path
             const panelOpen  = panel?.projectId === p.id
             return (
-              <div key={p.id} style={{ background: 'var(--bg-elev)', border: `1px solid ${panelOpen ? 'rgba(99,102,241,.4)' : 'var(--line)'}`, borderRadius: '10px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              <div key={p.id} data-testid="project-card" style={{ background: 'var(--bg-elev)', border: `1px solid ${panelOpen ? 'rgba(99,102,241,.4)' : 'var(--line)'}`, borderRadius: '10px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                 {/* Color bar */}
                 <div style={{ height: 3, background: p.color }} />
 
