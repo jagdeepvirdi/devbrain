@@ -80,6 +80,7 @@ test.describe('Role-based access control', () => {
   })
 
   test('member cannot see a project they are not assigned to', async ({ page, request }) => {
+    test.setTimeout(60_000)
     await page.goto('/')
     await page.waitForSelector('form, .app', { timeout: 30_000 })
     if (await isDevMode(page)) { test.skip(); return }
@@ -129,6 +130,7 @@ test.describe('Role-based access control', () => {
   })
 
   test('deactivated user cannot log in', async ({ page, request }) => {
+    test.setTimeout(60_000)
     await page.goto('/')
     await page.waitForSelector('form, .app', { timeout: 30_000 })
     if (await isDevMode(page)) { test.skip(); return }

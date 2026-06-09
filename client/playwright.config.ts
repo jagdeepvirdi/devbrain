@@ -1,4 +1,9 @@
 import { defineConfig, devices } from '@playwright/test'
+import { config as loadEnv } from 'dotenv'
+import { fileURLToPath } from 'node:url'
+
+// Load test credentials from client/.env.test (not committed to git)
+loadEnv({ path: fileURLToPath(new URL('.env.test', import.meta.url)) })
 
 export default defineConfig({
   testDir:   './e2e',

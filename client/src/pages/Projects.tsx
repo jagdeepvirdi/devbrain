@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { projectsApi, type Project, type ProjectInput } from '../lib/api'
+import { projectsApi, authApi, getCachedUser, type Project, type ProjectInput, type AuthUser } from '../lib/api'
 import { useProjectStore } from '../store/projectStore'
 import { ProjectModal } from '../components/projects/ProjectModal'
 import TasksTab from '../components/projects/TasksTab'
@@ -31,11 +31,12 @@ export function ProjectsPage() {
   const [linkPath, setLinkPath]     = useState('')
   const [linkSaving, setLinkSaving] = useState(false)
 
-  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null)
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(getCachedUser)
   useEffect(() => {
-    authApi.me().then(d => setCurrentUser(d.user))
+    authApi.me().then(d => { if (d.user) setCurrentUser(d.user) })
   }, [])
-  const isAdmin = currentUser?.role === 'admin'
+  const isAdmin   = currentUser?.role === 'admin'
+  const canWrite  = currentUser?.role === 'admin' || currentUser?.role === 'member'
 
   const load = useCallback(async () => {
     try {
@@ -128,18 +129,22 @@ export function ProjectsPage() {
         <h1 style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: 'var(--fg)' }}>Projects</h1>
         <span style={{ fontSize: '11px', color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>{projects.length}</span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
-          <button
-            onClick={handleSeedReset}
-            style={{ height: 26, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-3)', fontSize: '12px' }}
-          >
-            Reset to seed
-          </button>
-          <button
-            onClick={() => setModal('create')}
-            style={{ height: 26, padding: '0 12px', borderRadius: 'var(--radius)', background: 'var(--accent)', color: 'white', fontSize: '12px', border: 'none', boxShadow: '0 0 0 1px rgba(99,102,241,.3), 0 0 18px rgba(99,102,241,.25)' }}
-          >
-            ＋ New project
-          </button>
+          {isAdmin && (
+            <button
+              onClick={handleSeedReset}
+              style={{ height: 26, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-3)', fontSize: '12px' }}
+            >
+              Reset to seed
+            </button>
+          )}
+          {canWrite && (
+            <button
+              onClick={() => setModal('create')}
+              style={{ height: 26, padding: '0 12px', borderRadius: 'var(--radius)', background: 'var(--accent)', color: 'white', fontSize: '12px', border: 'none', boxShadow: '0 0 0 1px rgba(99,102,241,.3), 0 0 18px rgba(99,102,241,.25)' }}
+            >
+              ＋ New project
+            </button>
+          )}
         </div>
       </div>
 
@@ -285,18 +290,22 @@ export function ProjectsPage() {
                   >
                     {isLinked ? '⊙ Linked' : '⊕ Link'}
                   </button>
-                  <button
-                    onClick={() => setModal(p)}
-                    style={{ height: 24, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-2)', fontSize: '11.5px' }}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => setDeleting({ id: p.id, name: p.name })}
-                    style={{ height: 24, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid rgba(240,90,90,.25)', background: 'rgba(240,90,90,.08)', color: '#F8A8A8', fontSize: '11.5px' }}
-                  >
-                    Delete
-                  </button>
+                  {canWrite && (
+                    <button
+                      onClick={() => setModal(p)}
+                      style={{ height: 24, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-2)', fontSize: '11.5px' }}
+                    >
+                      Edit
+                    </button>
+                  )}
+                  {isAdmin && (
+                    <button
+                      onClick={() => setDeleting({ id: p.id, name: p.name })}
+                      style={{ height: 24, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid rgba(240,90,90,.25)', background: 'rgba(240,90,90,.08)', color: '#F8A8A8', fontSize: '11.5px' }}
+                    >
+                      Delete
+                    </button>
+                  )}
                 </div>
               </div>
             )
