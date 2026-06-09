@@ -77,7 +77,7 @@ router.put('/:id', async (req, res) => {
   const parsed = UpdateBody.safeParse(req.body)
   if (!parsed.success) { res.status(400).json({ error: 'Validation error', issues: parsed.error.issues }); return }
 
-  const { adminPassword, password, email, role } = parsed.data
+  const { adminPassword, password, email, role, is_active } = parsed.data
 
   // Admin must re-enter their own password before resetting another user's password
   if (password !== undefined && req.params.id !== req.user!.id) {

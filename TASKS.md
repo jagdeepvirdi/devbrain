@@ -147,7 +147,7 @@
 ### E2E Tests (Playwright)
 - [x] **Audit UI**: Verify the filter dropdown correctly updates the event list
 - [x] **Invitation Flow**: Full flow from generating an invite link to registering a new user via token
-- [ ] **Permissions**: Verify that a 'viewer' cannot see "Create Project" or "Delete" buttons
-- [ ] **Project Privacy**: Log in as two different users and verify User A cannot see User B's private project
-- [ ] **Account Status**: Verify that deactivating a user prevents login
+- [x] **Permissions**: Verify that a 'viewer' cannot see "Create Project" or "Delete" buttons
+- [x] **Project Privacy**: Log in as two different users and verify User A cannot see User B's private project
+- [x] **Account Status**: Verify that deactivating a user prevents login
 
