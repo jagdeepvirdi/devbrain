@@ -151,3 +151,166 @@
 - [x] **Project Privacy**: Log in as two different users and verify User A cannot see User B's private project
 - [x] **Account Status**: Verify that deactivating a user prevents login
 
+---
+
+# Phase 28 — Build Order & Priority
+
+| Priority | Sub-phase | Why this order |
+|---|---|---|
+| 1 | **28.1** Notifications & Alerts | Creates the `notifications` table — required by 28.5; high daily value on its own |
+| 2 | **28.5** Notification Hub (Apprise) | Depends on 28.1 schema; highest-value feature — Telegram + Claude Code session hooks |
+| 3 | **28.2** Advanced Search & Filtering | Independent of others; search is a core daily workflow |
+| 4 | **28.4** Bulk Operations & Triage | Builds on list UI refactoring introduced in 28.2; triage view uses stale logic from 28.1 |
+| 5 | **28.3** Templates System | No dependencies; quality-of-life improvement, nothing else blocks on it |
+
+---
+
+## Phase 28.1 — Notifications & Alerts — COMPLETED
+
+> Surface stale issues, integration sync events, and AI task completions without the user having to check manually.
+> Creates the shared `notifications` table — prerequisite for Phase 28.5.
+
+### Schema
+- [x] `notifications` table: `(id UUID, user_id UUID, type TEXT, title TEXT, body TEXT, entity_type TEXT, entity_id UUID, read BOOL, channel TEXT DEFAULT 'in_app', delivery_status TEXT DEFAULT 'delivered', created_at TIMESTAMPTZ)` — `channel` and `delivery_status` shared with Phase 28.5 external delivery
+- [x] `notification_rules` stored in `app_settings`: stale threshold per project (days), sync alert toggle, AI task alert toggle
+
+### Backend
+- [x] `GET /api/notifications` — paginated list; include `unread_count` in response envelope
+- [x] `PATCH /api/notifications/:id/read` — mark single notification read
+- [x] `PATCH /api/notifications/read-all` — mark all read for current user
+- [x] Background job (server interval): scan issues open > threshold with no note in that period → insert `stale_issue` notification (deduplicated — one per issue per day)
+- [x] Hook into `integrations.ts` sync handlers → insert `sync_complete` notification with count of newly imported issues
+- [x] Hook into `aitask.ts` completion → insert `ai_task_done` notification with task title
+
+### Frontend
+- [x] Bell icon in top bar with red unread count badge (hidden when zero)
+- [x] Click bell → slide-in panel, notifications grouped by Today / Earlier
+- [x] Each item: type icon + title + entity link + relative timestamp + mark-read dot; click navigates to entity
+- [x] Settings: Notification Rules section — stale threshold slider (default 14 days), per-alert-type toggles (stale issues, sync events, AI tasks)
+- [x] Browser `Notification` API opt-in prompt on first panel open; respect browser permission state
+
+---
+
+## Phase 28.5 — Notification Hub (External Delivery via Apprise) — COMPLETED
+
+> DevBrain becomes the central notification backbone for all personal projects.
+> Uses Apprise (Python) as the delivery engine with Telegram as the primary channel.
+> Extends the `notifications` table from Phase 28.1 — same rows, `channel='telegram'` instead of `'in_app'`.
+> **Depends on Phase 28.1** (table must exist first).
+
+### Schema (extends Phase 28.1)
+- [x] Add `notification_channels` table: `(id UUID, user_id UUID, name TEXT, apprise_url TEXT ENCRYPTED, enabled BOOL, created_at TIMESTAMPTZ)` — stores any Apprise-compatible URL (Telegram, Slack, Discord, etc.)
+- [x] Add `project_notification_prefs` table: `(project_id UUID, channel_id UUID, enabled BOOL)` — per-project opt-in/out per channel
+
+### Python Apprise Client
+- [x] `pip install apprise apscheduler` — add to `server/scripts/requirements.txt`
+- [x] Create `server/scripts/apprise_client.py` — wrapper: accepts `{ title, body, level, apprise_urls[] }`, sends via Apprise, exits with JSON result `{ sent: bool, error?: string }`
+- [x] `level` maps to Apprise notify type: `info → NotifyType.INFO`, `success → NotifyType.SUCCESS`, `warning → NotifyType.WARNING`, `error → NotifyType.FAILURE`
+- [x] Load `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` from `.env` as default Apprise URL if no channel configured in DB
+
+### Backend — Delivery Service
+- [x] `server/services/notifier.ts` — Node service that spawns `apprise_client.py` (same bridge pattern as `markitdown_bridge.py`); writes result back to `notifications` table (`delivery_status = 'sent' | 'failed'`, `channel = 'telegram'`)
+- [x] `POST /api/notify` — public endpoint accepting `{ title, body, project, level }` — validates project short name, looks up enabled channels, calls `notifier.ts`; intended for external callers (Claude Code hooks, other projects)
+- [x] `GET /api/notify/log` — paginated notification log; filterable by `project`, `level`, `channel`, `status`, `dateFrom`, `dateTo`
+- [x] `POST /api/notify/test` — sends a test notification through all enabled channels for the current user; used by Settings page
+
+### Scheduled Digests
+- [x] `server/scripts/digest_scheduler.py` using APScheduler — daily job at configured time (default 09:00 local)
+- [x] Digest query: open issue count per project, last session date per project, projects with no activity in > 7 days (stale flag)
+- [x] Format as clean Telegram message: project color emoji indicator, counts, stale callout
+- [x] Digest schedule (time + enabled toggle) stored in `app_settings`; scheduler reads on startup and after settings save
+
+### Claude Code Hook Integration
+- [x] Update `integrations/claude-code/session-end.ps1` — POST to `http://localhost:3001/api/notify` on session complete; payload: `{ project, title: "Session complete — <project>", body: "Duration: Xm, Files changed: N", level: "info" }`
+- [x] Update `integrations/claude-code/session-end.sh` — same for macOS/Linux/WSL
+- [x] Hook call is fire-and-forget with 3s timeout — if DevBrain is not running, fail silently (no error thrown)
+
+### Frontend — Notification Log Page
+- [x] New page `client/src/pages/NotificationLog.tsx` — table of all sent notifications (title, project badge, level chip, channel, status dot, timestamp)
+- [x] Filter bar: project multi-select, level chips, channel chips, status chips, date range
+- [x] Row expand: shows full `body` text
+- [x] Failed rows: "Retry" button → calls delivery service again
+
+### Frontend — Settings: Notification Hub Section
+- [x] **Channels** sub-section: list configured Apprise channels (name + masked URL + enabled toggle + delete); "Add channel" → name + Apprise URL field (with link to Apprise URL docs)
+- [x] Telegram quick-add form: Bot Token + Chat ID fields → auto-constructs `tgram://` Apprise URL on save
+- [x] **Per-project toggles**: table of projects × channels with checkbox grid
+- [x] **Daily Digest**: enabled toggle + time picker (hour selector)
+- [x] "Send Test Notification" button → calls `POST /api/notify/test` → shows inline success/fail result
+
+### Backlog (future phases)
+- [ ] Apprise URL config fully replaces `.env` vars — zero env setup needed
+- [ ] FlowForge pipeline completion → POST to `/api/notify`
+- [ ] Memex re-index completion → POST to `/api/notify`
+- [ ] PlayCru Firebase deploy success → POST to `/api/notify`
+
+---
+
+## Phase 28.2 — Advanced Search & Filtering — COMPLETED
+
+> Make it fast to drill into exactly the issues, docs, and commands you need with composable filters and saved presets.
+> Independent of other Phase 28 work — can be built in parallel with 28.5.
+
+### Schema
+- [x] `saved_filters` table: `(id UUID, user_id UUID, name TEXT, entity_type TEXT, filter_json JSONB, created_at TIMESTAMPTZ)`
+- [x] `search_history` table: `(id UUID, user_id UUID, query TEXT, created_at TIMESTAMPTZ)` — keep last 50 per user (delete oldest on insert)
+
+### Backend
+- [x] Enhance `GET /api/issues` — accept query params: `tags[]`, `status[]`, `priority[]`, `dateFrom`, `dateTo`, `projectIds[]`, `q`
+- [x] Enhance `GET /api/documents` — same pattern plus `fileType[]`
+- [x] `GET /api/search/filters` — list saved filters for current user
+- [x] `POST /api/search/filters` — create saved filter
+- [x] `DELETE /api/search/filters/:id` — delete saved filter
+- [x] `GET /api/search/history` — last 20 queries for current user
+- [x] Write to `search_history` on every non-empty ⌘K search submission
+
+### Frontend
+- [x] Issues page: collapsible filter bar — status chips, priority chips, tag multi-select, date range picker, project multi-select
+- [x] Documents page: same filter bar pattern + file type chips
+- [x] Active filters rendered as dismissable chips above the list; "Clear all" link when any filter is active
+- [x] "Save filter" button → name modal → saved preset appears as a chip above the filter bar
+- [x] ⌘K GlobalSearch: show search history entries below smart suggestions when query is empty
+
+---
+
+## Phase 28.4 — Bulk Operations & Triage — COMPLETED
+
+> Select multiple items at once and act on them together; a dedicated triage view for working through open issues.
+> Build after 28.2 — the list UI refactoring in 28.2 makes checkbox integration cleaner.
+> Triage stale logic reuses the threshold set in 28.1.
+
+### Backend
+- [x] `PATCH /api/issues/bulk` — body `{ ids: string[], action: 'tag'|'status'|'delete', value?: string }`
+- [x] `PATCH /api/documents/bulk` — body `{ ids: string[], action: 're-embed'|'tag'|'delete' }`
+- [x] `PATCH /api/commands/bulk` — body `{ ids: string[], action: 'tag'|'favorite'|'delete' }`
+- [x] `GET /api/issues/triage` — open issues sorted by (priority desc, last_activity asc); include `is_stale` boolean flag
+
+### Frontend
+- [x] Issues, Documents, Commands lists: checkbox column (visible on row hover or once first item checked)
+- [x] "Select all" checkbox in column header; indeterminate state when partially selected
+- [x] When ≥1 item selected: floating action bar appears at bottom of list — context-aware buttons (Tag / Change Status / Re-embed / Favorite / Delete) + "X selected" count + Deselect all
+- [x] Issues page: **Triage** tab alongside All / Open / Resolved — shows stale + high-priority open issues sorted by urgency; bulk action bar always visible in this view
+
+---
+
+## Phase 28.3 — Templates System — COMPLETED
+
+> Reduce repetition when creating issues and runbooks with built-in and custom templates.
+> Independent — no dependencies on other Phase 28 sub-phases. Build last.
+
+### Schema
+- [x] `templates` table: `(id UUID, project_id UUID NULLABLE, type TEXT — 'issue'|'runbook'|'document', name TEXT, description TEXT, body JSONB, is_builtin BOOL, created_at TIMESTAMPTZ)`
+
+### Backend
+- [x] `GET /api/templates?type=&projectId=` — return built-ins + project-scoped templates
+- [x] `POST /api/templates` — create custom template
+- [x] `PUT /api/templates/:id` — update (built-ins return 403)
+- [x] `DELETE /api/templates/:id` — delete (built-ins return 403)
+- [x] Seed built-in templates on first run: **Bug Report** (issue), **Investigation** (issue), **Deployment Runbook** (runbook), **Incident Postmortem** (runbook)
+
+### Frontend
+- [x] Issue create modal: "Use template ▾" dropdown → selecting a template pre-fills title, description, tags, and investigation steps
+- [x] Runbook create modal: same pattern → pre-fills steps list
+- [x] Settings > Templates page: list all templates with type badge and project scope; create / edit / delete custom templates; built-ins are read-only but show a "Duplicate" action
+- [x] Template editor: name, type selector, project scope dropdown, body — step-builder UI for runbooks, freeform markdown textarea for issues/docs
+
