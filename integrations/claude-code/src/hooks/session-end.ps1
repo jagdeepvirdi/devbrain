@@ -66,7 +66,46 @@ $job = Start-Job -ScriptBlock {
         $tasks | Out-File -FilePath $tasksFile -Encoding UTF8 -NoNewline
     }
 
-} -ArgumentList $sessionsRoot, $tasksFile, $utcNow, $timestamp
+    # -- Calculate session metrics and notify DevBrain --
+    $projectName = Split-Path $cwd -Leaf
+    $duration = "unknown"
+    $filesCount = 0
+
+    if ($activeSession) {
+        $sessionFile = Join-Path $activeSession.FullName "SESSION.md"
+        if (Test-Path $sessionFile) {
+            $startedLine = Select-String -Path $sessionFile -Pattern "^started:\s*(.+)" | Select-Object -First 1
+            if ($startedLine) {
+                $startedStr = $startedLine.Matches.Groups[1].Value.Trim()
+                try {
+                    $startedTime = [DateTime]::Parse($startedStr)
+                    $elapsed = (Get-Date) - $startedTime
+                    $duration = [Math]::Max(1, [Math]::Round($elapsed.TotalMinutes))
+                } catch {}
+            }
+        }
+
+        try {
+            $gitStatus = git status --porcelain 2>$null
+            if ($gitStatus) {
+                $filesCount = ($gitStatus | Measure-Object).Count
+            }
+        } catch {}
+    }
+
+    try {
+        $body = @{
+            project = $projectName
+            title = "Session complete — $projectName"
+            body = "Duration: ${duration}m, Files changed: $filesCount"
+            level = "info"
+        } | ConvertTo-Json
+
+        Invoke-RestMethod -Uri "http://localhost:3001/api/notify" -Method Post -Body $body -ContentType "application/json" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
+    } catch {}
+
+} -ArgumentList $sessionsRoot, $tasksFile, $utcNow, $timestamp, $cwd
+
 
 # Detach -- don't wait for the job, let Claude exit cleanly
 # The job continues running in the background

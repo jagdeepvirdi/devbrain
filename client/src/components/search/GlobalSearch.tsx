@@ -49,6 +49,7 @@ export function GlobalSearch({ onNavigate, open, onClose }: Props) {
   const [scopeProject, setScopeProject] = useState<string | null>(null)
   const [limit,        setLimit]        = useState(10)
   const [suggestions,  setSuggestions]  = useState<SearchSuggestion[]>([])
+  const [history,      setHistory]      = useState<any[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef  = useRef<HTMLDivElement>(null)
 
@@ -63,10 +64,14 @@ export function GlobalSearch({ onNavigate, open, onClose }: Props) {
       setScopeProject(currProject?.id ?? null)
       setLimit(10)
       setSuggestions([])
+      setHistory([])
       setTimeout(() => inputRef.current?.focus(), 30)
       // Load suggestions on open
       searchApi.suggestions(currProject?.id ?? null)
         .then(setSuggestions)
+        .catch(() => {})
+      searchApi.getHistory()
+        .then(setHistory)
         .catch(() => {})
     }
   }, [open, currProject?.id])
@@ -204,76 +209,112 @@ export function GlobalSearch({ onNavigate, open, onClose }: Props) {
 
         {/* Results */}
         <div ref={listRef} data-search-results role="listbox" style={{ overflowY: 'auto', flex: 1 }}>
-          {results === null && !loading && recentItems.length === 0 && suggestions.length === 0 && (
+          {results === null && !loading && !query && suggestions.length === 0 && history.length === 0 && recentItems.length === 0 && (
             <div style={{ padding: '36px 20px', textAlign: 'center', fontSize: '13px', color: 'var(--fg-4)' }}>
               Start typing to search
             </div>
           )}
 
-          {results === null && !loading && !query && suggestions.length > 0 && recentItems.length === 0 && (
+          {results === null && !loading && !query && (suggestions.length > 0 || history.length > 0 || recentItems.length > 0) && (
             <div>
-              <div style={{ padding: '8px 14px 3px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--accent-2)' }}>
-                  ✦ Suggestions
-                </span>
-              </div>
-              {suggestions.map(s => (
-                <div
-                  key={`${s.type}-${s.id}`}
-                  onClick={() => {
-                    navigate(`/${s.type === 'issue' ? 'issues' : 'docs'}?open=${s.id}`)
-                    onClose()
-                  }}
-                  style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', cursor: 'default' }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elev-2)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                >
-                  <span style={{ width: 20, textAlign: 'center', fontSize: '11px', color: s.type === 'issue' ? '#FF9D4D' : '#60A5FA', flexShrink: 0 }}>
-                    {s.type === 'issue' ? '⚠' : '📄'}
-                  </span>
-                  {s.project_color && <span style={{ width: 5, height: 5, borderRadius: '50%', background: s.project_color, flexShrink: 0 }} />}
-                  <span style={{ flex: 1, fontSize: '13px', color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {s.title}
-                  </span>
-                  {s.project_name && <span style={{ fontSize: '11px', color: 'var(--fg-4)', flexShrink: 0 }}>{s.project_name}</span>}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {results === null && !loading && recentItems.length > 0 && (
-            <div>
-              <div style={{ padding: '8px 14px 3px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--fg-4)' }}>
-                  Recently Viewed
-                </span>
-              </div>
-              {recentItems.map(item => {
-                const typeColor = TYPE_META[item.type === 'document' ? 'doc' : item.type]?.color ?? 'var(--fg-4)'
-                const typeIcon  = TYPE_META[item.type === 'document' ? 'doc' : item.type]?.icon ?? '·'
-                return (
-                  <div
-                    key={`${item.type}-${item.id}`}
-                    onClick={() => {
-                      navigate(`/${RECENT_ROUTE[item.type] ?? ''}?open=${item.id}`)
-                      onClose()
-                    }}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 10,
-                      padding: '8px 14px', cursor: 'default',
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elev-2)')}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                  >
-                    <span style={{ width: 20, textAlign: 'center', fontSize: '11px', color: typeColor, flexShrink: 0 }}>{typeIcon}</span>
-                    {item.projectColor && <span style={{ width: 5, height: 5, borderRadius: '50%', background: item.projectColor, flexShrink: 0 }} />}
-                    <span style={{ flex: 1, fontSize: '13px', color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {item.title}
+              {suggestions.length > 0 && (
+                <div>
+                  <div style={{ padding: '8px 14px 3px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--accent-2)' }}>
+                      ✦ Suggestions
                     </span>
-                    {item.projectName && <span style={{ fontSize: '11px', color: 'var(--fg-4)', flexShrink: 0 }}>{item.projectName}</span>}
                   </div>
-                )
-              })}
+                  {suggestions.map(s => (
+                    <div
+                      key={`${s.type}-${s.id}`}
+                      onClick={() => {
+                        navigate(`/${s.type === 'issue' ? 'issues' : 'docs'}?open=${s.id}`)
+                        onClose()
+                      }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', cursor: 'default' }}
+                      onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elev-2)')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <span style={{ width: 20, textAlign: 'center', fontSize: '11px', color: s.type === 'issue' ? '#FF9D4D' : '#60A5FA', flexShrink: 0 }}>
+                        {s.type === 'issue' ? '⚠' : '📄'}
+                      </span>
+                      {s.project_color && <span style={{ width: 5, height: 5, borderRadius: '50%', background: s.project_color, flexShrink: 0 }} />}
+                      <span style={{ flex: 1, fontSize: '13px', color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {s.title}
+                      </span>
+                      {s.project_name && <span style={{ fontSize: '11px', color: 'var(--fg-4)', flexShrink: 0 }}>{s.project_name}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {history.length > 0 && (
+                <div style={{ marginTop: suggestions.length > 0 ? 12 : 0 }}>
+                  <div style={{ padding: '8px 14px 3px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--fg-3)' }}>
+                       Search History
+                    </span>
+                  </div>
+                  {history.map(h => (
+                    <div
+                      key={h.id}
+                      onClick={() => {
+                        setQuery(h.query)
+                        doSearch(h.query, scopeProject, limit)
+                      }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', cursor: 'default' }}
+                      onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elev-2)')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <span style={{ width: 20, textAlign: 'center', fontSize: '11px', color: 'var(--fg-3)', flexShrink: 0 }}>
+                        🔍
+                      </span>
+                      <span style={{ flex: 1, fontSize: '13px', color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {h.query}
+                      </span>
+                      <span style={{ fontSize: '11px', color: 'var(--fg-4)', flexShrink: 0 }}>
+                        {new Date(h.created_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {recentItems.length > 0 && (
+                <div style={{ marginTop: (suggestions.length > 0 || history.length > 0) ? 12 : 0 }}>
+                  <div style={{ padding: '8px 14px 3px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--fg-4)' }}>
+                      Recently Viewed
+                    </span>
+                  </div>
+                  {recentItems.map(item => {
+                    const typeColor = TYPE_META[item.type === 'document' ? 'doc' : item.type]?.color ?? 'var(--fg-4)'
+                    const typeIcon  = TYPE_META[item.type === 'document' ? 'doc' : item.type]?.icon ?? '·'
+                    return (
+                      <div
+                        key={`${item.type}-${item.id}`}
+                        onClick={() => {
+                          navigate(`/${RECENT_ROUTE[item.type] ?? ''}?open=${item.id}`)
+                          onClose()
+                        }}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          padding: '8px 14px', cursor: 'default',
+                        }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elev-2)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <span style={{ width: 20, textAlign: 'center', fontSize: '11px', color: typeColor, flexShrink: 0 }}>{typeIcon}</span>
+                        {item.projectColor && <span style={{ width: 5, height: 5, borderRadius: '50%', background: item.projectColor, flexShrink: 0 }} />}
+                        <span style={{ flex: 1, fontSize: '13px', color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {item.title}
+                        </span>
+                        {item.projectName && <span style={{ fontSize: '11px', color: 'var(--fg-4)', flexShrink: 0 }}>{item.projectName}</span>}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )}
 

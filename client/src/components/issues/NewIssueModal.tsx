@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useProjectStore } from '../../store/projectStore'
-import { issuesApi, runbooksApi } from '../../lib/api'
-import type { Issue, IssueStep, Runbook, RelatedIssue } from '../../lib/api'
+import { issuesApi, runbooksApi, templatesApi } from '../../lib/api'
+import type { Issue, IssueStep, Runbook, RelatedIssue, Template } from '../../lib/api'
 import { PRIORITY_META } from './issueConstants'
 import type { Priority } from './issueConstants'
 
@@ -17,6 +17,9 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
   const [error,         setError]         = useState('')
   const [runbooks,      setRunbooks]      = useState<Runbook[]>([])
   const [runbookId,     setRunbookId]     = useState<string>('')
+  const [templates,     setTemplates]     = useState<Template[]>([])
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('')
+  const [tempSteps,     setTempSteps]     = useState<string[]>([])
   const [related,       setRelated]       = useState<RelatedIssue[]>([])
   const [tags,          setTags]          = useState<string[]>([])
   const [tagInput,      setTagInput]      = useState('')
@@ -27,6 +30,12 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
   useEffect(() => {
     runbooksApi.list().then(setRunbooks).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    templatesApi.list({ type: 'issue', projectId: projectId ?? undefined })
+      .then(setTemplates)
+      .catch(() => {})
+  }, [projectId])
 
   useEffect(() => {
     if (relatedTimer.current) clearTimeout(relatedTimer.current)
@@ -55,19 +64,48 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
     return () => window.removeEventListener('keydown', handler)
   }, [onClose])
 
+  const handleTemplateSelect = (templateId: string) => {
+    setSelectedTemplateId(templateId)
+    if (!templateId) {
+      setTempSteps([])
+      return
+    }
+    const t = templates.find(x => x.id === templateId)
+    if (t && t.body) {
+      if (t.body.title) setTitle(t.body.title)
+      if (t.body.description) setDesc(t.body.description)
+      if (Array.isArray(t.body.tags)) setTags(t.body.tags)
+      if (Array.isArray(t.body.steps)) {
+        setTempSteps(t.body.steps)
+      } else {
+        setTempSteps([])
+      }
+    }
+  }
+
   async function save() {
     if (!title.trim()) { setError('Title is required'); return }
     setSaving(true)
     try {
-      const selectedRunbook = runbooks.find(r => r.id === runbookId)
-      const investigation_steps: IssueStep[] = selectedRunbook
-        ? selectedRunbook.steps.map((s, i) => ({
+      let investigation_steps: IssueStep[] = []
+      if (tempSteps.length > 0) {
+        investigation_steps = tempSteps.map((step, i) => ({
+          id: globalThis.crypto.randomUUID(),
+          order: i,
+          instruction: step,
+          done: false,
+        }))
+      } else {
+        const selectedRunbook = runbooks.find(r => r.id === runbookId)
+        if (selectedRunbook) {
+          investigation_steps = selectedRunbook.steps.map((s, i) => ({
             id: globalThis.crypto.randomUUID(),
             order: i,
             instruction: s.instruction,
             done: false,
           }))
-        : []
+        }
+      }
       const issue = await issuesApi.create({
         title: title.trim(),
         description: desc.trim(),
@@ -113,6 +151,25 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
         </div>
 
         {error && <p style={{ margin: 0, fontSize: '12px', color: '#F05A5A' }}>{error}</p>}
+
+        <div>
+          <label style={{ fontSize: '11px', color: 'var(--fg-3)', display: 'block', marginBottom: 5 }}>Use template</label>
+          <select
+            value={selectedTemplateId}
+            onChange={e => {
+              handleTemplateSelect(e.target.value)
+              setRunbookId('') // clear runbook selector
+            }}
+            style={{ width: '100%', padding: '7px 8px', borderRadius: 6, border: '1px solid var(--line-2)', background: 'var(--bg)', color: selectedTemplateId ? 'var(--fg)' : 'var(--fg-3)', fontSize: '13px' }}
+          >
+            <option value="">No template (blank)</option>
+            {templates.map(t => (
+              <option key={t.id} value={t.id}>
+                {t.name}{t.project_name ? ` · ${t.project_name}` : ''}
+              </option>
+            ))}
+          </select>
+        </div>
 
         <input
           value={title}
@@ -232,7 +289,11 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
           </label>
           <select
             value={runbookId}
-            onChange={e => setRunbookId(e.target.value)}
+            onChange={e => {
+              setRunbookId(e.target.value)
+              setSelectedTemplateId('') // clear template selector
+              setTempSteps([])
+            }}
             style={{ width: '100%', padding: '7px 8px', borderRadius: 6, border: '1px solid var(--line-2)', background: 'var(--bg)', color: runbookId ? 'var(--fg)' : 'var(--fg-3)', fontSize: '13px' }}
           >
             <option value="">None (blank steps)</option>

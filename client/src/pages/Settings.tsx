@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { settingsApi, authApi, projectsApi, usersApi, auditApi, integrationsApi, claudeProjectsApi, type SettingsData, type ImportSummary, type BackupConfig, type User, type AuditEvent, type AuthUser, type IntegrationsConfig, type ScanCandidate, type Project } from '../lib/api'
+import { settingsApi, authApi, projectsApi, usersApi, auditApi, integrationsApi, claudeProjectsApi, notifyApi, templatesApi, type SettingsData, type ImportSummary, type BackupConfig, type User, type AuditEvent, type AuthUser, type ScanCandidate, type Project, type NotificationRules, type Invite, type Integration, type LdapSettings, type NotificationChannel, type ProjectNotificationPref, type DigestSettings, type Template } from '../lib/api'
 import { useToast } from '../components/Toast'
+import { useNavigate } from 'react-router-dom'
 
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
@@ -56,7 +57,7 @@ function UserManagement() {
     if (!newUser.username || !newUser.password) return
     setAdding(true)
     try {
-      const u = await usersApi.create({ ...newUser })
+      const u = await usersApi.create({ ...newUser, email: null })
       setUsers(prev => [...prev, u])
       setNewUser({ username: '', password: '', role: 'member' })
       setShowAdd(false)
@@ -269,7 +270,7 @@ function AuditLog() {
   const [loading,     setLoading]     = useState(true)
   const [offset,      setOffset]      = useState(0)
   const [entityType,  setEntityType]  = useState('')
-  const [userId,      setUserId]      = useState('')
+  const [userId]                      = useState('')
   const [exporting,   setExporting]   = useState(false)
 
   const PAGE = 25
@@ -1124,7 +1125,120 @@ function ScheduledBackupSection() {
   )
 }
 
+// ── Notification Rules section ─────────────────────────────────────────────
+
+function NotificationRulesSection({ isAdmin }: { isAdmin: boolean }) {
+  const { toast } = useToast()
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [rules, setRules] = useState<NotificationRules>({
+    stale_threshold_days: 14,
+    stale_issues_enabled: true,
+    sync_alerts_enabled: true,
+    ai_task_alerts_enabled: true
+  })
+
+  useEffect(() => {
+    settingsApi.getNotificationRules()
+      .then(r => setRules(r))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault()
+    if (!isAdmin) return
+    setSaving(true)
+    try {
+      const updated = await settingsApi.saveNotificationRules(rules)
+      setRules(updated)
+      toast('Notification rules saved')
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) return <div style={{ fontSize: 12, color: 'var(--fg-4)', padding: '4px 0' }}>Loading…</div>
+
+  return (
+    <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 4 }}>
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--fg-3)', marginBottom: 6 }}>
+          <span>Stale issue threshold</span>
+          <span style={{ fontWeight: 600, color: 'var(--fg-2)' }}>{rules.stale_threshold_days} days</span>
+        </div>
+        <input
+          type="range"
+          min="1"
+          max="30"
+          value={rules.stale_threshold_days}
+          disabled={!isAdmin}
+          onChange={e => setRules(p => ({ ...p, stale_threshold_days: Number(e.target.value) }))}
+          style={{ width: '100%', cursor: isAdmin ? 'pointer' : 'not-allowed' }}
+        />
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="checkbox"
+            id="rule-stale-issues"
+            checked={rules.stale_issues_enabled}
+            disabled={!isAdmin}
+            onChange={e => setRules(p => ({ ...p, stale_issues_enabled: e.target.checked }))}
+            style={{ cursor: isAdmin ? 'pointer' : 'not-allowed' }}
+          />
+          <label htmlFor="rule-stale-issues" style={{ fontSize: 13, color: 'var(--fg-2)', cursor: isAdmin ? 'pointer' : 'default' }}>
+            Stale issues alert
+          </label>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="checkbox"
+            id="rule-sync-events"
+            checked={rules.sync_alerts_enabled}
+            disabled={!isAdmin}
+            onChange={e => setRules(p => ({ ...p, sync_alerts_enabled: e.target.checked }))}
+            style={{ cursor: isAdmin ? 'pointer' : 'not-allowed' }}
+          />
+          <label htmlFor="rule-sync-events" style={{ fontSize: 13, color: 'var(--fg-2)', cursor: isAdmin ? 'pointer' : 'default' }}>
+            Sync events alert
+          </label>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="checkbox"
+            id="rule-ai-tasks"
+            checked={rules.ai_task_alerts_enabled}
+            disabled={!isAdmin}
+            onChange={e => setRules(p => ({ ...p, ai_task_alerts_enabled: e.target.checked }))}
+            style={{ cursor: isAdmin ? 'pointer' : 'not-allowed' }}
+          />
+          <label htmlFor="rule-ai-tasks" style={{ fontSize: 13, color: 'var(--fg-2)', cursor: isAdmin ? 'pointer' : 'default' }}>
+            AI task completion alert
+          </label>
+        </div>
+      </div>
+
+      {isAdmin && (
+        <button
+          type="submit"
+          disabled={saving}
+          style={{ height: 32, padding: '0 14px', borderRadius: 'var(--radius)', border: '1px solid var(--accent)', background: 'var(--accent)', color: 'white', fontSize: 12.5, opacity: saving ? 0.6 : 1, cursor: 'pointer', alignSelf: 'flex-start' }}
+        >
+          {saving ? 'Saving…' : 'Save Rules'}
+        </button>
+      )}
+    </form>
+  )
+}
+
 // ── Zip Import section ────────────────────────────────────────────────────
+
 
 function ZipImportSection() {
   const { toast } = useToast()
@@ -1181,6 +1295,848 @@ function ZipImportSection() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Notification Hub section ─────────────────────────────────────────────
+
+interface NotificationHubSectionProps {
+  projects: Project[]
+}
+
+function NotificationHubSection({ projects }: NotificationHubSectionProps) {
+  const { toast } = useToast()
+  const navigate = useNavigate()
+  
+  // State
+  const [channels, setChannels] = useState<NotificationChannel[]>([])
+  const [projectPrefs, setProjectPrefs] = useState<ProjectNotificationPref[]>([])
+  const [digest, setDigest] = useState<DigestSettings>({ enabled: false, time: '09:00' })
+  const [loading, setLoading] = useState(true)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<string | null>(null)
+
+  // Add Channel Form State
+  const [chanName, setChanName] = useState('')
+  const [chanUrl, setChanUrl] = useState('')
+  const [chanEnabled, setChanEnabled] = useState(true)
+
+  // Telegram Quick Add State
+  const [tgToken, setTgToken] = useState('')
+  const [tgChatId, setTgChatId] = useState('')
+
+  // Fetch all data
+  const fetchData = async () => {
+    try {
+      const [chList, prefs, digSettings] = await Promise.all([
+        notifyApi.getChannels(),
+        notifyApi.getProjectPrefs(),
+        settingsApi.getDigestSettings()
+      ])
+      setChannels(chList)
+      setProjectPrefs(prefs)
+      setDigest(digSettings)
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchData()
+  }, [])
+
+  async function handleAddChannel(e: React.FormEvent) {
+    e.preventDefault()
+    if (!chanName.trim() || !chanUrl.trim()) return
+    try {
+      const newChan = await notifyApi.createChannel({
+        name: chanName.trim(),
+        apprise_url: chanUrl.trim(),
+        enabled: chanEnabled
+      })
+      setChannels(prev => [newChan, ...prev])
+      setChanName('')
+      setChanUrl('')
+      setChanEnabled(true)
+      toast('Notification channel added')
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    }
+  }
+
+  async function handleTelegramQuickAdd(e: React.FormEvent) {
+    e.preventDefault()
+    if (!tgToken.trim() || !tgChatId.trim()) return
+    const url = `tgram://${tgToken.trim()}/${tgChatId.trim()}`
+    try {
+      const newChan = await notifyApi.createChannel({
+        name: 'Telegram (Quick)',
+        apprise_url: url,
+        enabled: true
+      })
+      setChannels(prev => [newChan, ...prev])
+      setTgToken('')
+      setTgChatId('')
+      toast('Telegram channel configured')
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    }
+  }
+
+  async function handleDeleteChannel(id: string) {
+    if (!confirm('Are you sure you want to delete this channel?')) return
+    try {
+      await notifyApi.deleteChannel(id)
+      setChannels(prev => prev.filter(c => c.id !== id))
+      toast('Channel deleted')
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    }
+  }
+
+  async function handleToggleChannel(id: string, enabled: boolean) {
+    try {
+      const updated = await notifyApi.toggleChannel(id, enabled)
+      setChannels(prev => prev.map(c => c.id === id ? { ...c, enabled: updated.enabled } : c))
+      toast(`Channel ${updated.enabled ? 'enabled' : 'disabled'}`)
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    }
+  }
+
+  async function handlePrefChange(projectId: string, channelId: string, enabled: boolean) {
+    try {
+      const updated = await notifyApi.saveProjectPref({ project_id: projectId, channel_id: channelId, enabled })
+      setProjectPrefs(prev => {
+        const next = prev.filter(p => !(p.project_id === projectId && p.channel_id === channelId))
+        next.push(updated)
+        return next
+      })
+      toast('Project preference updated')
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    }
+  }
+
+  async function handleSaveDigest(e: React.FormEvent) {
+    e.preventDefault()
+    try {
+      const updated = await settingsApi.saveDigestSettings(digest)
+      setDigest(updated)
+      toast('Daily digest settings saved')
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    }
+  }
+
+  async function handleSendTest() {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const res = await notifyApi.testNotification()
+      if (res.success) {
+        setTestResult('Success: Test notification delivered successfully.')
+        toast('Test notification sent', 'success')
+      } else {
+        setTestResult('Failed: Failed to deliver.')
+        toast('Test notification failed', 'error')
+      }
+    } catch (err) {
+      setTestResult(`Error: ${(err as Error).message}`)
+      toast((err as Error).message, 'error')
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  if (loading) return <div style={{ fontSize: 12, color: 'var(--fg-4)', padding: '4px 0' }}>Loading…</div>
+
+  const inputStyle: React.CSSProperties = {
+    background: 'var(--bg)', border: '1px solid var(--line-2)', borderRadius: 5,
+    padding: '6px 8px', color: 'var(--fg)', fontSize: 12.5, outline: 'none', width: '100%', boxSizing: 'border-box'
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingTop: 4 }}>
+      {/* 1. Apprise Channels List */}
+      <div>
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg)', marginBottom: 8 }}>Configured Apprise Channels</div>
+        {channels.length === 0 ? (
+          <div style={{ fontSize: 12, color: 'var(--fg-4)', padding: '8px 0', borderBottom: '1px solid var(--line)' }}>No external channels configured. Defaults to .env settings.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+            {channels.map(c => (
+              <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--line)' }}>
+                <div>
+                  <div style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-2)' }}>{c.name}</div>
+                  <div style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>{c.apprise_url}</div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <input
+                    type="checkbox"
+                    checked={c.enabled}
+                    onChange={(e) => handleToggleChannel(c.id, e.target.checked)}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  <button
+                    onClick={() => handleDeleteChannel(c.id)}
+                    style={{
+                      padding: '2px 6px', borderRadius: 4, fontSize: '11px',
+                      background: 'rgba(240,90,90,.08)', border: '1px solid rgba(240,90,90,.25)', color: '#F8A8A8',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 2. Add Apprise Channel Form */}
+      <form onSubmit={handleAddChannel} style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg)' }}>Add Apprise Channel</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            placeholder="Channel Name (e.g. Discord Alert)"
+            value={chanName}
+            onChange={e => setChanName(e.target.value)}
+            style={{ ...inputStyle, flex: 1, minWidth: 150 }}
+            required
+          />
+          <input
+            type="text"
+            placeholder="Apprise URL (e.g. discord://id/token)"
+            value={chanUrl}
+            onChange={e => setChanUrl(e.target.value)}
+            style={{ ...inputStyle, flex: 2, minWidth: 200 }}
+            required
+          />
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--fg-4)' }}>
+          See <a href="https://github.com/caronc/apprise/wiki" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-2)' }}>Apprise URL Wiki</a> for supported services (Discord, Slack, Email, Pushover, etc.).
+        </div>
+        <button
+          type="submit"
+          style={{
+            height: 28, padding: '0 12px', borderRadius: 'var(--radius)', border: '1px solid var(--accent)',
+            background: 'var(--accent)', color: 'white', fontSize: 12, cursor: 'pointer', alignSelf: 'flex-start'
+          }}
+        >
+          Add Channel
+        </button>
+      </form>
+
+      {/* 3. Telegram Quick Add */}
+      <form onSubmit={handleTelegramQuickAdd} style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg)' }}>Telegram Quick-Add</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            placeholder="Bot Token (e.g. 12345:AAAA-ZZZZ)"
+            value={tgToken}
+            onChange={e => setTgToken(e.target.value)}
+            style={{ ...inputStyle, flex: 1, minWidth: 180 }}
+            required
+          />
+          <input
+            type="text"
+            placeholder="Chat ID (e.g. -10012345)"
+            value={tgChatId}
+            onChange={e => setTgChatId(e.target.value)}
+            style={{ ...inputStyle, flex: 1, minWidth: 120 }}
+            required
+          />
+        </div>
+        <button
+          type="submit"
+          style={{
+            height: 28, padding: '0 12px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)',
+            background: 'var(--bg-elev-2)', color: 'var(--fg-2)', fontSize: 12, cursor: 'pointer', alignSelf: 'flex-start'
+          }}
+        >
+          Save Telegram
+        </button>
+      </form>
+
+      {/* 4. Per-project preferences grid */}
+      {channels.length > 0 && (
+        <div style={{ borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg)', marginBottom: 8 }}>Project Notifications Grid</div>
+          <div style={{ overflowX: 'auto', background: 'var(--bg)', borderRadius: 'var(--radius)', border: '1px solid var(--line)' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'left' }}>
+              <thead>
+                <tr style={{ background: 'var(--bg-elev-2)', borderBottom: '1px solid var(--line)', color: 'var(--fg-3)' }}>
+                  <th style={{ padding: '6px 10px' }}>Project</th>
+                  {channels.map(c => (
+                    <th key={c.id} style={{ padding: '6px 10px', textAlign: 'center' }}>{c.name}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {projects.map(p => (
+                  <tr key={p.id} style={{ borderBottom: '1px solid var(--line)' }}>
+                    <td style={{ padding: '8px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: p.color }} />
+                      {p.name}
+                    </td>
+                    {channels.map(c => {
+                      const isEnabled = projectPrefs.find(pr => pr.project_id === p.id && pr.channel_id === c.id)?.enabled ?? true
+                      return (
+                        <td key={c.id} style={{ padding: '8px 10px', textAlign: 'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={isEnabled}
+                            onChange={(e) => handlePrefChange(p.id, c.id, e.target.checked)}
+                            style={{ cursor: 'pointer' }}
+                          />
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Daily Digest Settings */}
+      <form onSubmit={handleSaveDigest} style={{ display: 'flex', flexDirection: 'column', gap: 10, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg)' }}>Daily Activity Digest</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="checkbox"
+            id="digest-enabled"
+            checked={digest.enabled}
+            onChange={e => setDigest(p => ({ ...p, enabled: e.target.checked }))}
+            style={{ cursor: 'pointer' }}
+          />
+          <label htmlFor="digest-enabled" style={{ fontSize: 13, color: 'var(--fg-2)', cursor: 'pointer' }}>
+            Enable Daily Digest
+          </label>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>Delivery Time:</span>
+          <input
+            type="time"
+            value={digest.time}
+            onChange={e => setDigest(p => ({ ...p, time: e.target.value }))}
+            style={{
+              padding: '4px 6px', borderRadius: 4, background: 'var(--bg)',
+              border: '1px solid var(--line-2)', color: 'var(--fg)', fontSize: '12.5px'
+            }}
+          />
+        </div>
+        <button
+          type="submit"
+          style={{
+            height: 28, padding: '0 12px', borderRadius: 'var(--radius)', border: '1px solid var(--accent)',
+            background: 'var(--accent)', color: 'white', fontSize: 12, cursor: 'pointer', alignSelf: 'flex-start'
+          }}
+        >
+          Save Schedule
+        </button>
+      </form>
+
+      {/* 6. Test & Log Trigger */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg)' }}>Testing & Logging</div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button
+            type="button"
+            onClick={handleSendTest}
+            disabled={testing}
+            style={{
+              height: 28, padding: '0 12px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)',
+              background: 'var(--bg-elev-2)', color: 'var(--fg-2)', fontSize: 12, cursor: 'pointer', opacity: testing ? 0.6 : 1
+            }}
+          >
+            {testing ? 'Testing...' : 'Send Test Notification'}
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/notification-log')}
+            style={{
+              height: 28, padding: '0 12px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)',
+              background: 'var(--bg-elev)', color: 'var(--accent-2)', fontSize: 12, cursor: 'pointer'
+            }}
+          >
+            View Delivery Log
+          </button>
+        </div>
+        {testResult && (
+          <div style={{
+            fontSize: 11.5, padding: '8px 10px', borderRadius: 4, fontFamily: 'var(--font-mono)',
+            background: testResult.startsWith('Success') ? 'rgba(74,222,128,.06)' : 'rgba(239,68,68,.06)',
+            border: `1px solid ${testResult.startsWith('Success') ? 'rgba(74,222,128,.2)' : 'rgba(239,68,68,.2)'}`,
+            color: testResult.startsWith('Success') ? '#4ADE80' : '#F05A5A'
+          }}>
+            {testResult}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Templates Section ──────────────────────────────────────────────────────
+
+interface TemplatesSectionProps {
+  projects: Project[]
+}
+
+function TemplatesSection({ projects }: TemplatesSectionProps) {
+  const { toast } = useToast()
+  const [templates, setTemplates] = useState<Template[]>([])
+  const [loading, setLoading] = useState(true)
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [editingTemplate, setEditingTemplate] = useState<Template | null>(null)
+  
+  // Form States
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [type, setType] = useState<'issue' | 'runbook' | 'document'>('issue')
+  const [projectId, setProjectId] = useState<string | null>(null)
+  
+  // Issue Body
+  const [issueTitle, setIssueTitle] = useState('')
+  const [issueDescription, setIssueDescription] = useState('')
+  const [issueTagsRaw, setIssueTagsRaw] = useState('')
+  const [issueSteps, setIssueSteps] = useState<string[]>([])
+  const [newIssueStep, setNewIssueStep] = useState('')
+  
+  // Document Body
+  const [docTitle, setDocTitle] = useState('')
+  const [docContent, setDocContent] = useState('')
+  
+  // Runbook Body
+  const [rbSteps, setRbSteps] = useState<{ instruction: string; command?: string }[]>([])
+  const [newRbInstruction, setNewRbInstruction] = useState('')
+  const [newRbCommand, setNewRbCommand] = useState('')
+
+  const loadTemplates = async () => {
+    try {
+      const data = await templatesApi.list()
+      setTemplates(data)
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadTemplates()
+  }, [])
+
+  const addIssueStep = () => {
+    if (!newIssueStep.trim()) return
+    setIssueSteps(prev => [...prev, newIssueStep.trim()])
+    setNewIssueStep('')
+  }
+  
+  const removeIssueStep = (index: number) => {
+    setIssueSteps(prev => prev.filter((_, i) => i !== index))
+  }
+  
+  const moveIssueStep = (index: number, direction: 'up' | 'down') => {
+    setIssueSteps(prev => {
+      const next = [...prev]
+      const target = direction === 'up' ? index - 1 : index + 1
+      if (target >= 0 && target < next.length) {
+        const temp = next[index]
+        next[index] = next[target]
+        next[target] = temp
+      }
+      return next
+    })
+  }
+
+  const addRbStep = () => {
+    if (!newRbInstruction.trim()) return
+    setRbSteps(prev => [...prev, { instruction: newRbInstruction.trim(), command: newRbCommand.trim() || undefined }])
+    setNewRbInstruction('')
+    setNewRbCommand('')
+  }
+
+  const removeRbStep = (index: number) => {
+    setRbSteps(prev => prev.filter((_, i) => i !== index))
+  }
+
+  const moveRbStep = (index: number, direction: 'up' | 'down') => {
+    setRbSteps(prev => {
+      const next = [...prev]
+      const target = direction === 'up' ? index - 1 : index + 1
+      if (target >= 0 && target < next.length) {
+        const temp = next[index]
+        next[index] = next[target]
+        next[target] = temp
+      }
+      return next
+    })
+  }
+
+  const openNew = () => {
+    setEditingTemplate(null)
+    setName('')
+    setDescription('')
+    setType('issue')
+    setProjectId(null)
+    setIssueTitle('')
+    setIssueDescription('')
+    setIssueTagsRaw('')
+    setIssueSteps([])
+    setDocTitle('')
+    setDocContent('')
+    setRbSteps([])
+    setEditorOpen(true)
+  }
+
+  const openEdit = (t: Template) => {
+    setEditingTemplate(t)
+    setName(t.name)
+    setDescription(t.description)
+    setType(t.type)
+    setProjectId(t.project_id)
+    
+    if (t.type === 'issue') {
+      setIssueTitle(t.body?.title || '')
+      setIssueDescription(t.body?.description || '')
+      setIssueTagsRaw(Array.isArray(t.body?.tags) ? t.body.tags.join(', ') : '')
+      setIssueSteps(Array.isArray(t.body?.steps) ? t.body.steps : [])
+    } else if (t.type === 'document') {
+      setDocTitle(t.body?.title || '')
+      setDocContent(t.body?.content || '')
+    } else if (t.type === 'runbook') {
+      setRbSteps(Array.isArray(t.body?.steps) ? t.body.steps : [])
+    }
+    setEditorOpen(true)
+  }
+
+  const openDuplicate = (t: Template) => {
+    setEditingTemplate(null)
+    setName(`${t.name} (Copy)`)
+    setDescription(t.description)
+    setType(t.type)
+    setProjectId(t.project_id)
+    
+    if (t.type === 'issue') {
+      setIssueTitle(t.body?.title || '')
+      setIssueDescription(t.body?.description || '')
+      setIssueTagsRaw(Array.isArray(t.body?.tags) ? t.body.tags.join(', ') : '')
+      setIssueSteps(Array.isArray(t.body?.steps) ? t.body.steps : [])
+    } else if (t.type === 'document') {
+      setDocTitle(t.body?.title || '')
+      setDocContent(t.body?.content || '')
+    } else if (t.type === 'runbook') {
+      setRbSteps(Array.isArray(t.body?.steps) ? t.body.steps : [])
+    }
+    setEditorOpen(true)
+  }
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this template?')) return
+    try {
+      await templatesApi.remove(id)
+      toast('Template deleted', 'success')
+      loadTemplates()
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    }
+  }
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!name.trim()) {
+      toast('Name is required', 'error')
+      return
+    }
+    
+    let body: any = {}
+    if (type === 'issue') {
+      const tags = issueTagsRaw.split(',').map(t => t.trim()).filter(Boolean)
+      body = {
+        title: issueTitle.trim(),
+        description: issueDescription.trim(),
+        tags,
+        steps: issueSteps
+      }
+    } else if (type === 'document') {
+      body = {
+        title: docTitle.trim(),
+        content: docContent.trim()
+      }
+    } else if (type === 'runbook') {
+      body = {
+        steps: rbSteps
+      }
+    }
+
+    try {
+      if (editingTemplate) {
+        await templatesApi.update(editingTemplate.id, {
+          name: name.trim(),
+          description: description.trim(),
+          project_id: projectId,
+          body
+        })
+        toast('Template updated', 'success')
+      } else {
+        await templatesApi.create({
+          name: name.trim(),
+          description: description.trim(),
+          type,
+          project_id: projectId,
+          body
+        })
+        toast('Template created', 'success')
+      }
+      setEditorOpen(false)
+      loadTemplates()
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    }
+  }
+
+  const formInp: React.CSSProperties = {
+    width: '100%',
+    background: 'var(--bg)',
+    border: '1px solid var(--line-2)',
+    borderRadius: 6,
+    padding: '7px 10px',
+    color: 'var(--fg)',
+    fontSize: '13px',
+    boxSizing: 'border-box',
+    outline: 'none',
+  }
+
+  if (loading) return <div style={{ fontSize: 12.5, color: 'var(--fg-4)' }}>Loading templates…</div>
+
+  if (editorOpen) {
+    return (
+      <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--fg)' }}>
+            {editingTemplate ? `Edit Template: ${editingTemplate.name}` : 'New Template'}
+          </span>
+          <button type="button" onClick={() => setEditorOpen(false)} style={{ fontSize: 12, color: 'var(--fg-3)', background: 'none', border: 'none' }}>✕ Close</button>
+        </div>
+        
+        <div>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '.07em', display: 'block', marginBottom: 5 }}>Template Name *</label>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Frontend Bug Report" style={formInp} />
+        </div>
+        <div>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '.07em', display: 'block', marginBottom: 5 }}>Description</label>
+          <input value={description} onChange={e => setDescription(e.target.value)} placeholder="Brief explanation of this template..." style={formInp} />
+        </div>
+        <div>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '.07em', display: 'block', marginBottom: 5 }}>Type</label>
+          <select
+            value={type}
+            onChange={e => setType(e.target.value as any)}
+            disabled={!!editingTemplate}
+            style={formInp}
+          >
+            <option value="issue">Issue</option>
+            <option value="runbook">Runbook</option>
+            <option value="document">Document</option>
+          </select>
+        </div>
+        <div>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '.07em', display: 'block', marginBottom: 5 }}>Project Scope</label>
+          <select value={projectId || ''} onChange={e => setProjectId(e.target.value || null)} style={formInp}>
+            <option value="">Global (All projects)</option>
+            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+
+        {type === 'issue' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--fg-2)' }}>Issue Fields</div>
+            <div>
+              <label style={{ fontSize: '11px', color: 'var(--fg-3)', display: 'block', marginBottom: 4 }}>Default Title</label>
+              <input value={issueTitle} onChange={e => setIssueTitle(e.target.value)} placeholder="e.g. Bug: [Component]" style={formInp} />
+            </div>
+            <div>
+              <label style={{ fontSize: '11px', color: 'var(--fg-3)', display: 'block', marginBottom: 4 }}>Default Description (Markdown)</label>
+              <textarea value={issueDescription} onChange={e => setIssueDescription(e.target.value)} placeholder="### Steps to reproduce..." rows={4} style={{ ...formInp, fontFamily: 'inherit', resize: 'vertical' }} />
+            </div>
+            <div>
+              <label style={{ fontSize: '11px', color: 'var(--fg-3)', display: 'block', marginBottom: 4 }}>Default Tags (comma-separated)</label>
+              <input value={issueTagsRaw} onChange={e => setIssueTagsRaw(e.target.value)} placeholder="e.g. bug, UI" style={formInp} />
+            </div>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={{ fontSize: '11px', color: 'var(--fg-3)', display: 'block' }}>Investigation Steps</label>
+              {issueSteps.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, background: 'var(--bg-elev-2)', padding: 8, borderRadius: 6, border: '1px solid var(--line-2)' }}>
+                  {issueSteps.map((step, idx) => (
+                    <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '12.5px', color: 'var(--fg-2)' }}>
+                      <span style={{ color: 'var(--fg-4)', width: 18 }}>{idx + 1}.</span>
+                      <span style={{ flex: 1 }}>{step}</span>
+                      <button type="button" disabled={idx === 0} onClick={() => moveIssueStep(idx, 'up')} style={{ background: 'none', border: 'none', color: 'var(--fg-3)', fontSize: '11px', cursor: 'default' }}>▲</button>
+                      <button type="button" disabled={idx === issueSteps.length - 1} onClick={() => moveIssueStep(idx, 'down')} style={{ background: 'none', border: 'none', color: 'var(--fg-3)', fontSize: '11px', cursor: 'default' }}>▼</button>
+                      <button type="button" onClick={() => removeIssueStep(idx)} style={{ background: 'none', border: 'none', color: '#EF4444', fontSize: '12px', cursor: 'default', padding: '0 4px' }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input value={newIssueStep} onChange={e => setNewIssueStep(e.target.value)} placeholder="Add investigation step..." style={{ ...formInp, flex: 1 }} />
+                <button type="button" onClick={addIssueStep} style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg)', fontSize: '12px' }}>Add</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {type === 'document' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--fg-2)' }}>Document Fields</div>
+            <div>
+              <label style={{ fontSize: '11px', color: 'var(--fg-3)', display: 'block', marginBottom: 4 }}>Default Title</label>
+              <input value={docTitle} onChange={e => setDocTitle(e.target.value)} placeholder="e.g. Postmortem - [Date]" style={formInp} />
+            </div>
+            <div>
+              <label style={{ fontSize: '11px', color: 'var(--fg-3)', display: 'block', marginBottom: 4 }}>Default Content (Markdown)</label>
+              <textarea value={docContent} onChange={e => setDocContent(e.target.value)} placeholder="Write template content here..." rows={8} style={{ ...formInp, fontFamily: 'inherit', resize: 'vertical' }} />
+            </div>
+          </div>
+        )}
+
+        {type === 'runbook' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--fg-2)' }}>Runbook Steps</div>
+            {rbSteps.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--bg-elev-2)', padding: 8, borderRadius: 6, border: '1px solid var(--line-2)' }}>
+                {rbSteps.map((step, idx) => (
+                  <div key={idx} style={{ display: 'flex', flexDirection: 'column', gap: 3, borderBottom: idx < rbSteps.length - 1 ? '1px solid var(--line)' : 'none', paddingBottom: idx < rbSteps.length - 1 ? 6 : 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '12.5px', color: 'var(--fg-2)' }}>
+                      <span style={{ color: 'var(--fg-4)', width: 18 }}>{idx + 1}.</span>
+                      <span style={{ flex: 1, fontWeight: 500 }}>{step.instruction}</span>
+                      <button type="button" disabled={idx === 0} onClick={() => moveRbStep(idx, 'up')} style={{ background: 'none', border: 'none', color: 'var(--fg-3)', fontSize: '11px', cursor: 'default' }}>▲</button>
+                      <button type="button" disabled={idx === rbSteps.length - 1} onClick={() => moveRbStep(idx, 'down')} style={{ background: 'none', border: 'none', color: 'var(--fg-3)', fontSize: '11px', cursor: 'default' }}>▼</button>
+                      <button type="button" onClick={() => removeRbStep(idx)} style={{ background: 'none', border: 'none', color: '#EF4444', fontSize: '12px', cursor: 'default', padding: '0 4px' }}>✕</button>
+                    </div>
+                    {step.command && (
+                      <pre style={{ margin: '2px 0 0 24px', padding: '4px 8px', background: '#0d1117', color: '#e6edf3', borderRadius: 4, fontSize: '11px', fontFamily: 'var(--font-mono)', overflowX: 'auto' }}>{step.command}</pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--bg)', border: '1px dashed var(--line-2)', padding: 10, borderRadius: 6 }}>
+              <div style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--fg-3)' }}>Add Step</div>
+              <div>
+                <label style={{ fontSize: '10px', color: 'var(--fg-4)', display: 'block', marginBottom: 2 }}>Instruction *</label>
+                <input value={newRbInstruction} onChange={e => setNewRbInstruction(e.target.value)} placeholder="e.g. Pull latest code" style={formInp} />
+              </div>
+              <div>
+                <label style={{ fontSize: '10px', color: 'var(--fg-4)', display: 'block', marginBottom: 2 }}>Command (Optional)</label>
+                <input value={newRbCommand} onChange={e => setNewRbCommand(e.target.value)} placeholder="e.g. git pull" style={{ ...formInp, fontFamily: 'var(--font-mono)' }} />
+              </div>
+              <button type="button" onClick={addRbStep} style={{ alignSelf: 'flex-end', padding: '4px 12px', borderRadius: 6, border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg)', fontSize: '12px' }}>Add Step</button>
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+          <button type="button" onClick={() => setEditorOpen(false)} style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid var(--line-2)', background: 'none', color: 'var(--fg-2)', fontSize: '13px', cursor: 'default' }}>
+            Cancel
+          </button>
+          <button type="submit" style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'white', fontSize: '13px', cursor: 'default' }}>
+            Save
+          </button>
+        </div>
+      </form>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: '12.5px', color: 'var(--fg-3)' }}>Manage templates for Issues, Runbooks, and Documents</span>
+        <button onClick={openNew} style={{ padding: '4px 12px', borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'white', fontSize: '12px', cursor: 'default' }}>
+          + New Template
+        </button>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {templates.map(t => (
+          <div key={t.id} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 0', borderBottom: '1px solid var(--line)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--fg)' }}>{t.name}</span>
+              
+              {/* Type Badge */}
+              {t.type === 'issue' && (
+                <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: 3, background: 'rgba(99,102,241,.15)', border: '1px solid rgba(99,102,241,.3)', color: '#818CF8' }}>
+                  Issue
+                </span>
+              )}
+              {t.type === 'runbook' && (
+                <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: 3, background: 'rgba(236,72,153,.15)', border: '1px solid rgba(236,72,153,.3)', color: '#F472B6' }}>
+                  Runbook
+                </span>
+              )}
+              {t.type === 'document' && (
+                <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: 3, background: 'rgba(34,197,94,.15)', border: '1px solid rgba(34,197,94,.3)', color: '#4ADE80' }}>
+                  Document
+                </span>
+              )}
+
+              {/* Built-in Badge */}
+              {t.is_builtin ? (
+                <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: 3, background: 'rgba(234,179,8,.15)', border: '1px solid rgba(234,179,8,.3)', color: '#FACC15' }}>
+                  Built-in
+                </span>
+              ) : (
+                <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: 3, background: 'rgba(255,255,255,.05)', border: '1px solid var(--line-2)', color: 'var(--fg-3)' }}>
+                  Custom
+                </span>
+              )}
+
+              {/* Scope Badge */}
+              {t.project_name ? (
+                <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: 3, background: `${t.project_color || '#6366F1'}18`, border: `1px solid ${t.project_color || '#6366F1'}40`, color: t.project_color || '#818CF8' }}>
+                  {t.project_name}
+                </span>
+              ) : (
+                <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: 3, background: 'rgba(255,255,255,.05)', border: '1px solid var(--line-2)', color: 'var(--fg-3)' }}>
+                  Global
+                </span>
+              )}
+            </div>
+
+            {t.description && (
+              <div style={{ fontSize: '12px', color: 'var(--fg-3)' }}>{t.description}</div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              <button onClick={() => openDuplicate(t)} style={{ fontSize: '11px', padding: '3px 8px', borderRadius: 4, border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-2)', cursor: 'default' }}>
+                Duplicate
+              </button>
+              {!t.is_builtin && (
+                <>
+                  <button onClick={() => openEdit(t)} style={{ fontSize: '11px', padding: '3px 8px', borderRadius: 4, border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-2)', cursor: 'default' }}>
+                    Edit
+                  </button>
+                  <button onClick={() => handleDelete(t.id)} style={{ fontSize: '11px', padding: '3px 8px', borderRadius: 4, border: '1px solid #EF4444', background: 'rgba(239,68,68,.1)', color: '#EF4444', cursor: 'default' }}>
+                    Delete
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -1403,6 +2359,22 @@ export function SettingsPage({ onLogout, currentUser }: { onLogout: () => void; 
             <Section title="Scheduled Backup">
               <ScheduledBackupSection />
             </Section>
+
+            {/* Notification Rules */}
+            <Section title="Notification Rules">
+              <NotificationRulesSection isAdmin={isAdmin} />
+            </Section>
+
+            {/* Notification Hub */}
+            <Section title="Notification Hub">
+              <NotificationHubSection projects={projects} />
+            </Section>
+
+            {/* Templates */}
+            <Section title="Templates">
+              <TemplatesSection projects={projects} />
+            </Section>
+
 
             {/* Zip Import */}
             <Section title="Import from zip">

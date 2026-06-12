@@ -172,7 +172,7 @@ router.put('/:id/link', requireRole('member'), async (req, res) => {
     if (rows.length === 0) return res.status(404).json({ error: 'Project not found' })
 
     // Update file watcher for this project
-    await refreshProjectWatch(req.params.id, fs_path)
+    await refreshProjectWatch(req.params.id as string, fs_path)
 
     res.json({ data: rows[0] })
   } catch (err) {

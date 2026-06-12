@@ -15,6 +15,7 @@ import { runSeed } from './db/seed.js'
 import { ollamaReady } from './services/ai.js'
 import { initTasksWatcher } from './services/tasks-watcher.js'
 import { startBackupScheduler } from './services/backup.js'
+import { startNotificationScheduler, startDigestScheduler } from './services/notifications.js'
 
 const app = express()
 
@@ -64,6 +65,9 @@ app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiSpec))
 
 import authRouter from './routes/auth.js'
 app.use('/api/auth', authRouter)
+
+import notifyRouter from './routes/notify.js'
+app.use('/api/notify', notifyRouter)
 
 // ── Auth middleware (protects all routes below) ───────────────────────────
 
@@ -122,10 +126,14 @@ import gitRouter          from './routes/git.js'
 app.use('/api/git',           gitRouter)
 import integrationsRouter from './routes/integrations.js'
 app.use('/api/integrations',  integrationsRouter)
+import notificationsRouter from './routes/notifications.js'
+app.use('/api/notifications', notificationsRouter)
 import claudeProjectsRouter from './routes/claude-projects.js'
 app.use('/api/claude-projects', claudeProjectsRouter)
 import exportRouter from './routes/export.js'
 app.use('/api/export', exportRouter)
+import templatesRouter from './routes/templates.js'
+app.use('/api/templates', templatesRouter)
 
 // ── Static client (production) ────────────────────────────────────────────
 
@@ -184,6 +192,12 @@ async function start() {
 
   // Start scheduled backup (non-fatal)
   startBackupScheduler()
+
+  // Start notification scheduler
+  startNotificationScheduler()
+
+  // Start daily digest scheduler
+  startDigestScheduler()
 
   app.listen(env.PORT, () => {
     console.log(`  server: http://localhost:${env.PORT} ✓`)

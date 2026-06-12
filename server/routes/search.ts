@@ -15,6 +15,30 @@ router.get('/', async (req, res) => {
   // Per-table project filter fragment ($2 when pid set, nothing otherwise)
   const pf = (alias: string) => pid ? `AND ${alias}.project_id = $2` : ''
 
+  if (q && req.user?.id) {
+    (async () => {
+      try {
+        const userId = req.user!.id
+        await pool.query(
+          `INSERT INTO search_history (user_id, query) VALUES ($1, $2)`,
+          [userId, q]
+        )
+        await pool.query(
+          `DELETE FROM search_history
+           WHERE user_id = $1 AND id NOT IN (
+             SELECT id FROM search_history
+             WHERE user_id = $1
+             ORDER BY created_at DESC
+             LIMIT 50
+           )`,
+          [userId]
+        )
+      } catch (err) {
+        console.error('failed to update search history:', err)
+      }
+    })()
+  }
+
   try {
     if (!q) {
       // ── Empty query: return recent items from each type ──────────────────
@@ -229,6 +253,83 @@ router.get('/suggestions', async (req, res) => {
   } catch (err) {
     console.error('suggestions error:', err)
     res.status(500).json({ error: 'Suggestions failed' })
+  }
+})
+
+// ── GET /api/search/history ──────────────────────────────────────────────────
+router.get('/history', async (req, res) => {
+  try {
+    const userId = req.user!.id
+    const { rows } = await pool.query(
+      `SELECT id, query, created_at
+       FROM search_history
+       WHERE user_id = $1
+       ORDER BY created_at DESC
+       LIMIT 20`,
+      [userId]
+    )
+    res.json({ data: rows })
+  } catch (err) {
+    console.error('GET /history error:', err)
+    res.status(500).json({ error: 'Failed to retrieve search history' })
+  }
+})
+
+// ── GET /api/search/filters ──────────────────────────────────────────────────
+router.get('/filters', async (req, res) => {
+  try {
+    const userId = req.user!.id
+    const { rows } = await pool.query(
+      `SELECT id, name, entity_type, filter_json, created_at
+       FROM saved_filters
+       WHERE user_id = $1
+       ORDER BY created_at DESC`,
+      [userId]
+    )
+    res.json({ data: rows })
+  } catch (err) {
+    console.error('GET /filters error:', err)
+    res.status(500).json({ error: 'Failed to retrieve saved filters' })
+  }
+})
+
+// ── POST /api/search/filters ─────────────────────────────────────────────────
+router.post('/filters', async (req, res) => {
+  try {
+    const userId = req.user!.id
+    const { name, entity_type, filter_json } = req.body
+    if (!name || typeof name !== 'string' || !entity_type || typeof entity_type !== 'string' || !filter_json) {
+      return res.status(400).json({ error: 'Missing name, entity_type, or filter_json' })
+    }
+    const { rows } = await pool.query(
+      `INSERT INTO saved_filters (user_id, name, entity_type, filter_json)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, name, entity_type, filter_json, created_at`,
+      [userId, name, entity_type, JSON.stringify(filter_json)]
+    )
+    res.status(201).json({ data: rows[0] })
+  } catch (err) {
+    console.error('POST /filters error:', err)
+    res.status(500).json({ error: 'Failed to save filter' })
+  }
+})
+
+// ── DELETE /api/search/filters/:id ───────────────────────────────────────────
+router.delete('/filters/:id', async (req, res) => {
+  try {
+    const userId = req.user!.id
+    const { id } = req.params
+    const { rowCount } = await pool.query(
+      `DELETE FROM saved_filters WHERE id = $1 AND user_id = $2`,
+      [id, userId]
+    )
+    if (rowCount === 0) {
+      return res.status(404).json({ error: 'Filter not found or unauthorized' })
+    }
+    res.json({ data: { success: true } })
+  } catch (err) {
+    console.error('DELETE /filters/:id error:', err)
+    res.status(500).json({ error: 'Failed to delete filter' })
   }
 })
 

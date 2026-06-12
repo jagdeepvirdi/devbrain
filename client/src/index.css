@@ -104,3 +104,15 @@ a { color: inherit; text-decoration: none; }
   0%, 100% { opacity: 1; }
   50%       { opacity: 0; }
 }
+
+/* Bulk select styles */
+.bulk-select-checkbox {
+  opacity: 0;
+  transition: opacity 0.15s ease-in-out;
+}
+.bulk-select-row:hover .bulk-select-checkbox,
+.bulk-select-row-selected .bulk-select-checkbox,
+.bulk-select-has-selection .bulk-select-checkbox {
+  opacity: 1 !important;
+}
+

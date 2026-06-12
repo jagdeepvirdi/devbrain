@@ -4,9 +4,9 @@ import { issuesApi, integrationsApi } from '../../lib/api'
 import type { Issue } from '../../lib/api'
 import { SkeletonRow } from '../Skeleton'
 import { useToast } from '../Toast'
-import { PRIORITY_META, STATUS_META } from './issueConstants'
-import type { Priority, Status } from './issueConstants'
 import { IssueRow } from './IssueRow'
+import { FilterBar, initialFilterState } from '../FilterBar'
+import type { FilterState } from '../FilterBar'
 
 const ISSUE_PAGE = 25
 
@@ -21,8 +21,7 @@ export function IssuesList({ onOpen, onNew }: { onOpen: (id: string) => void; on
   const [loading,     setLoading]     = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [search,      setSearch]      = useState('')
-  const [filterStatus,   setFilterStatus]   = useState('')
-  const [filterPriority, setFilterPriority] = useState('')
+  const [filters,     setFilters]     = useState<FilterState>(initialFilterState)
   const [selectedIds,     setSelectedIds]     = useState<Set<string>>(new Set())
   const [confirmBulkDel,  setConfirmBulkDel]  = useState(false)
   const [bulkWorking,     setBulkWorking]     = useState(false)
@@ -33,7 +32,9 @@ export function IssuesList({ onOpen, onNew }: { onOpen: (id: string) => void; on
   const [importMax,       setImportMax]       = useState(50)
   const [importing,       setImporting]       = useState(false)
   const [importResult,    setImportResult]    = useState<{ created: number; skipped: number; total: number } | null>(null)
+  const [tab,             setTab]             = useState<'all' | 'triage'>('all')
   const loadAbortRef = useRef<AbortController | null>(null)
+  const headerCheckboxRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async (offset: number, append: boolean) => {
     if (!append) {
@@ -46,26 +47,39 @@ export function IssuesList({ onOpen, onNew }: { onOpen: (id: string) => void; on
     }
     const signal = !append ? loadAbortRef.current?.signal : undefined
     try {
-      const result = await issuesApi.list({
-        projectId: project?.id,
-        status:    filterStatus   || undefined,
-        priority:  filterPriority || undefined,
-        search:    search.trim()  || undefined,
-        limit:     ISSUE_PAGE,
-        offset,
-        signal,
-      })
-      setTotal(result.total)
-      setIssues(prev => append ? [...prev, ...result.items] : result.items)
-      setNextOffset(offset + result.items.length)
-      setLoading(false)
-      setLoadingMore(false)
+      if (tab === 'triage') {
+        const result = await issuesApi.triage(project?.id === 'global' ? 'global' : project?.id)
+        setTotal(result.length)
+        setIssues(result)
+        setNextOffset(0)
+        setLoading(false)
+        setLoadingMore(false)
+      } else {
+        const result = await issuesApi.list({
+          projectId:  project?.id,
+          projectIds: project?.id ? undefined : (filters.projectIds.length > 0 ? filters.projectIds : undefined),
+          status:     filters.status.length > 0 ? filters.status : undefined,
+          priority:   filters.priority.length > 0 ? filters.priority : undefined,
+          tags:       filters.tags.length > 0 ? filters.tags : undefined,
+          dateFrom:   filters.dateFrom || undefined,
+          dateTo:     filters.dateTo || undefined,
+          q:          search.trim() || undefined,
+          limit:      ISSUE_PAGE,
+          offset,
+          signal,
+        })
+        setTotal(result.total)
+        setIssues(prev => append ? [...prev, ...result.items] : result.items)
+        setNextOffset(offset + result.items.length)
+        setLoading(false)
+        setLoadingMore(false)
+      }
     } catch (e) {
       if ((e as Error).name === 'AbortError') return
       setLoading(false)
       setLoadingMore(false)
     }
-  }, [project, filterStatus, filterPriority, search])
+  }, [project, filters, search, tab])
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds(prev => {
@@ -82,8 +96,8 @@ export function IssuesList({ onOpen, onNew }: { onOpen: (id: string) => void; on
   async function handleBulkStatus(status: Issue['status']) {
     setBulkWorking(true)
     try {
-      await Promise.all([...selectedIds].map(id => issuesApi.update(id, { status })))
-      setIssues(prev => prev.map(i => selectedIds.has(i.id) ? { ...i, status } : i))
+      await issuesApi.bulk([...selectedIds], 'status', status)
+      setIssues(prev => prev.map(i => selectedIds.has(i.id) ? { ...i, status, resolved_at: status === 'resolved' ? new Date().toISOString() : null } : i))
       toast(`Updated ${selectedIds.size} issue${selectedIds.size !== 1 ? 's' : ''}`, 'success')
       setSelectedIds(new Set())
     } catch {
@@ -96,7 +110,7 @@ export function IssuesList({ onOpen, onNew }: { onOpen: (id: string) => void; on
   async function handleBulkDelete() {
     setBulkWorking(true)
     try {
-      await Promise.all([...selectedIds].map(id => issuesApi.remove(id)))
+      await issuesApi.bulk([...selectedIds], 'delete')
       const count = selectedIds.size
       setIssues(prev => prev.filter(i => !selectedIds.has(i.id)))
       setTotal(t => t - count)
@@ -109,6 +123,33 @@ export function IssuesList({ onOpen, onNew }: { onOpen: (id: string) => void; on
       setConfirmBulkDel(false)
     }
   }
+
+  async function handleBulkTag(tag: string) {
+    if (!tag.trim()) return
+    setBulkWorking(true)
+    try {
+      await issuesApi.bulk([...selectedIds], 'tag', tag.trim())
+      setIssues(prev => prev.map(i => {
+        if (selectedIds.has(i.id)) {
+          const newTags = i.tags.includes(tag.trim()) ? i.tags : [...i.tags, tag.trim()]
+          return { ...i, tags: newTags }
+        }
+        return i
+      }))
+      toast(`Tagged ${selectedIds.size} issue${selectedIds.size !== 1 ? 's' : ''}`, 'success')
+      setSelectedIds(new Set())
+    } catch {
+      toast('Bulk tagging failed', 'error')
+    } finally {
+      setBulkWorking(false)
+    }
+  }
+
+  useEffect(() => {
+    if (headerCheckboxRef.current) {
+      headerCheckboxRef.current.indeterminate = selectedIds.size > 0 && selectedIds.size < issues.length
+    }
+  }, [selectedIds, issues])
 
   async function handleImport() {
     setImporting(true); setImportResult(null)
@@ -128,9 +169,9 @@ export function IssuesList({ onOpen, onNew }: { onOpen: (id: string) => void; on
   }
 
   useEffect(() => {
-    const timer = setTimeout(() => load(0, false), search ? 300 : 0)
+    const timer = setTimeout(() => load(0, false), 150)
     return () => clearTimeout(timer)
-  }, [load, search])
+  }, [load, search, filters])
 
   const open = useMemo(
     () => issues.filter(i => i.status !== 'resolved' && i.status !== 'wont-fix').length,
@@ -138,50 +179,56 @@ export function IssuesList({ onOpen, onNew }: { onOpen: (id: string) => void; on
   )
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
       <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: 'var(--fg)' }}>Issues</h1>
+          <h1 style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: 'var(--fg)', display: 'inline-block' }}>Issues</h1>
           {!loading && (
             <div style={{ fontSize: '11.5px', color: 'var(--fg-3)', marginTop: 2 }}>
-              {open} open · {total} total{project ? ` · ${project.name}` : ''}
+              {tab === 'triage' ? `${issues.length} to triage` : `${open} open · ${total} total`}{project ? ` · ${project.name}` : ''}
             </div>
           )}
         </div>
 
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search issues..."
+        {/* Premium tabs container */}
+        <div style={{ display: 'flex', gap: 4, marginLeft: 20, background: 'var(--bg-elev-2)', padding: 2, borderRadius: 6, border: '1px solid var(--line)' }}>
+          <button
+            onClick={() => setTab('all')}
             style={{
-              padding: '5px 10px', borderRadius: 6, width: 200,
-              border: '1px solid var(--line-2)', background: 'var(--bg-elev-2)',
-              color: 'var(--fg)', fontSize: '12.5px', outline: 'none',
+              padding: '4px 12px', borderRadius: 4, fontSize: '12px', fontWeight: 500,
+              background: tab === 'all' ? 'var(--bg-hover)' : 'transparent',
+              color: tab === 'all' ? 'var(--fg)' : 'var(--fg-3)',
+              transition: 'all 0.15s',
             }}
-          />
-
-          <select
-            value={filterStatus}
-            onChange={e => setFilterStatus(e.target.value)}
-            style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid var(--line-2)', background: 'var(--bg-elev-2)', color: filterStatus ? 'var(--fg)' : 'var(--fg-3)', fontSize: '12.5px' }}
           >
-            <option value="">All statuses</option>
-            {(Object.entries(STATUS_META) as [Status, typeof STATUS_META[Status]][]).map(([k, s]) => (
-              <option key={k} value={k}>{s.label}</option>
-            ))}
-          </select>
-
-          <select
-            value={filterPriority}
-            onChange={e => setFilterPriority(e.target.value)}
-            style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid var(--line-2)', background: 'var(--bg-elev-2)', color: filterPriority ? 'var(--fg)' : 'var(--fg-3)', fontSize: '12.5px' }}
+            All Issues
+          </button>
+          <button
+            onClick={() => setTab('triage')}
+            style={{
+              padding: '4px 12px', borderRadius: 4, fontSize: '12px', fontWeight: 500,
+              background: tab === 'triage' ? 'var(--bg-hover)' : 'transparent',
+              color: tab === 'triage' ? 'var(--fg)' : 'var(--fg-3)',
+              transition: 'all 0.15s',
+            }}
           >
-            <option value="">All priorities</option>
-            {(Object.entries(PRIORITY_META) as [Priority, typeof PRIORITY_META[Priority]][]).map(([k, p]) => (
-              <option key={k} value={k}>{p.label}</option>
-            ))}
-          </select>
+            Triage
+          </button>
+        </div>
+
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+          {tab !== 'triage' && (
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search issues..."
+              style={{
+                padding: '5px 10px', borderRadius: 6, width: 200,
+                border: '1px solid var(--line-2)', background: 'var(--bg-elev-2)',
+                color: 'var(--fg)', fontSize: '12.5px', outline: 'none',
+              }}
+            />
+          )}
 
           <button
             onClick={() => { setImportOpen(true); setImportResult(null) }}
@@ -209,59 +256,14 @@ export function IssuesList({ onOpen, onNew }: { onOpen: (id: string) => void; on
         </div>
       </div>
 
-      {/* Bulk action bar */}
-      {selectedIds.size > 0 && (
-        <div style={{ padding: '6px 20px', background: 'var(--bg-elev)', borderBottom: '1px solid var(--accent-line)', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-          <input type="checkbox" checked={selectedIds.size === issues.length} onChange={toggleSelectAll} style={{ accentColor: 'var(--accent)', cursor: 'default' }} />
-          <span style={{ fontSize: '12.5px', color: 'var(--fg-2)', fontWeight: 500 }}>
-            {selectedIds.size} selected
-          </span>
-          <button
-            onClick={() => handleBulkStatus('resolved')}
-            disabled={bulkWorking}
-            style={{ fontSize: '11.5px', padding: '3px 10px', borderRadius: 4, border: '1px solid rgba(74,222,128,.4)', background: 'rgba(74,222,128,.1)', color: '#4ADE80', cursor: 'default', opacity: bulkWorking ? 0.5 : 1 }}
-          >
-            Mark Resolved
-          </button>
-          <button
-            onClick={() => handleBulkStatus('wont-fix')}
-            disabled={bulkWorking}
-            style={{ fontSize: '11.5px', padding: '3px 10px', borderRadius: 4, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)', cursor: 'default', opacity: bulkWorking ? 0.5 : 1 }}
-          >
-            Won't Fix
-          </button>
-          {!confirmBulkDel
-            ? <button
-                onClick={() => setConfirmBulkDel(true)}
-                disabled={bulkWorking}
-                style={{ fontSize: '11.5px', padding: '3px 10px', borderRadius: 4, border: '1px solid rgba(239,68,68,.4)', background: 'rgba(239,68,68,.08)', color: '#EF4444', cursor: 'default', opacity: bulkWorking ? 0.5 : 1 }}
-              >
-                Delete
-              </button>
-            : <>
-                <button
-                  onClick={handleBulkDelete}
-                  disabled={bulkWorking}
-                  style={{ fontSize: '11.5px', padding: '3px 10px', borderRadius: 4, border: '1px solid #EF4444', background: 'rgba(239,68,68,.15)', color: '#EF4444', cursor: 'default' }}
-                >
-                  {bulkWorking ? 'Deleting...' : `Confirm delete ${selectedIds.size}`}
-                </button>
-                <button onClick={() => setConfirmBulkDel(false)} style={{ fontSize: '11.5px', padding: '3px 10px', borderRadius: 4, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)', cursor: 'default' }}>
-                  Cancel
-                </button>
-              </>
-          }
-          <button onClick={() => setSelectedIds(new Set())} style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--fg-4)', background: 'none', border: 'none', cursor: 'default' }}>
-            Clear selection
-          </button>
-        </div>
-      )}
+      {tab !== 'triage' && <FilterBar entityType="issues" filters={filters} onChange={setFilters} />}
 
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {!loading && issues.length > 0 && (
           <div style={{ padding: '6px 20px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 12, background: 'var(--bg-elev)' }}>
             <input
               type="checkbox"
+              ref={headerCheckboxRef}
               checked={issues.length > 0 && selectedIds.size === issues.length}
               onChange={toggleSelectAll}
               style={{ accentColor: 'var(--accent)', cursor: 'default', width: 14, height: 14 }}
@@ -279,9 +281,9 @@ export function IssuesList({ onOpen, onNew }: { onOpen: (id: string) => void; on
               <div style={{ padding: '48px 24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
                 <div style={{ width: 44, height: 44, borderRadius: 10, background: 'var(--bg-elev)', border: '1px solid var(--line)', display: 'grid', placeItems: 'center', fontSize: 20, color: 'var(--fg-4)' }}>⚠</div>
                 <div style={{ fontSize: '13px', color: 'var(--fg-3)' }}>
-                  {search || filterStatus || filterPriority ? 'No issues match your filters.' : 'No issues yet.'}
+                  {tab === 'triage' ? 'No issues require triage.' : (search || filters.status.length > 0 || filters.priority.length > 0 || filters.projectIds.length > 0 || filters.tags.length > 0 || filters.dateFrom || filters.dateTo ? 'No issues match your filters.' : 'No issues yet.')}
                 </div>
-                {!search && !filterStatus && !filterPriority && (
+                {tab !== 'triage' && !search && filters.status.length === 0 && filters.priority.length === 0 && filters.projectIds.length === 0 && filters.tags.length === 0 && !filters.dateFrom && !filters.dateTo && (
                   <button onClick={onNew} style={{ fontSize: '12px', padding: '6px 14px', borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent-dim)', color: 'var(--accent-2)' }}>
                     + Create your first issue
                   </button>
@@ -295,11 +297,12 @@ export function IssuesList({ onOpen, onNew }: { onOpen: (id: string) => void; on
                 onClick={() => onOpen(issue.id)}
                 selected={selectedIds.has(issue.id)}
                 onToggleSelect={toggleSelect}
+                hasSelection={selectedIds.size > 0}
               />
             ))
         }
 
-        {!loading && issues.length < total && (
+        {tab !== 'triage' && !loading && issues.length < total && (
           <div style={{ padding: '12px 20px', textAlign: 'center' }}>
             <button
               onClick={() => load(nextOffset, true)}
@@ -311,6 +314,140 @@ export function IssuesList({ onOpen, onNew }: { onOpen: (id: string) => void; on
           </div>
         )}
       </div>
+
+      {/* Floating Action Bar */}
+      {selectedIds.size > 0 && (
+        <div style={{
+          position: 'absolute',
+          bottom: 24,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: 'var(--bg-elev-2)',
+          border: '1px solid var(--accent-line)',
+          borderRadius: 10,
+          padding: '10px 18px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
+          zIndex: 100,
+          animation: 'modal-in 0.15s ease',
+        }}>
+          <span style={{ fontSize: '12.5px', color: 'var(--fg-2)', fontWeight: 500, marginRight: 6 }}>
+            {selectedIds.size} selected
+          </span>
+
+          <div style={{ display: 'flex', gap: 6 }}>
+            {/* Tag Input */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg-elev)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 8px' }}>
+              <input
+                placeholder="Add tag..."
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    handleBulkTag(e.currentTarget.value)
+                    e.currentTarget.value = ''
+                  }
+                }}
+                style={{ fontSize: '11.5px', color: 'var(--fg)', width: 85, background: 'none', border: 'none', outline: 'none' }}
+              />
+            </div>
+
+            {/* Status Dropdown */}
+            <select
+              onChange={e => {
+                if (e.target.value) {
+                  handleBulkStatus(e.target.value as any)
+                  e.target.value = ''
+                }
+              }}
+              style={{
+                fontSize: '11.5px',
+                padding: '4px 8px',
+                borderRadius: 6,
+                border: '1px solid var(--line)',
+                background: 'var(--bg-elev)',
+                color: 'var(--fg)',
+                outline: 'none',
+              }}
+            >
+              <option value="">Change Status...</option>
+              <option value="open">Open</option>
+              <option value="investigating">Investigating</option>
+              <option value="resolved">Resolved</option>
+              <option value="wont-fix">Won't Fix</option>
+            </select>
+
+            {/* Delete button with confirmation */}
+            {!confirmBulkDel ? (
+              <button
+                onClick={() => setConfirmBulkDel(true)}
+                disabled={bulkWorking}
+                style={{
+                  fontSize: '11.5px',
+                  padding: '4px 12px',
+                  borderRadius: 6,
+                  border: '1px solid rgba(239,68,68,.4)',
+                  background: 'rgba(239,68,68,.08)',
+                  color: '#EF4444',
+                  transition: 'all 0.15s',
+                }}
+              >
+                Delete
+              </button>
+            ) : (
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={bulkWorking}
+                  style={{
+                    fontSize: '11.5px',
+                    padding: '4px 12px',
+                    borderRadius: 6,
+                    border: 'none',
+                    background: '#EF4444',
+                    color: 'white',
+                    fontWeight: 500,
+                  }}
+                >
+                  {bulkWorking ? 'Deleting...' : 'Confirm'}
+                </button>
+                <button
+                  onClick={() => setConfirmBulkDel(false)}
+                  style={{
+                    fontSize: '11.5px',
+                    padding: '4px 10px',
+                    borderRadius: 6,
+                    border: '1px solid var(--line)',
+                    background: 'var(--bg-elev)',
+                    color: 'var(--fg-3)',
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div style={{ width: '1px', height: 16, background: 'var(--line-2)', margin: '0 4px' }} />
+
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            style={{
+              fontSize: '12px',
+              color: 'var(--fg-3)',
+              background: 'none',
+              border: 'none',
+              padding: '4px 8px',
+              borderRadius: 6,
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--fg)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--fg-3)'}
+          >
+            Deselect all
+          </button>
+        </div>
+      )}
 
       {/* Import modal */}
       {importOpen && (

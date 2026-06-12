@@ -101,6 +101,51 @@ router.get('/', async (req, res) => {
   }
 })
 
+// ── PATCH /api/commands/bulk ─────────────────────────────────────────────────
+
+router.patch('/bulk', requireRole('member'), async (req, res) => {
+  const { ids, action, value } = req.body
+  if (!Array.isArray(ids) || !ids.length) {
+    return res.status(400).json({ error: 'ids array is required and cannot be empty' })
+  }
+  if (!['tag', 'favorite', 'delete'].includes(action)) {
+    return res.status(400).json({ error: 'Invalid action' })
+  }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    if (action === 'tag') {
+      if (!value || typeof value !== 'string') {
+        await client.query('ROLLBACK')
+        return res.status(400).json({ error: 'value must be a string tag name' })
+      }
+      await client.query(
+        `UPDATE commands SET tags = array_append(tags, $1) WHERE id = ANY($2) AND NOT ($1 = ANY(tags))`,
+        [value, ids]
+      )
+    } else if (action === 'favorite') {
+      const isFav = value !== 'false'
+      await client.query(
+        `UPDATE commands SET is_favorite = $1 WHERE id = ANY($2)`,
+        [isFav, ids]
+      )
+    } else if (action === 'delete') {
+      await client.query(
+        `DELETE FROM commands WHERE id = ANY($1)`,
+        [ids]
+      )
+    }
+    await client.query('COMMIT')
+    res.json({ data: { success: true } })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    res.status(500).json({ error: (err as Error).message })
+  } finally {
+    client.release()
+  }
+})
+
 // ── GET /api/commands/:id ─────────────────────────────────────────────────
 
 router.get('/:id', async (req, res) => {

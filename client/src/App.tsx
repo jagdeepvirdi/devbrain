@@ -15,11 +15,14 @@ import { ReleasesPage }  from './pages/Releases'
 import { RunbooksPage }  from './pages/Runbooks'
 import { DashboardPage } from './pages/Dashboard'
 import { SettingsPage }  from './pages/Settings'
+import { NotificationLogPage } from './pages/NotificationLog'
 import { LoginPage }     from './pages/Login'
 import { GlobalSearch }  from './components/search/GlobalSearch'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { NotificationsPanel } from './components/NotificationsPanel'
 
-type RouteId = 'dashboard' | 'docs' | 'chat' | 'issues' | 'tasks' | 'commands' | 'releases' | 'runbooks' | 'projects' | 'aitask' | 'settings'
+
+type RouteId = 'dashboard' | 'docs' | 'chat' | 'issues' | 'tasks' | 'commands' | 'releases' | 'runbooks' | 'projects' | 'aitask' | 'settings' | 'notificationLog'
 
 const SIDEBAR_DEFAULT = 220
 const SIDEBAR_MIN     = 180
@@ -40,6 +43,7 @@ const ROUTE_PATHS: Record<RouteId, string> = {
   aitask:    '/aitask',
   projects:  '/projects',
   settings:  '/settings',
+  notificationLog: '/notification-log',
 }
 
 function pathToRoute(pathname: string): RouteId {
@@ -89,6 +93,8 @@ export default function App() {
   const dragRef = useRef<{ startX: number; startW: number } | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [notificationsPanelOpen, setNotificationsPanelOpen] = useState(false)
+  const [unreadCount, setUnreadCount] = useState(0)
   const [authed,     setAuthed]     = useState<boolean | null>(null)
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(getCachedUser)
   const [offline,    setOffline]    = useState(!navigator.onLine)
@@ -224,6 +230,7 @@ export default function App() {
       case 'runbooks':  return wrap('runbooks',  <RunbooksPage />)
       case 'dashboard': return wrap('dashboard', <DashboardPage />)
       case 'settings':  return wrap('settings',  <SettingsPage onLogout={() => { setAuthed(false); setCurrentUser(null) }} currentUser={currentUser} />)
+      case 'notificationLog': return wrap('notificationLog', <NotificationLogPage />)
       default:
         return (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
@@ -339,6 +346,37 @@ export default function App() {
 
         {/* Top-right controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto' }}>
+          {/* Notification Bell */}
+          <button
+            id="notification-bell-btn"
+            onClick={() => setNotificationsPanelOpen(true)}
+            style={{
+              width: 28, height: 28,
+              display: 'grid', placeItems: 'center',
+              borderRadius: 'var(--radius)', color: 'var(--fg-3)',
+              position: 'relative', cursor: 'pointer',
+              border: 'none', background: 'transparent'
+            }}
+          >
+            <span style={{ fontSize: '15px' }}>🔔</span>
+            {unreadCount > 0 && (
+              <span
+                id="notification-badge"
+                style={{
+                  position: 'absolute', top: 2, right: 2,
+                  background: '#EF4444', color: 'white',
+                  fontSize: '9px', fontWeight: 'bold',
+                  minWidth: 14, height: 14, borderRadius: 7,
+                  display: 'grid', placeItems: 'center',
+                  padding: '0 3px',
+                  boxShadow: '0 0 0 2px var(--bg-elev)'
+                }}
+              >
+                {unreadCount}
+              </span>
+            )}
+          </button>
+
           {/* Sidebar toggle */}
           <button onClick={() => setSidebar(s => s === 'open' ? 'collapsed' : 'open')}
             style={{ width: 28, height: 28, display: 'grid', placeItems: 'center', borderRadius: 'var(--radius)', color: 'var(--fg-3)' }}>
@@ -458,6 +496,13 @@ export default function App() {
         open={searchOpen}
         onClose={() => setSearchOpen(false)}
         onNavigate={r => { navigate(ROUTE_PATHS[r as RouteId] ?? '/'); setSearchOpen(false) }}
+      />
+
+      <NotificationsPanel
+        open={notificationsPanelOpen}
+        onClose={() => setNotificationsPanelOpen(false)}
+        onUnreadCountChange={setUnreadCount}
+        onNavigate={r => { setRoute(r as RouteId) }}
       />
 
       {/* Keyboard shortcuts modal */}

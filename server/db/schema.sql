@@ -384,3 +384,84 @@ CREATE OR REPLACE TRIGGER trg_integrations_updated_at
   BEFORE UPDATE ON integrations
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE INDEX IF NOT EXISTS integrations_project_provider_idx ON integrations (project_id, provider);
+
+-- Phase 28.1: Notifications
+CREATE TABLE IF NOT EXISTS notifications (
+  id              TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  user_id         TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type            TEXT        NOT NULL,
+  title           TEXT        NOT NULL,
+  body            TEXT        NOT NULL DEFAULT '',
+  entity_type     TEXT,
+  entity_id       TEXT,
+  read            BOOLEAN     NOT NULL DEFAULT false,
+  channel         TEXT        NOT NULL DEFAULT 'in_app',
+  delivery_status TEXT        NOT NULL DEFAULT 'delivered',
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS notifications_user_read_idx ON notifications (user_id, read);
+CREATE INDEX IF NOT EXISTS notifications_created_at_idx ON notifications (created_at DESC);
+
+INSERT INTO app_settings (key, value)
+VALUES ('notification_rules', '{"stale_threshold_days": 14, "sync_alerts_enabled": true, "ai_task_alerts_enabled": true}'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
+-- Phase 28.5: Notification Hub (Apprise)
+CREATE TABLE IF NOT EXISTS notification_channels (
+  id          TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  user_id     TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name        TEXT        NOT NULL,
+  apprise_url TEXT        NOT NULL,
+  enabled     BOOLEAN     NOT NULL DEFAULT true,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS notification_channels_user_idx ON notification_channels (user_id);
+
+CREATE TABLE IF NOT EXISTS project_notification_prefs (
+  project_id TEXT        NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  channel_id TEXT        NOT NULL REFERENCES notification_channels(id) ON DELETE CASCADE,
+  enabled    BOOLEAN     NOT NULL DEFAULT true,
+  PRIMARY KEY (project_id, channel_id)
+);
+
+INSERT INTO app_settings (key, value)
+VALUES ('digest_settings', '{"enabled": false, "time": "09:00"}'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
+-- Phase 28.2: Advanced Search & Filtering
+CREATE TABLE IF NOT EXISTS saved_filters (
+  id          TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  user_id     TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name        TEXT        NOT NULL,
+  entity_type TEXT        NOT NULL,
+  filter_json JSONB       NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS saved_filters_user_idx ON saved_filters (user_id);
+
+CREATE TABLE IF NOT EXISTS search_history (
+  id         TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  user_id    TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  query      TEXT        NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS search_history_user_idx ON search_history (user_id);
+
+-- Phase 28.3: Templates
+CREATE TABLE IF NOT EXISTS templates (
+  id          TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  project_id  TEXT        REFERENCES projects(id) ON DELETE CASCADE,
+  type        TEXT        NOT NULL CHECK (type IN ('issue', 'runbook', 'document')),
+  name        TEXT        NOT NULL,
+  description TEXT        NOT NULL DEFAULT '',
+  body        JSONB       NOT NULL,
+  is_builtin  BOOLEAN     NOT NULL DEFAULT false,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS templates_project_idx ON templates (project_id);
+
+
+
+
+

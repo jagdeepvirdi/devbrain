@@ -9,10 +9,11 @@ import { z }         from 'zod'
 import * as ipaddr   from 'ipaddr.js'
 import { pool }          from '../db/pool.js'
 import { parseFile, parseUrl } from '../services/parser.js'
-import { aiEmbed, aiChat }    from '../services/ai.js'
-import { buildWhereClause }   from '../lib/db.js'
+import { aiChat }    from '../services/ai.js'
+import { buildSetClause }   from '../lib/db.js'
 import { serverError }        from '../lib/errors.js'
 import { requireRole } from '../middleware/auth.js'
+import { embedDocument } from '../services/embedder.js'
 
 const router = Router()
 
@@ -42,35 +43,88 @@ async function isPrivateUrl(urlStr: string): Promise<boolean> {
   }
 }
 
-// ── GET /api/documents ────────────────────────────────────────────────────
+// Helper to parse query parameters that can be arrays, single strings, or comma-separated values.
+function parseArrayParam(val: unknown): string[] {
+  if (!val) return []
+  if (Array.isArray(val)) return val.map(v => String(v).trim()).filter(Boolean)
+  if (typeof val === 'string') {
+    return val.split(',').map(v => v.trim()).filter(Boolean)
+  }
+  return [String(val).trim()]
+}
+
+const getArrayParam = (query: any, key: string): string[] => {
+  const val = query[key] !== undefined ? query[key] : query[`${key}[]`]
+  return parseArrayParam(val)
+};
 
 router.get('/', async (req, res) => {
-  const projectId = req.query.projectId as string | undefined
-  const search    = req.query.search    as string | undefined
-  const limit     = Math.min(Number(req.query.limit  ?? 25), 100)
-  const offset    = Number(req.query.offset ?? 0)
+  const projectIds = getArrayParam(req.query, 'projectIds')
+  const projectId  = req.query.projectId as string | undefined
+  if (projectId) {
+    projectIds.push(projectId)
+  }
+  const fileTypes  = getArrayParam(req.query, 'fileType')
+  const tags       = getArrayParam(req.query, 'tags')
+  const dateFrom   = req.query.dateFrom as string | undefined
+  const dateTo     = req.query.dateTo as string | undefined
+  const q          = ((req.query.q || req.query.search) as string | undefined)?.trim()
+
+  const limit      = Math.min(Number(req.query.limit  ?? 25), 100)
+  const offset     = Number(req.query.offset ?? 0)
 
   const conditions: string[] = []
   const values:     unknown[] = []
   let   idx = 1
 
-  if (projectId === 'global') {
-    conditions.push('d.project_id IS NULL')
-  } else if (projectId) {
-    conditions.push(`d.project_id = $${idx++}`)
-    values.push(projectId)
+  const finalProjectIds = Array.from(new Set(projectIds)).filter(id => id !== 'global')
+  const includeGlobal = projectIds.includes('global')
+  if (projectIds.length > 0) {
+    if (includeGlobal && finalProjectIds.length > 0) {
+      conditions.push(`(d.project_id = ANY($${idx++}) OR d.project_id IS NULL)`)
+      values.push(finalProjectIds)
+    } else if (includeGlobal) {
+      conditions.push('d.project_id IS NULL')
+    } else {
+      conditions.push(`d.project_id = ANY($${idx++})`)
+      values.push(finalProjectIds)
+    }
   }
 
-  if (search) {
-    conditions.push(`d.tsv @@ plainto_tsquery('english', $${idx++})`)
-    values.push(search)
+  if (fileTypes.length > 0) {
+    conditions.push(`d.file_type = ANY($${idx++})`)
+    values.push(fileTypes)
+  }
+
+  if (tags.length > 0) {
+    conditions.push(`d.tags && $${idx++}::text[]`)
+    values.push(tags)
+  }
+
+  if (dateFrom) {
+    conditions.push(`d.created_at >= $${idx++}::timestamptz`)
+    values.push(dateFrom)
+  }
+
+  if (dateTo) {
+    conditions.push(`d.created_at <= $${idx++}::timestamptz`)
+    values.push(dateTo)
+  }
+
+  if (q) {
+    conditions.push(`(d.tsv @@ plainto_tsquery('english', $${idx}) OR d.title ILIKE $${idx + 1} OR d.content ILIKE $${idx + 1})`)
+    values.push(q)
+    values.push(`%${q}%`)
+    idx += 2
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+  const limitIdx = idx
+  const offsetIdx = idx + 1
 
   try {
     const [countRes, dataRes] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS n FROM documents d ${where}`, values),
+      pool.query(`SELECT COUNT(*)::int AS n FROM documents d LEFT JOIN projects p ON p.id = d.project_id ${where}`, values),
       pool.query(
         `SELECT
            d.id, d.project_id, d.title, d.file_type, d.tags,
@@ -83,13 +137,61 @@ router.get('/', async (req, res) => {
          LEFT JOIN projects p ON p.id = d.project_id
          ${where}
          ORDER BY d.created_at DESC
-         LIMIT $${idx} OFFSET $${idx + 1}`,
+         LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
         [...values, limit, offset]
       ),
     ])
     res.json({ data: { items: dataRes.rows, total: countRes.rows[0].n } })
   } catch (err) {
     serverError(res, err)
+  }
+})
+
+// ── PATCH /api/documents/bulk ────────────────────────────────────────────────
+
+router.patch('/bulk', requireRole('member'), async (req, res) => {
+  const { ids, action, value } = req.body
+  if (!Array.isArray(ids) || !ids.length) {
+    return res.status(400).json({ error: 'ids array is required and cannot be empty' })
+  }
+  if (!['re-embed', 'tag', 'delete'].includes(action)) {
+    return res.status(400).json({ error: 'Invalid action' })
+  }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    if (action === 're-embed') {
+      const { rows } = await client.query('SELECT id, content FROM documents WHERE id = ANY($1)', [ids])
+      await client.query(`UPDATE documents SET embedding_status = 'processing' WHERE id = ANY($1)`, [ids])
+      // Trigger embeddings asynchronously
+      for (const row of rows) {
+        embedDocument(row.id, row.content)
+          .then(() => pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [row.id]))
+          .catch(() => pool.query(`UPDATE documents SET embedding_status = 'failed' WHERE id = $1`, [row.id]))
+      }
+    } else if (action === 'tag') {
+      if (!value || typeof value !== 'string') {
+        await client.query('ROLLBACK')
+        return res.status(400).json({ error: 'value must be a string tag name' })
+      }
+      await client.query(
+        `UPDATE documents SET tags = array_append(tags, $1) WHERE id = ANY($2) AND NOT ($1 = ANY(tags))`,
+        [value, ids]
+      )
+    } else if (action === 'delete') {
+      await client.query(
+        `DELETE FROM documents WHERE id = ANY($1)`,
+        [ids]
+      )
+    }
+    await client.query('COMMIT')
+    res.json({ data: { success: true } })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    res.status(500).json({ error: (err as Error).message })
+  } finally {
+    client.release()
   }
 })
 
@@ -275,7 +377,7 @@ router.delete('/:id', requireRole('member'), async (req, res) => {
 // ── POST /api/documents/:id/reembed ──────────────────────────────────────
 
 router.post('/:id/reembed', requireRole('member'), async (req, res) => {
-  const { id } = req.params
+  const id = req.params.id as string
   try {
     const { rows } = await pool.query('SELECT id, content FROM documents WHERE id = $1', [id])
     if (!rows.length) return res.status(404).json({ error: 'Document not found' })

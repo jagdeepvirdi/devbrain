@@ -3,6 +3,8 @@ import { documentsApi, type DocMeta, type DocDetail, type EmbeddingStatus } from
 import { useProjectStore } from '../store/projectStore'
 import { useToast } from '../components/Toast'
 import { SkeletonRow } from '../components/Skeleton'
+import { FilterBar, initialFilterState } from '../components/FilterBar'
+import type { FilterState } from '../components/FilterBar'
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -46,7 +48,7 @@ function DropZone({ projectId, onDone }: { projectId: string | undefined; onDone
       const { tags: suggested } = await documentsApi.suggestTags(hint)
       setSuggestedTags(suggested.filter(t => !tags.includes(t)))
     } catch {
-      // silently fail — AI may not be running
+      // silently fail
     } finally {
       setSuggesting(false)
     }
@@ -98,7 +100,6 @@ function DropZone({ projectId, onDone }: { projectId: string | undefined; onDone
 
   return (
     <div style={{ margin: '16px 24px 0' }}>
-      {/* Drop area */}
       <div
         onDragOver={e => { e.preventDefault(); setDragging(true) }}
         onDragLeave={() => setDragging(false)}
@@ -129,7 +130,6 @@ function DropZone({ projectId, onDone }: { projectId: string | undefined; onDone
       <input ref={fileRef} type="file" multiple accept=".pdf,.docx,.md,.txt,.xlsx,.xls"
         style={{ display: 'none' }} onChange={e => e.target.files && handleFiles(e.target.files)} />
 
-      {/* URL input */}
       <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
         <input
           value={urlInput}
@@ -147,62 +147,39 @@ function DropZone({ projectId, onDone }: { projectId: string | undefined; onDone
         </button>
       </div>
 
-      {/* Tags input */}
-      <div style={{ marginTop: 8 }}>
-        {tags.length > 0 && (
-          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 6 }}>
-            {tags.map(t => (
-              <span key={t} style={{ fontSize: '11px', padding: '1px 7px', borderRadius: 10, background: 'var(--accent-dim)', border: '1px solid var(--accent-line)', color: 'var(--accent-2)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                {t}
-                <button onClick={() => setTags(prev => prev.filter(x => x !== t))} style={{ color: 'var(--accent-2)', fontSize: 9, background: 'none', border: 'none', cursor: 'default', padding: 0, lineHeight: 1 }}>✕</button>
-              </span>
-            ))}
-          </div>
-        )}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input
-            value={tagInput}
-            onChange={e => setTagInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addTag() } }}
-            placeholder="Add tags before uploading… (Enter or comma)"
-            style={{ flex: 1, padding: '5px 10px', background: 'var(--bg-elev-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius)', fontSize: '12px', color: 'var(--fg)', outline: 'none' }}
-          />
-          {tagInput.trim() && (
-            <button onClick={addTag} style={{ height: 28, padding: '0 10px', borderRadius: 'var(--radius)', background: 'var(--bg-elev-2)', border: '1px solid var(--line-2)', color: 'var(--fg-3)', fontSize: '11px', cursor: 'default' }}>
-              Add
-            </button>
-          )}
-          <button
-            onClick={handleSuggestTags}
-            disabled={suggesting || (!urlInput.trim() && !tagInput.trim())}
-            title="Suggest tags with AI (paste a URL or type a hint first)"
-            style={{ height: 28, padding: '0 10px', borderRadius: 'var(--radius)', background: 'var(--accent-dim)', border: '1px solid var(--accent-line)', color: 'var(--accent-2)', fontSize: '11px', cursor: 'default', opacity: (suggesting || (!urlInput.trim() && !tagInput.trim())) ? .5 : 1, whiteSpace: 'nowrap' }}
-          >
-            {suggesting ? '…' : '✦ Suggest'}
-          </button>
-        </div>
-        {suggestedTags.length > 0 && (
-          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
-            <span style={{ fontSize: '11px', color: 'var(--fg-3)' }}>Suggested:</span>
-            {suggestedTags.map(t => (
-              <button
-                key={t}
-                onClick={() => acceptSuggested(t)}
-                style={{ fontSize: '11px', padding: '1px 8px', borderRadius: 10, background: 'rgba(99,102,241,.12)', border: '1px dashed var(--accent-line)', color: 'var(--accent-2)', cursor: 'default', display: 'flex', alignItems: 'center', gap: 4 }}
-              >
-                + {t}
-              </button>
-            ))}
-            <button onClick={() => setSuggestedTags([])} style={{ fontSize: '10px', color: 'var(--fg-3)', background: 'none', border: 'none', cursor: 'default', padding: '0 2px' }}>✕</button>
-          </div>
-        )}
+      <div style={{ display: 'flex', gap: 10, marginTop: 10, alignItems: 'center' }}>
+        <input
+          value={tagInput}
+          onChange={e => setTagInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && addTag()}
+          placeholder="Add tags to files/URL before importing…"
+          style={{ width: 300, padding: '6px 10px', background: 'var(--bg-elev-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius)', fontSize: 12.5, color: 'var(--fg)' }}
+        />
+        <button
+          onClick={handleSuggestTags}
+          disabled={suggesting}
+          style={{ height: 28, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-2)', fontSize: 11.5 }}
+        >
+          {suggesting ? 'Suggesting…' : '🪄 Auto-tag'}
+        </button>
+        {tags.map(t => (
+          <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 4, background: 'var(--bg-elev-2)', border: '1px solid var(--line-2)', fontSize: 11, color: 'var(--fg-2)' }}>
+            #{t}
+            <button onClick={() => setTags(prev => prev.filter(x => x !== t))} style={{ color: 'var(--fg-3)' }}>×</button>
+          </span>
+        ))}
       </div>
-
-      {error && (
-        <div style={{ marginTop: 8, padding: '8px 12px', background: 'rgba(240,90,90,.08)', border: '1px solid rgba(240,90,90,.25)', borderRadius: 'var(--radius)', fontSize: 12.5, color: '#F8A8A8' }}>
-          {error}
+      {suggestedTags.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '.04em' }}>Suggestions:</span>
+          {suggestedTags.map(t => (
+            <button key={t} onClick={() => acceptSuggested(t)} style={{ padding: '2px 8px', borderRadius: 4, border: '1px dashed var(--line-3)', background: 'transparent', color: 'var(--fg-3)', fontSize: 11 }}>
+              +{t}
+            </button>
+          ))}
         </div>
       )}
+      {error && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--red)' }}>{error}</div>}
     </div>
   )
 }
@@ -310,17 +287,43 @@ export function DocumentsPage() {
   const [loading,     setLoading]     = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [search,      setSearch]      = useState('')
+  const [filters,     setFilters]     = useState<FilterState>(initialFilterState)
   const [selected,    setSelected]    = useState<string | null>(null)
   const [deleting,    setDeleting]    = useState<DocMeta | null>(null)
 
+  const [selectedIds,   setSelectedIds]   = useState<Set<string>>(new Set())
+  const [bulkWorking,   setBulkWorking]   = useState(false)
+  const [confirmBulkDel, setConfirmBulkDel] = useState(false)
+  const headerCheckboxRef = useRef<HTMLInputElement>(null)
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }, [])
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds(prev => prev.size === docs.length ? new Set() : new Set(docs.map(d => d.id)))
+  }, [docs])
+
   const load = useCallback(async (offset: number, append: boolean) => {
-    if (!append) setLoading(true)
+    if (!append) {
+      setLoading(true)
+      setSelectedIds(new Set())
+    }
     else setLoadingMore(true)
     try {
       const result = await documentsApi.list({
-        projectId: selectedId ?? undefined,
-        search:    search || undefined,
-        limit:     PAGE,
+        projectId:  selectedId ?? undefined,
+        projectIds: selectedId ? undefined : (filters.projectIds.length > 0 ? filters.projectIds : undefined),
+        fileType:   filters.fileType.length > 0 ? filters.fileType : undefined,
+        tags:       filters.tags.length > 0 ? filters.tags : undefined,
+        dateFrom:   filters.dateFrom || undefined,
+        dateTo:     filters.dateTo || undefined,
+        q:          search.trim() || undefined,
+        limit:      PAGE,
         offset,
       })
       setTotal(result.total)
@@ -332,9 +335,12 @@ export function DocumentsPage() {
       setLoading(false)
       setLoadingMore(false)
     }
-  }, [selectedId, search, toast])
+  }, [selectedId, filters, search, toast])
 
-  useEffect(() => { load(0, false) }, [load])
+  useEffect(() => {
+    const timer = setTimeout(() => load(0, false), 150)
+    return () => clearTimeout(timer)
+  }, [load, search, filters, selectedId])
 
   async function handleDelete(doc: DocMeta) {
     try {
@@ -348,9 +354,67 @@ export function DocumentsPage() {
     }
   }
 
+  async function handleBulkReembed() {
+    setBulkWorking(true)
+    try {
+      await documentsApi.bulk([...selectedIds], 're-embed')
+      toast(`Queued ${selectedIds.size} document${selectedIds.size !== 1 ? 's' : ''} for re-embedding`, 'success')
+      setDocs(prev => prev.map(d => selectedIds.has(d.id) ? { ...d, embedding_status: 'processing' } : d))
+      setSelectedIds(new Set())
+    } catch {
+      toast('Bulk re-embed failed', 'error')
+    } finally {
+      setBulkWorking(false)
+    }
+  }
+
+  async function handleBulkDelete() {
+    setBulkWorking(true)
+    try {
+      await documentsApi.bulk([...selectedIds], 'delete')
+      const count = selectedIds.size
+      setDocs(prev => prev.filter(d => !selectedIds.has(d.id)))
+      setTotal(t => t - count)
+      if (selected && selectedIds.has(selected)) setSelected(null)
+      toast(`Deleted ${count} document${count !== 1 ? 's' : ''}`, 'success')
+      setSelectedIds(new Set())
+    } catch {
+      toast('Bulk delete failed', 'error')
+    } finally {
+      setBulkWorking(false)
+      setConfirmBulkDel(false)
+    }
+  }
+
+  async function handleBulkTag(tag: string) {
+    if (!tag.trim()) return
+    setBulkWorking(true)
+    try {
+      await documentsApi.bulk([...selectedIds], 'tag', tag.trim())
+      setDocs(prev => prev.map(d => {
+        if (selectedIds.has(d.id)) {
+          const newTags = d.tags.includes(tag.trim()) ? d.tags : [...d.tags, tag.trim()]
+          return { ...d, tags: newTags }
+        }
+        return d
+      }))
+      toast(`Tagged ${selectedIds.size} document${selectedIds.size !== 1 ? 's' : ''}`, 'success')
+      setSelectedIds(new Set())
+    } catch {
+      toast('Bulk tagging failed', 'error')
+    } finally {
+      setBulkWorking(false)
+    }
+  }
+
+  useEffect(() => {
+    if (headerCheckboxRef.current) {
+      headerCheckboxRef.current.indeterminate = selectedIds.size > 0 && selectedIds.size < docs.length
+    }
+  }, [selectedIds, docs])
+
   return (
     <>
-      {/* Page header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 24px', borderBottom: '1px solid var(--line)', flexShrink: 0 }}>
         <h1 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--fg)' }}>Documents</h1>
         <span style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>{total}</span>
@@ -365,15 +429,24 @@ export function DocumentsPage() {
         </span>
       </div>
 
+      <FilterBar entityType="documents" filters={filters} onChange={setFilters} />
+
       {/* Drop zone */}
       <DropZone projectId={selectedId ?? undefined} onDone={() => load(0, false)} />
 
       {/* Table + preview split */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden', marginTop: 16 }}>
         {/* Table */}
-        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', position: 'relative' }}>
           {/* Table header */}
-          <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 70px 80px 100px 80px', gap: 12, padding: '8px 18px', borderBottom: '1px solid var(--line)', fontSize: 10.5, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '.07em', fontWeight: 600, position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 1 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '24px 32px 1fr 70px 80px 100px 80px', gap: 12, padding: '8px 18px', borderBottom: '1px solid var(--line)', fontSize: 10.5, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '.07em', fontWeight: 600, position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 1, alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              ref={headerCheckboxRef}
+              checked={docs.length > 0 && selectedIds.size === docs.length}
+              onChange={toggleSelectAll}
+              style={{ accentColor: 'var(--accent)', cursor: 'default', width: 14, height: 14 }}
+            />
             <span />
             <span>Title</span>
             <span>Type</span>
@@ -382,7 +455,7 @@ export function DocumentsPage() {
             <span>Date</span>
           </div>
 
-          {loading && [1,2,3,4,5].map(i => <SkeletonRow key={i} cols={[7, 220, 60, 70, 90, 70]} />)}
+          {loading && [1,2,3,4,5].map(i => <SkeletonRow key={i} cols={[14, 7, 220, 60, 70, 90, 70]} />)}
 
           {!loading && docs.length === 0 && (
             <div style={{ padding: '48px 18px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, textAlign: 'center' }}>
@@ -397,12 +470,14 @@ export function DocumentsPage() {
           {docs.map(doc => {
             const ts   = TYPE_STYLE[doc.file_type] ?? TYPE_STYLE.txt
             const isSel = selected === doc.id
+            const isChecked = selectedIds.has(doc.id)
             return (
               <div
                 key={doc.id}
                 onClick={() => setSelected(isSel ? null : doc.id)}
+                className={`bulk-select-row ${isChecked ? 'bulk-select-row-selected' : ''} ${selectedIds.size > 0 ? 'bulk-select-has-selection' : ''}`}
                 style={{
-                  display: 'grid', gridTemplateColumns: '32px 1fr 70px 80px 100px 80px',
+                  display: 'grid', gridTemplateColumns: '24px 32px 1fr 70px 80px 100px 80px',
                   gap: 12, padding: '9px 18px',
                   borderBottom: '1px solid var(--line)',
                   background: isSel ? 'var(--accent-dim)' : 'transparent',
@@ -410,6 +485,19 @@ export function DocumentsPage() {
                   alignItems: 'center',
                 }}
               >
+                {/* Checkbox column */}
+                <input
+                  type="checkbox"
+                  className="bulk-select-checkbox"
+                  checked={isChecked}
+                  onChange={e => {
+                    e.stopPropagation()
+                    toggleSelect(doc.id)
+                  }}
+                  onClick={e => e.stopPropagation()}
+                  style={{ accentColor: 'var(--accent)', cursor: 'default', width: 14, height: 14 }}
+                />
+
                 {/* Project color dot */}
                 <span style={{ width: 7, height: 7, borderRadius: '50%', background: doc.project_color ?? 'var(--fg-4)', display: 'inline-block', margin: 'auto' }} />
 
@@ -487,6 +575,132 @@ export function DocumentsPage() {
               <button onClick={() => handleDelete(deleting)} style={{ height: 28, padding: '0 16px', borderRadius: 'var(--radius)', border: 'none', background: '#F05A5A', color: 'white', fontSize: 12.5 }}>Delete</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Floating Action Bar */}
+      {selectedIds.size > 0 && (
+        <div style={{
+          position: 'fixed',
+          bottom: 24,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: 'var(--bg-elev-2)',
+          border: '1px solid var(--accent-line)',
+          borderRadius: 10,
+          padding: '10px 18px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
+          zIndex: 100,
+          animation: 'modal-in 0.15s ease',
+        }}>
+          <span style={{ fontSize: '12.5px', color: 'var(--fg-2)', fontWeight: 500, marginRight: 6 }}>
+            {selectedIds.size} selected
+          </span>
+
+          <div style={{ display: 'flex', gap: 6 }}>
+            {/* Tag Input */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg-elev)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 8px' }}>
+              <input
+                placeholder="Add tag..."
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    handleBulkTag(e.currentTarget.value)
+                    e.currentTarget.value = ''
+                  }
+                }}
+                style={{ fontSize: '11.5px', color: 'var(--fg)', width: 85, background: 'none', border: 'none', outline: 'none' }}
+              />
+            </div>
+
+            {/* Re-embed button */}
+            <button
+              onClick={handleBulkReembed}
+              disabled={bulkWorking}
+              style={{
+                fontSize: '11.5px',
+                padding: '4px 12px',
+                borderRadius: 6,
+                border: '1px solid var(--line)',
+                background: 'var(--bg-elev)',
+                color: 'var(--fg)',
+                transition: 'all 0.15s',
+              }}
+            >
+              Re-embed
+            </button>
+
+            {/* Delete button with confirmation */}
+            {!confirmBulkDel ? (
+              <button
+                onClick={() => setConfirmBulkDel(true)}
+                disabled={bulkWorking}
+                style={{
+                  fontSize: '11.5px',
+                  padding: '4px 12px',
+                  borderRadius: 6,
+                  border: '1px solid rgba(239,68,68,.4)',
+                  background: 'rgba(239,68,68,.08)',
+                  color: '#EF4444',
+                  transition: 'all 0.15s',
+                }}
+              >
+                Delete
+              </button>
+            ) : (
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={bulkWorking}
+                  style={{
+                    fontSize: '11.5px',
+                    padding: '4px 12px',
+                    borderRadius: 6,
+                    border: 'none',
+                    background: '#EF4444',
+                    color: 'white',
+                    fontWeight: 500,
+                  }}
+                >
+                  {bulkWorking ? 'Deleting...' : 'Confirm'}
+                </button>
+                <button
+                  onClick={() => setConfirmBulkDel(false)}
+                  style={{
+                    fontSize: '11.5px',
+                    padding: '4px 10px',
+                    borderRadius: 6,
+                    border: '1px solid var(--line)',
+                    background: 'var(--bg-elev)',
+                    color: 'var(--fg-3)',
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div style={{ width: '1px', height: 16, background: 'var(--line-2)', margin: '0 4px' }} />
+
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            style={{
+              fontSize: '12px',
+              color: 'var(--fg-3)',
+              background: 'none',
+              border: 'none',
+              padding: '4px 8px',
+              borderRadius: 6,
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--fg)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--fg-3)'}
+          >
+            Deselect all
+          </button>
         </div>
       )}
 

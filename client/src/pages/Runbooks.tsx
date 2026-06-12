@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { runbooksApi, type Runbook, type RunbookStep, type RunbookInput } from '../lib/api'
+import { runbooksApi, templatesApi, type Runbook, type RunbookStep, type RunbookInput, type Template } from '../lib/api'
 import { useProjectStore } from '../store/projectStore'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -394,8 +394,33 @@ function NewRunbookModal({ onClose, onCreate }: {
   const [title,     setTitle]     = useState('')
   const [projectId, setProjectId] = useState(proj?.id ?? '')
   const [tagsRaw,   setTagsRaw]   = useState('')
+  const [templates, setTemplates] = useState<Template[]>([])
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('')
+  const [tempSteps, setTempSteps] = useState<any[]>([])
   const [saving,    setSaving]    = useState(false)
   const [error,     setError]     = useState('')
+
+  useEffect(() => {
+    templatesApi.list({ type: 'runbook', projectId: projectId || undefined })
+      .then(setTemplates)
+      .catch(() => {})
+  }, [projectId])
+
+  const handleTemplateSelect = (templateId: string) => {
+    setSelectedTemplateId(templateId)
+    if (!templateId) {
+      setTempSteps([])
+      return
+    }
+    const t = templates.find(x => x.id === templateId)
+    if (t && t.body) {
+      if (Array.isArray(t.body.steps)) {
+        setTempSteps(t.body.steps)
+      } else {
+        setTempSteps([])
+      }
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -403,7 +428,14 @@ function NewRunbookModal({ onClose, onCreate }: {
     setSaving(true)
     try {
       const tags = tagsRaw.split(',').map(t => t.trim()).filter(Boolean)
-      const rb = await runbooksApi.create({ title: title.trim(), project_id: projectId || null, tags, steps: [] })
+      const steps: RunbookStep[] = tempSteps.map((s, i) => ({
+        id: globalThis.crypto.randomUUID(),
+        order: i,
+        instruction: s.instruction,
+        command: s.command || undefined,
+        note: s.note || undefined,
+      }))
+      const rb = await runbooksApi.create({ title: title.trim(), project_id: projectId || null, tags, steps })
       onCreate(rb)
     } catch (e) {
       setError((e as Error).message)
@@ -427,6 +459,17 @@ function NewRunbookModal({ onClose, onCreate }: {
           <button onClick={onClose} aria-label="Close dialog" style={{ fontSize: 16, color: 'var(--fg-3)', background: 'none', border: 'none' }}>✕</button>
         </div>
         <form id="new-rb-form" onSubmit={submit} style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '.07em', display: 'block', marginBottom: 5 }}>Use template</label>
+            <select value={selectedTemplateId} onChange={e => handleTemplateSelect(e.target.value)} style={{ ...inp, cursor: 'default', color: selectedTemplateId ? 'var(--fg)' : 'var(--fg-3)' }}>
+              <option value="">No template (blank)</option>
+              {templates.map(t => (
+                <option key={t.id} value={t.id}>
+                  {t.name}{t.project_name ? ` · ${t.project_name}` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
           <div>
             <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '.07em', display: 'block', marginBottom: 5 }}>Title *</label>
             <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Deploy to Production" autoFocus style={inp} />

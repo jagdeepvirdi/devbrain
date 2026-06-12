@@ -112,11 +112,14 @@ function LangBadge({ lang }: { lang: string }) {
 
 // ── CommandCard ──────────────────────────────────────────────────────────────
 
-function CommandCard({ cmd, selected, onClick, onFavToggle }: {
+function CommandCard({ cmd, selected, onClick, onFavToggle, isChecked, onToggleSelect, hasSelection }: {
   cmd: Command
   selected: boolean
   onClick: () => void
   onFavToggle: (e: React.MouseEvent) => void
+  isChecked: boolean
+  onToggleSelect: (id: string) => void
+  hasSelection: boolean
 }) {
   const firstLine = cmd.command.split('\n')[0]
 
@@ -124,6 +127,7 @@ function CommandCard({ cmd, selected, onClick, onFavToggle }: {
     <a
       href={`/commands?open=${cmd.id}`}
       onClick={e => { if (!e.ctrlKey && !e.metaKey) { e.preventDefault(); onClick() } }}
+      className={`bulk-select-row ${isChecked ? 'bulk-select-row-selected' : ''} ${hasSelection ? 'bulk-select-has-selection' : ''}`}
       style={{
         display: 'block', textDecoration: 'none', color: 'inherit',
         padding: '9px 10px', borderRadius: 6, cursor: 'default',
@@ -132,6 +136,17 @@ function CommandCard({ cmd, selected, onClick, onFavToggle }: {
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
+        <input
+          type="checkbox"
+          className="bulk-select-checkbox"
+          checked={isChecked}
+          onChange={e => {
+            e.stopPropagation()
+            onToggleSelect(cmd.id)
+          }}
+          onClick={e => e.stopPropagation()}
+          style={{ accentColor: 'var(--accent)', cursor: 'default', width: 14, height: 14, flexShrink: 0, marginRight: 2 }}
+        />
         <LangBadge lang={cmd.language} />
         <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
           {cmd.title}
@@ -679,6 +694,82 @@ export function CommandsPage() {
   const importRef = useRef<HTMLInputElement>(null)
   const loadAbortRef = useRef<AbortController | null>(null)
 
+  const [selectedIds,   setSelectedIds]   = useState<Set<string>>(new Set())
+  const [bulkWorking,   setBulkWorking]   = useState(false)
+  const [confirmBulkDel, setConfirmBulkDel] = useState(false)
+  const headerCheckboxRef = useRef<HTMLInputElement>(null)
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }, [])
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds(prev => prev.size === commands.length ? new Set() : new Set(commands.map(c => c.id)))
+  }, [commands])
+
+  async function handleBulkFavorite(favorite: boolean) {
+    setBulkWorking(true)
+    try {
+      await commandsApi.bulk([...selectedIds], 'favorite', favorite ? 'true' : 'false')
+      setCommands(prev => prev.map(c => selectedIds.has(c.id) ? { ...c, is_favorite: favorite } : c))
+      toast(`Updated ${selectedIds.size} command${selectedIds.size !== 1 ? 's' : ''}`, 'success')
+      setSelectedIds(new Set())
+    } catch {
+      toast('Bulk update failed', 'error')
+    } finally {
+      setBulkWorking(false)
+    }
+  }
+
+  async function handleBulkDelete() {
+    setBulkWorking(true)
+    try {
+      await commandsApi.bulk([...selectedIds], 'delete')
+      const count = selectedIds.size
+      setCommands(prev => prev.filter(c => !selectedIds.has(c.id)))
+      setTotal(t => t - count)
+      if (selectedId && selectedIds.has(selectedId)) selectCommand(null)
+      toast(`Deleted ${count} command${count !== 1 ? 's' : ''}`, 'success')
+      setSelectedIds(new Set())
+    } catch {
+      toast('Bulk delete failed', 'error')
+    } finally {
+      setBulkWorking(false)
+      setConfirmBulkDel(false)
+    }
+  }
+
+  async function handleBulkTag(tag: string) {
+    if (!tag.trim()) return
+    setBulkWorking(true)
+    try {
+      await commandsApi.bulk([...selectedIds], 'tag', tag.trim())
+      setCommands(prev => prev.map(c => {
+        if (selectedIds.has(c.id)) {
+          const newTags = c.tags.includes(tag.trim()) ? c.tags : [...c.tags, tag.trim()]
+          return { ...c, tags: newTags }
+        }
+        return c
+      }))
+      toast(`Tagged ${selectedIds.size} command${selectedIds.size !== 1 ? 's' : ''}`, 'success')
+      setSelectedIds(new Set())
+    } catch {
+      toast('Bulk tagging failed', 'error')
+    } finally {
+      setBulkWorking(false)
+    }
+  }
+
+  useEffect(() => {
+    if (headerCheckboxRef.current) {
+      headerCheckboxRef.current.indeterminate = selectedIds.size > 0 && selectedIds.size < commands.length
+    }
+  }, [selectedIds, commands])
+
   // Inject Shiki CSS once
   useEffect(() => {
     const id = 'shiki-style'
@@ -695,6 +786,7 @@ export function CommandsPage() {
       loadAbortRef.current?.abort()
       loadAbortRef.current = new AbortController()
       setLoading(true)
+      setSelectedIds(new Set())
     } else {
       setLoadingMore(true)
     }
@@ -893,6 +985,22 @@ export function CommandsPage() {
 
           {/* List */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '0 6px 8px' }}>
+            {/* List header select all */}
+            {!loading && commands.length > 0 && (
+              <div style={{ padding: '6px 14px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-elev-2)', margin: '0 6px 6px', borderRadius: 6 }}>
+                <input
+                  type="checkbox"
+                  ref={headerCheckboxRef}
+                  checked={commands.length > 0 && selectedIds.size === commands.length}
+                  onChange={toggleSelectAll}
+                  style={{ accentColor: 'var(--accent)', cursor: 'default', width: 14, height: 14 }}
+                />
+                <span style={{ fontSize: '11px', color: 'var(--fg-3)', fontWeight: 500 }}>
+                  Select all
+                </span>
+              </div>
+            )}
+
             {loading
               ? [1,2,3,4,5].map(i => <SkeletonRow key={i} cols={[140, 80, 50]} />)
               : commands.length === 0
@@ -914,6 +1022,9 @@ export function CommandsPage() {
                       selected={cmd.id === selectedId}
                       onClick={() => selectCommand(cmd.id)}
                       onFavToggle={e => handleFavToggle(e, cmd)}
+                      isChecked={selectedIds.has(cmd.id)}
+                      onToggleSelect={toggleSelect}
+                      hasSelection={selectedIds.size > 0}
                     />
                   ))
             }
@@ -964,6 +1075,147 @@ export function CommandsPage() {
         />
       )}
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+
+      {/* Floating Action Bar */}
+      {selectedIds.size > 0 && (
+        <div style={{
+          position: 'absolute',
+          bottom: 24,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: 'var(--bg-elev-2)',
+          border: '1px solid var(--accent-line)',
+          borderRadius: 10,
+          padding: '10px 18px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
+          zIndex: 100,
+          animation: 'modal-in 0.15s ease',
+        }}>
+          <span style={{ fontSize: '12.5px', color: 'var(--fg-2)', fontWeight: 500, marginRight: 6 }}>
+            {selectedIds.size} selected
+          </span>
+
+          <div style={{ display: 'flex', gap: 6 }}>
+            {/* Tag Input */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg-elev)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 8px' }}>
+              <input
+                placeholder="Add tag..."
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    handleBulkTag(e.currentTarget.value)
+                    e.currentTarget.value = ''
+                  }
+                }}
+                style={{ fontSize: '11.5px', color: 'var(--fg)', width: 85, background: 'none', border: 'none', outline: 'none' }}
+              />
+            </div>
+
+            {/* Favorite toggle */}
+            <button
+              onClick={() => handleBulkFavorite(true)}
+              disabled={bulkWorking}
+              style={{
+                fontSize: '11.5px',
+                padding: '4px 12px',
+                borderRadius: 6,
+                border: '1px solid var(--line)',
+                background: 'var(--bg-elev)',
+                color: '#F59E0B',
+                transition: 'all 0.15s',
+              }}
+            >
+              ★ Favorite
+            </button>
+            <button
+              onClick={() => handleBulkFavorite(false)}
+              disabled={bulkWorking}
+              style={{
+                fontSize: '11.5px',
+                padding: '4px 12px',
+                borderRadius: 6,
+                border: '1px solid var(--line)',
+                background: 'var(--bg-elev)',
+                color: 'var(--fg-3)',
+                transition: 'all 0.15s',
+              }}
+            >
+              ☆ Unfavorite
+            </button>
+
+            {/* Delete button with confirmation */}
+            {!confirmBulkDel ? (
+              <button
+                onClick={() => setConfirmBulkDel(true)}
+                disabled={bulkWorking}
+                style={{
+                  fontSize: '11.5px',
+                  padding: '4px 12px',
+                  borderRadius: 6,
+                  border: '1px solid rgba(239,68,68,.4)',
+                  background: 'rgba(239,68,68,.08)',
+                  color: '#EF4444',
+                  transition: 'all 0.15s',
+                }}
+              >
+                Delete
+              </button>
+            ) : (
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={bulkWorking}
+                  style={{
+                    fontSize: '11.5px',
+                    padding: '4px 12px',
+                    borderRadius: 6,
+                    border: 'none',
+                    background: '#EF4444',
+                    color: 'white',
+                    fontWeight: 500,
+                  }}
+                >
+                  {bulkWorking ? 'Deleting...' : 'Confirm'}
+                </button>
+                <button
+                  onClick={() => setConfirmBulkDel(false)}
+                  style={{
+                    fontSize: '11.5px',
+                    padding: '4px 10px',
+                    borderRadius: 6,
+                    border: '1px solid var(--line)',
+                    background: 'var(--bg-elev)',
+                    color: 'var(--fg-3)',
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div style={{ width: '1px', height: 16, background: 'var(--line-2)', margin: '0 4px' }} />
+
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            style={{
+              fontSize: '12px',
+              color: 'var(--fg-3)',
+              background: 'none',
+              border: 'none',
+              padding: '4px 8px',
+              borderRadius: 6,
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--fg)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--fg-3)'}
+          >
+            Deselect all
+          </button>
+        </div>
+      )}
     </div>
   )
 }

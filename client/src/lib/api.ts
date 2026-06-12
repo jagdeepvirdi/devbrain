@@ -366,12 +366,35 @@ export type DocMeta = {
 export type DocDetail = DocMeta & { content: string }
 
 export const documentsApi = {
-  list: (params?: { projectId?: string; search?: string; limit?: number; offset?: number }) => {
+  list: (params?: {
+    projectId?: string
+    projectIds?: string[]
+    fileType?: string[]
+    tags?: string[]
+    dateFrom?: string
+    dateTo?: string
+    q?: string
+    search?: string
+    limit?: number
+    offset?: number
+  }) => {
     const qs = new URLSearchParams()
-    if (params?.projectId)        qs.set('projectId', params.projectId)
-    if (params?.search)           qs.set('search', params.search)
-    if (params?.limit  != null)   qs.set('limit',  String(params.limit))
-    if (params?.offset != null)   qs.set('offset', String(params.offset))
+    if (params?.projectId) qs.set('projectId', params.projectId)
+    if (params?.projectIds) {
+      params.projectIds.forEach(id => qs.append('projectIds[]', id))
+    }
+    if (params?.fileType) {
+      params.fileType.forEach(ft => qs.append('fileType[]', ft))
+    }
+    if (params?.tags) {
+      params.tags.forEach(t => qs.append('tags[]', t))
+    }
+    if (params?.dateFrom) qs.set('dateFrom', params.dateFrom)
+    if (params?.dateTo) qs.set('dateTo', params.dateTo)
+    if (params?.q) qs.set('q', params.q)
+    if (params?.search) qs.set('search', params.search)
+    if (params?.limit != null) qs.set('limit', String(params.limit))
+    if (params?.offset != null) qs.set('offset', String(params.offset))
     const q = qs.toString()
     return request<Paged<DocMeta>>(`/documents${q ? `?${q}` : ''}`)
   },
@@ -409,6 +432,8 @@ export const documentsApi = {
 
   suggestTags: (title: string, hint?: string) =>
     request<{ tags: string[] }>('/documents/suggest-tags', { method: 'POST', body: JSON.stringify({ title, hint }) }),
+  bulk: (ids: string[], action: 're-embed' | 'tag' | 'delete', value?: string) =>
+    request<{ success: boolean }>('/documents/bulk', { method: 'PATCH', body: JSON.stringify({ ids, action, value }) }),
 }
 
 // ── Issues ────────────────────────────────────────────────────────────────
@@ -486,14 +511,48 @@ export type RelatedCommand = {
 }
 
 export const issuesApi = {
-  list: (params?: { projectId?: string; status?: string; priority?: string; search?: string; limit?: number; offset?: number; signal?: AbortSignal }) => {
+  list: (params?: {
+    projectId?: string
+    projectIds?: string[]
+    status?: string | string[]
+    priority?: string | string[]
+    tags?: string[]
+    dateFrom?: string
+    dateTo?: string
+    q?: string
+    search?: string
+    limit?: number
+    offset?: number
+    signal?: AbortSignal
+  }) => {
     const qs = new URLSearchParams()
-    if (params?.projectId)      qs.set('projectId', params.projectId)
-    if (params?.status)         qs.set('status',    params.status)
-    if (params?.priority)       qs.set('priority',  params.priority)
-    if (params?.search)         qs.set('search',    params.search)
-    if (params?.limit  != null) qs.set('limit',     String(params.limit))
-    if (params?.offset != null) qs.set('offset',    String(params.offset))
+    if (params?.projectId) qs.set('projectId', params.projectId)
+    if (params?.projectIds) {
+      params.projectIds.forEach(id => qs.append('projectIds[]', id))
+    }
+    if (params?.status) {
+      if (Array.isArray(params.status)) {
+        params.status.forEach(s => qs.append('status[]', s))
+      } else {
+        qs.set('status', params.status)
+      }
+    }
+    if (params?.priority) {
+      if (Array.isArray(params.priority)) {
+        params.priority.forEach(p => qs.append('priority[]', p))
+      } else {
+        qs.set('priority', params.priority)
+      }
+    }
+    if (params?.tags) {
+      params.tags.forEach(t => qs.append('tags[]', t))
+    }
+    if (params?.dateFrom) qs.set('dateFrom', params.dateFrom)
+    if (params?.dateTo) qs.set('dateTo', params.dateTo)
+    if (params?.q) qs.set('q', params.q)
+    if (params?.search) qs.set('search', params.search)
+    if (params?.limit != null) qs.set('limit', String(params.limit))
+    if (params?.offset != null) qs.set('offset', String(params.offset))
     const q = qs.toString()
     return request<Paged<Issue>>(`/issues${q ? `?${q}` : ''}`, params?.signal ? { signal: params.signal } : undefined)
   },
@@ -514,6 +573,10 @@ export const issuesApi = {
   relatedDocs:     (id: string) => request<RelatedDoc[]>(`/issues/${id}/related-docs`),
   relatedCommands: (id: string) => request<RelatedCommand[]>(`/issues/${id}/related-commands`),
   reembed:         (id: string) => request<{ id: string; embedding_status: EmbeddingStatus }>(`/issues/${id}/reembed`, { method: 'POST' }),
+  bulk: (ids: string[], action: 'tag' | 'status' | 'delete', value?: string) =>
+    request<{ success: boolean }>('/issues/bulk', { method: 'PATCH', body: JSON.stringify({ ids, action, value }) }),
+  triage: (projectId?: string) =>
+    request<(Issue & { is_stale?: boolean })[]>(`/issues/triage${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
 }
 
 // ── Tasks ─────────────────────────────────────────────────────────────────
@@ -643,6 +706,8 @@ export const commandsApi = {
   remove:  (id: string)                       => request<{ deleted: { id: string; title: string } }>(`/commands/${id}`, { method: 'DELETE' }),
   use:     (id: string)                       => request<Command>(`/commands/${id}/use`, { method: 'POST' }),
   explain: (id: string) => request<{ explanation: string }>(`/commands/${id}/explain`, { method: 'POST' }),
+  bulk: (ids: string[], action: 'tag' | 'favorite' | 'delete', value?: string) =>
+    request<{ success: boolean }>('/commands/bulk', { method: 'PATCH', body: JSON.stringify({ ids, action, value }) }),
 }
 
 // ── Releases ──────────────────────────────────────────────────────────────
@@ -721,6 +786,21 @@ export type SearchSuggestion = {
   project_color: string | null
 }
 
+export type SavedFilter = {
+  id:          string
+  user_id:     string
+  name:        string
+  entity_type: string
+  filter_json: any
+  created_at:  string
+}
+
+export type SearchHistoryEntry = {
+  id:         string
+  query:      string
+  created_at: string
+}
+
 export const searchApi = {
   search: (q: string, projectId?: string | null, limit?: number) => {
     const qs = new URLSearchParams({ q })
@@ -734,6 +814,17 @@ export const searchApi = {
     const q = qs.toString()
     return request<SearchSuggestion[]>(`/search/suggestions${q ? `?${q}` : ''}`)
   },
+  getFilters: () =>
+    request<SavedFilter[]>('/search/filters'),
+  saveFilter: (name: string, entityType: string, filterJson: any) =>
+    request<SavedFilter>('/search/filters', {
+      method: 'POST',
+      body: JSON.stringify({ name, entity_type: entityType, filter_json: filterJson }),
+    }),
+  deleteFilter: (id: string) =>
+    request<{ success: boolean }>(`/search/filters/${id}`, { method: 'DELETE' }),
+  getHistory: () =>
+    request<SearchHistoryEntry[]>('/search/history'),
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────
@@ -1119,4 +1210,178 @@ export const settingsApi = {
     if (!res.ok) throw new Error(json.error ?? `Import failed: ${res.status}`)
     return json.data!
   },
+
+  // ── Phase 28.1 notification rules ───────────────────────────────────────
+  getNotificationRules: () =>
+    request<NotificationRules>('/settings/notifications'),
+
+  saveNotificationRules: (cfg: NotificationRules) =>
+    request<NotificationRules>('/settings/notifications', {
+      method: 'PUT',
+      body: JSON.stringify(cfg),
+    }),
+
+  // ── Phase 28.5 digest settings ──────────────────────────────────────────
+  getDigestSettings: () =>
+    request<DigestSettings>('/settings/digest'),
+
+  saveDigestSettings: (cfg: DigestSettings) =>
+    request<DigestSettings>('/settings/digest', {
+      method: 'PUT',
+      body: JSON.stringify(cfg),
+    }),
 }
+
+export interface Notification {
+  id: string
+  user_id: string
+  type: string
+  title: string
+  body: string
+  entity_type: string | null
+  entity_id: string | null
+  read: boolean
+  channel: string
+  delivery_status: string
+  created_at: string
+  project_name?: string
+  project_color?: string
+}
+
+export interface NotificationRules {
+  stale_threshold_days: number
+  stale_issues_enabled: boolean
+  sync_alerts_enabled: boolean
+  ai_task_alerts_enabled: boolean
+}
+
+export interface NotificationChannel {
+  id: string
+  user_id: string
+  name: string
+  apprise_url: string
+  enabled: boolean
+  created_at: string
+}
+
+export interface ProjectNotificationPref {
+  project_id: string
+  channel_id: string
+  enabled: boolean
+}
+
+export interface DigestSettings {
+  enabled: boolean
+  time: string
+}
+
+export const notificationsApi = {
+  list: (limit = 50, offset = 0) =>
+    request<{ items: Notification[]; total: number; unread_count: number }>(
+      `/notifications?limit=${limit}&offset=${offset}`
+    ),
+  markRead: (id: string) =>
+    request<Notification>(`/notifications/${id}/read`, { method: 'PATCH' }),
+  markAllRead: () =>
+    request<{ success: boolean }>('/notifications/read-all', { method: 'PATCH' }),
+}
+
+export const notifyApi = {
+  getChannels: () =>
+    request<NotificationChannel[]>('/notify/channels'),
+
+  createChannel: (body: { name: string; apprise_url: string; enabled: boolean }) =>
+    request<NotificationChannel>('/notify/channels', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  deleteChannel: (id: string) =>
+    request<{ ok: boolean }>(`/notify/channels/${id}`, {
+      method: 'DELETE',
+    }),
+
+  toggleChannel: (id: string, enabled: boolean) =>
+    request<NotificationChannel>(`/notify/channels/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    }),
+
+  getProjectPrefs: () =>
+    request<ProjectNotificationPref[]>('/notify/project-prefs'),
+
+  saveProjectPref: (body: { project_id: string; channel_id: string; enabled: boolean }) =>
+    request<ProjectNotificationPref>('/notify/project-prefs', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+
+  getLog: (params: {
+    limit?: number
+    offset?: number
+    project?: string
+    level?: string
+    channel?: string
+    status?: string
+    dateFrom?: string
+    dateTo?: string
+  }) => {
+    const qs = new URLSearchParams()
+    if (params.limit !== undefined) qs.append('limit', String(params.limit))
+    if (params.offset !== undefined) qs.append('offset', String(params.offset))
+    if (params.project) qs.append('project', params.project)
+    if (params.level) qs.append('level', params.level)
+    if (params.channel) qs.append('channel', params.channel)
+    if (params.status) qs.append('status', params.status)
+    if (params.dateFrom) qs.append('dateFrom', params.dateFrom)
+    if (params.dateTo) qs.append('dateTo', params.dateTo)
+    return request<{ items: Notification[]; total: number }>(`/notify/log?${qs.toString()}`)
+  },
+
+  testNotification: () =>
+    request<{ success: boolean; details: any }>('/notify/test', {
+      method: 'POST',
+    }),
+
+  retryNotification: (id: string) =>
+    request<{ success: boolean; details: any }>(`/notify/retry/${id}`, {
+      method: 'POST',
+    }),
+}
+
+// ── Templates ─────────────────────────────────────────────────────────────
+
+export type TemplateType = 'issue' | 'runbook' | 'document'
+
+export type Template = {
+  id:            string
+  project_id:    string | null
+  type:          TemplateType
+  name:          string
+  description:   string
+  body:          any
+  is_builtin:    boolean
+  created_at:    string
+  project_name:  string | null
+  project_color: string | null
+}
+
+export type TemplateInput = Pick<Template, 'project_id' | 'type' | 'name' | 'description' | 'body'>
+
+export const templatesApi = {
+  list: (params?: { type?: TemplateType; projectId?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.type)      qs.set('type', params.type)
+    if (params?.projectId) qs.set('projectId', params.projectId)
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return request<Template[]>(`/templates${suffix}`)
+  },
+  create: (body: TemplateInput) =>
+    request<Template>('/templates', { method: 'POST', body: JSON.stringify(body) }),
+  update: (id: string, body: Partial<TemplateInput>) =>
+    request<Template>(`/templates/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  remove: (id: string) =>
+    request<{ success: boolean }>(`/templates/${id}`, { method: 'DELETE' }),
+}
+
+

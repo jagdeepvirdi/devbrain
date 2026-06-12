@@ -4,6 +4,7 @@ import { pool }   from '../db/pool.js'
 import { encrypt, decrypt } from '../services/crypto.js'
 import { requireRole } from '../middleware/auth.js'
 import { syncGitHub, syncJira, syncLinear } from '../services/integrations.js'
+import { createNotification } from '../services/notifications.js'
 
 const router = Router()
 
@@ -88,10 +89,29 @@ router.post('/:id/sync', requireRole('member'), async (req, res) => {
     }
 
     await pool.query('UPDATE integrations SET last_synced_at = now() WHERE id = $1', [req.params.id])
+
+    // Hook: notifications
+    try {
+      const { rows: settingsRows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'notification_rules'`)
+      const rules = settingsRows[0]?.value ?? {}
+      if (rules.sync_alerts_enabled !== false) {
+        await createNotification(req.user!.id, {
+          type: 'sync_complete',
+          title: `Sync Complete: ${integration.provider}`,
+          body: `Successfully imported ${result.created} new issues from ${integration.provider}.`,
+          entityType: 'project',
+          entityId: integration.project_id
+        })
+      }
+    } catch (err) {
+      console.error('Failed to create integration sync notification:', err)
+    }
+
     res.json({ data: result })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
   }
 })
+
 
 export default router

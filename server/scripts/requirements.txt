@@ -1,0 +1,4 @@
+apprise
+apscheduler
+psycopg2-binary
+

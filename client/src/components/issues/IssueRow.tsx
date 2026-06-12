@@ -1,11 +1,12 @@
 import type { Issue } from '../../lib/api'
 import { PRIORITY_META, STATUS_META } from './issueConstants'
 
-export function IssueRow({ issue, onClick, selected, onToggleSelect }: {
-  issue: Issue
+export function IssueRow({ issue, onClick, selected, onToggleSelect, hasSelection }: {
+  issue: Issue & { is_stale?: boolean }
   onClick: () => void
   selected?: boolean
   onToggleSelect?: (id: string) => void
+  hasSelection?: boolean
 }) {
   const pm = PRIORITY_META[issue.priority]
   const sm = STATUS_META[issue.status]
@@ -18,6 +19,7 @@ export function IssueRow({ issue, onClick, selected, onToggleSelect }: {
       onClick={e => { if (!e.ctrlKey && !e.metaKey) { e.preventDefault(); onClick() } }}
       tabIndex={0}
       aria-label={`Open issue: ${issue.title}`}
+      className={`bulk-select-row ${selected ? 'bulk-select-row-selected' : ''} ${hasSelection ? 'bulk-select-has-selection' : ''}`}
       style={{
         display: 'flex', alignItems: 'center', gap: 12,
         padding: '10px 20px', cursor: 'default',
@@ -32,6 +34,7 @@ export function IssueRow({ issue, onClick, selected, onToggleSelect }: {
       {onToggleSelect && (
         <input
           type="checkbox"
+          className="bulk-select-checkbox"
           checked={selected ?? false}
           onChange={() => onToggleSelect(issue.id)}
           onClick={e => e.stopPropagation()}
@@ -67,6 +70,17 @@ export function IssueRow({ issue, onClick, selected, onToggleSelect }: {
       {total > 0 && (
         <span style={{ fontSize: '11px', color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
           {doneSteps}/{total}
+        </span>
+      )}
+
+      {issue.is_stale && (
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4,
+          fontSize: '11px', fontWeight: 600, color: 'var(--orange)',
+          background: 'rgba(255,157,77,0.1)', border: '1px solid rgba(255,157,77,0.3)',
+          borderRadius: 4, padding: '1px 5px', flexShrink: 0
+        }}>
+          Stale
         </span>
       )}
 

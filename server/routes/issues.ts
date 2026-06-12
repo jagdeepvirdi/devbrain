@@ -90,47 +90,94 @@ const ISSUE_JOINS = `
   LEFT JOIN issue_notes n ON n.issue_id = i.id
 `
 
-// ── GET /api/issues ───────────────────────────────────────────────────────
+// Helper to parse query parameters that can be arrays, single strings, or comma-separated values.
+function parseArrayParam(val: unknown): string[] {
+  if (!val) return []
+  if (Array.isArray(val)) return val.map(v => String(v).trim()).filter(Boolean)
+  if (typeof val === 'string') {
+    return val.split(',').map(v => v.trim()).filter(Boolean)
+  }
+  return [String(val).trim()]
+}
+
+const getArrayParam = (query: any, key: string): string[] => {
+  const val = query[key] !== undefined ? query[key] : query[`${key}[]`]
+  return parseArrayParam(val)
+};
 
 router.get('/', async (req, res) => {
-  const projectId = req.query.projectId as string | undefined
-  const status    = req.query.status    as string | undefined
-  const priority  = req.query.priority  as string | undefined
-  const search    = req.query.search    as string | undefined
-  const limit     = Math.min(Number(req.query.limit  ?? 25), 100)
-  const offset    = Number(req.query.offset ?? 0)
+  const projectIds = getArrayParam(req.query, 'projectIds')
+  const projectId  = req.query.projectId as string | undefined
+  if (projectId) {
+    projectIds.push(projectId)
+  }
+  const statuses   = getArrayParam(req.query, 'status')
+  const priorities = getArrayParam(req.query, 'priority')
+  const tags       = getArrayParam(req.query, 'tags')
+  const dateFrom   = req.query.dateFrom as string | undefined
+  const dateTo     = req.query.dateTo as string | undefined
+  const q          = ((req.query.q || req.query.search) as string | undefined)?.trim()
+
+  const limit      = Math.min(Number(req.query.limit  ?? 25), 100)
+  const offset     = Number(req.query.offset ?? 0)
 
   const conditions: string[] = []
   const values: unknown[] = []
   let idx = 1
 
-  if (projectId === 'global') {
-    conditions.push('i.project_id IS NULL')
-  } else if (projectId) {
-    conditions.push(`i.project_id = $${idx++}`)
-    values.push(projectId)
+  const finalProjectIds = Array.from(new Set(projectIds)).filter(id => id !== 'global')
+  const includeGlobal = projectIds.includes('global')
+  if (projectIds.length > 0) {
+    if (includeGlobal && finalProjectIds.length > 0) {
+      conditions.push(`(i.project_id = ANY($${idx++}) OR i.project_id IS NULL)`)
+      values.push(finalProjectIds)
+    } else if (includeGlobal) {
+      conditions.push('i.project_id IS NULL')
+    } else {
+      conditions.push(`i.project_id = ANY($${idx++})`)
+      values.push(finalProjectIds)
+    }
   }
 
-  if (status) {
-    conditions.push(`i.status = $${idx++}`)
-    values.push(status)
+  if (statuses.length > 0) {
+    conditions.push(`i.status = ANY($${idx++})`)
+    values.push(statuses)
   }
 
-  if (priority) {
-    conditions.push(`i.priority = $${idx++}`)
-    values.push(priority)
+  if (priorities.length > 0) {
+    conditions.push(`i.priority = ANY($${idx++})`)
+    values.push(priorities)
   }
 
-  if (search) {
-    conditions.push(`i.tsv @@ plainto_tsquery('english', $${idx++})`)
-    values.push(search)
+  if (tags.length > 0) {
+    conditions.push(`i.tags && $${idx++}::text[]`)
+    values.push(tags)
+  }
+
+  if (dateFrom) {
+    conditions.push(`i.created_at >= $${idx++}::timestamptz`)
+    values.push(dateFrom)
+  }
+
+  if (dateTo) {
+    conditions.push(`i.created_at <= $${idx++}::timestamptz`)
+    values.push(dateTo)
+  }
+
+  if (q) {
+    conditions.push(`(i.tsv @@ plainto_tsquery('english', $${idx}) OR i.title ILIKE $${idx + 1} OR i.description ILIKE $${idx + 1})`)
+    values.push(q)
+    values.push(`%${q}%`)
+    idx += 2
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+  const limitIdx = idx
+  const offsetIdx = idx + 1
 
   try {
     const [countRes, dataRes] = await Promise.all([
-      pool.query(`SELECT COUNT(DISTINCT i.id)::int AS n FROM issues i ${where}`, values),
+      pool.query(`SELECT COUNT(DISTINCT i.id)::int AS n FROM issues i LEFT JOIN projects p ON p.id = i.project_id ${where}`, values),
       pool.query(
         `SELECT ${ISSUE_COLS}
          FROM issues i
@@ -145,7 +192,7 @@ router.get('/', async (req, res) => {
              WHEN 'low'      THEN 4
            END,
            i.created_at DESC
-         LIMIT $${idx} OFFSET $${idx + 1}`,
+         LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
         [...values, limit, offset]
       ),
     ])
@@ -181,6 +228,102 @@ router.get('/related', async (req, res) => {
     res.json({ data: rows })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── GET /api/issues/triage ───────────────────────────────────────────────────
+
+router.get('/triage', async (req, res) => {
+  const projectId = req.query.projectId as string | undefined
+
+  try {
+    const { rows: settingsRows } = await pool.query(
+      `SELECT value FROM app_settings WHERE key = 'notification_rules'`
+    )
+    const rules = settingsRows[0]?.value ?? {}
+    const thresholdDays = Number(rules.stale_threshold_days ?? 14)
+
+    const conditions = ["i.status IN ('open', 'investigating')"]
+    const values: any[] = [thresholdDays]
+
+    if (projectId === 'global') {
+      conditions.push('i.project_id IS NULL')
+    } else if (projectId) {
+      conditions.push('i.project_id = $2')
+      values.push(projectId)
+    }
+
+    const where = `WHERE ${conditions.join(' AND ')}`
+
+    const { rows } = await pool.query(
+      `SELECT ${ISSUE_COLS},
+              (i.updated_at < now() - ($1 || ' day')::interval) AS is_stale
+       FROM issues i
+       ${ISSUE_JOINS}
+       ${where}
+       GROUP BY i.id, p.name, p.color
+       ORDER BY
+         CASE i.priority
+           WHEN 'critical' THEN 1
+           WHEN 'high'     THEN 2
+           WHEN 'medium'   THEN 3
+           WHEN 'low'      THEN 4
+         END ASC,
+         i.updated_at ASC`,
+      values
+    )
+    res.json({ data: rows })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── PATCH /api/issues/bulk ───────────────────────────────────────────────────
+
+router.patch('/bulk', requireRole('member'), async (req, res) => {
+  const { ids, action, value } = req.body
+  if (!Array.isArray(ids) || !ids.length) {
+    return res.status(400).json({ error: 'ids array is required and cannot be empty' })
+  }
+  if (!['tag', 'status', 'delete'].includes(action)) {
+    return res.status(400).json({ error: 'Invalid action' })
+  }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    if (action === 'tag') {
+      if (!value || typeof value !== 'string') {
+        await client.query('ROLLBACK')
+        return res.status(400).json({ error: 'value must be a string tag name' })
+      }
+      await client.query(
+        `UPDATE issues SET tags = array_append(tags, $1) WHERE id = ANY($2) AND NOT ($1 = ANY(tags))`,
+        [value, ids]
+      )
+    } else if (action === 'status') {
+      if (!value || typeof value !== 'string') {
+        await client.query('ROLLBACK')
+        return res.status(400).json({ error: 'value must be a string status name' })
+      }
+      const resolvedClause = value === 'resolved' ? ', resolved_at = now()' : ', resolved_at = NULL'
+      await client.query(
+        `UPDATE issues SET status = $1 ${resolvedClause} WHERE id = ANY($2)`,
+        [value, ids]
+      )
+    } else if (action === 'delete') {
+      await client.query(
+        `DELETE FROM issues WHERE id = ANY($1)`,
+        [ids]
+      )
+    }
+    await client.query('COMMIT')
+    res.json({ data: { success: true } })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    res.status(500).json({ error: (err as Error).message })
+  } finally {
+    client.release()
   }
 })
 
@@ -578,7 +721,7 @@ Please provide a concise summary of:
 // ── POST /api/issues/:id/reembed ──────────────────────────────────────────
 
 router.post('/:id/reembed', requireRole('member'), async (req, res) => {
-  const { id } = req.params
+  const id = req.params.id as string
   try {
     const { rows } = await pool.query(
       'SELECT id, title, description FROM issues WHERE id = $1', [id]

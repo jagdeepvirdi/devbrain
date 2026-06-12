@@ -2,6 +2,8 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { aiChat, aiChatStream } from '../services/ai.js'
 import { requireRole } from '../middleware/auth.js'
+import { pool } from '../db/pool.js'
+import { createNotification } from '../services/notifications.js'
 
 const router = Router()
 
@@ -26,6 +28,22 @@ const TaskBody = z.object({
 const SYSTEM = `You are a senior developer assistant embedded in DevBrain, a private knowledge base tool.
 Answer precisely and concisely. Do not add unnecessary caveats or disclaimers.
 Focus on practical, actionable output.`
+
+async function handleAiTaskDoneNotification(userId: string, task: string) {
+  try {
+    const { rows: settingsRows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'notification_rules'`)
+    const rules = settingsRows[0]?.value ?? {}
+    if (rules.ai_task_alerts_enabled !== false) {
+      await createNotification(userId, {
+        type: 'ai_task_done',
+        title: 'AI Task Complete',
+        body: `AI finished processing: "${task.length > 60 ? task.substring(0, 60) + '...' : task}"`,
+      })
+    }
+  } catch (err) {
+    console.error('Failed to create AI task completion notification:', err)
+  }
+}
 
 // ── POST /api/aitask  (non-streaming) ────────────────────────────────────
 
@@ -55,6 +73,7 @@ router.post('/', requireRole('member'), async (req, res) => {
         }
       )
       res.write('data: [DONE]\n\n')
+      handleAiTaskDoneNotification(req.user!.id, task).catch(() => {})
     } catch (err) {
       res.write(`data: ${JSON.stringify({ error: (err as Error).message })}\n\n`)
     }
@@ -65,6 +84,7 @@ router.post('/', requireRole('member'), async (req, res) => {
 
   try {
     const result = await aiChat(task, system)
+    handleAiTaskDoneNotification(req.user!.id, task).catch(() => {})
     res.json({ data: { result, format } })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
@@ -72,3 +92,4 @@ router.post('/', requireRole('member'), async (req, res) => {
 })
 
 export default router
+
