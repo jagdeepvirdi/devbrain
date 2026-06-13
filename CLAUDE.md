@@ -111,25 +111,43 @@ devbrain/
 │           └── streaming.ts   # SSE response handler
 ├── server/
 │   ├── routes/
-│   │   ├── projects.ts        # Project CRUD + seeding
-│   │   ├── documents.ts       # Upload, parse, embed, CRUD
-│   │   ├── issues.ts          # Issue notes CRUD
-│   │   ├── commands.ts        # Commands/snippets CRUD
-│   │   ├── releases.ts        # Release notes CRUD
-│   │   ├── search.ts          # Hybrid search
-│   │   └── chat.ts            # RAG Q&A (streaming SSE)
+│   │   ├── projects.ts                  # Project CRUD + seeding
+│   │   ├── documents.ts                 # Upload, parse, embed, CRUD
+│   │   ├── issues.ts                    # Issue notes CRUD
+│   │   ├── commands.ts                  # Commands/snippets CRUD
+│   │   ├── releases.ts                  # Release notes CRUD
+│   │   ├── search.ts                    # Hybrid search
+│   │   ├── chat.ts                      # RAG Q&A (streaming SSE)
+│   │   ├── claude-projects.ts           # Claude Code project discovery + task/session sync
+│   │   └── antigravity-projects.ts      # Antigravity project discovery + task/session sync
 │   ├── services/
-│   │   ├── ai.ts              # Unified AI client (Ollama/Claude toggle)
-│   │   ├── ollama.ts          # Ollama chat + embed + stream
-│   │   ├── parser.ts          # Multi-format document parser
-│   │   ├── embedder.ts        # Chunk + embed docs
-│   │   ├── rag.ts             # RAG retrieval + answer generation
-│   │   └── summarizer.ts      # Issue summarization, release notes
+│   │   ├── ai.ts                        # Unified AI client (Ollama/Claude toggle)
+│   │   ├── ollama.ts                    # Ollama chat + embed + stream
+│   │   ├── parser.ts                    # Multi-format document parser
+│   │   ├── embedder.ts                  # Chunk + embed docs
+│   │   ├── rag.ts                       # RAG retrieval + answer generation
+│   │   ├── summarizer.ts                # Issue summarization, release notes
+│   │   └── antigravity-discovery.ts     # Scans fs_path for Antigravity TASKS.md + sessions
 │   ├── db/
 │   │   ├── schema.sql
-│   │   ├── seed.ts            # Seeds default projects on first run
+│   │   ├── seed.ts                      # Seeds default projects on first run
 │   │   └── migrations/
 │   └── index.ts
+├── integrations/
+│   ├── claude-code/                     # Claude Code hooks + install scripts
+│   └── antigravity/                     # Antigravity/Gemini CLI hooks + install scripts
+│       ├── install.ps1                  # Windows native install
+│       ├── install.sh                   # macOS/Linux/WSL install
+│       ├── README.md
+│       └── src/
+│           ├── config/hooks.reference.json
+│           ├── hooks/
+│           │   ├── session-start.ps1 / .sh
+│           │   └── session-end.ps1 / .sh
+│           ├── skills/devbrain/SKILL.md  # /devbrain slash command for Antigravity
+│           └── templates/
+│               ├── TASKS.md
+│               └── SESSION.md
 └── shared/
     └── types.ts
 ```
@@ -604,3 +622,42 @@ This project uses the **DevBrain x Claude Code** integration (`integrations/clau
 2. Fill in the active `SESSION.md`: Goals, Work Done, Decisions, Open Items (bullets, max 5 each)
 
 Trigger manually: `/devbrain` — or say "update tasks" / "write session summary".
+
+---
+
+## Antigravity Integration
+
+This project also supports the **DevBrain x Antigravity** integration (`integrations/antigravity/`) — the same session-tracking pattern as Claude Code, but for the **Gemini CLI / Antigravity** AI assistant.
+
+**Install (Windows):** `powershell -ExecutionPolicy Bypass -File integrations\antigravity\install.ps1`
+— copies `.ps1` hooks to `~\.gemini\config\scripts\`, registers them in `~\.gemini\config\hooks.json`
+
+**Install (macOS/Linux/WSL):** `cd integrations/antigravity && ./install.sh`
+— copies `.sh` hooks to `~/.gemini/config/scripts/`, merges into `~/.gemini/config/hooks.json`
+
+### What the Hooks Do
+- **SessionStart** — scaffolds `TASKS.md` if absent, archives stale completed tasks to `TASKS_ARCHIVE.md`, creates a timestamped session folder under `sessions/`, prints per-phase task progress + last session summary to stdout (Antigravity reads this as context at session open)
+- **SessionEnd** — writes the completed timestamp, appends a row to `sessions/index.md`
+
+### File Locations (per linked project)
+- `TASKS.md` — project root; tracks work phases and backlog
+- `TASKS_ARCHIVE.md` — completed tasks stamped `<!-- done: YYYY-MM-DD -->` older than 7 days are auto-archived here
+- `sessions/YYYY-MM-DD_HH-MM_<id>/SESSION.md` — per-session log
+- `sessions/index.md` — session timeline
+
+### Task Markers
+`[ ]` todo · `[x]` done · `[~]` in-progress · `[!]` blocked
+
+### AI Responsibilities at Session End
+1. Update `TASKS.md` checkboxes
+2. Fill in the active `SESSION.md`: Goals, Work Done, Decisions, Open Items (bullets, max 5 each)
+
+Trigger manually: `/devbrain` — or say "update tasks" / "write session summary" / "mark X as done".
+
+### DevBrain Server-Side (Antigravity Discovery)
+- **`server/routes/antigravity-projects.ts`** — REST endpoints: `POST /api/antigravity-projects/scan`, `GET /api/antigravity-projects/:id/tasks`, `GET /api/antigravity-projects/:id/sessions`, `GET /api/antigravity-projects/:id/sessions/:sid`, `GET /api/antigravity-projects/:id/tasks/watch` (SSE live updates)
+- **`server/services/antigravity-discovery.ts`** — walks a configured `scan_root` directory, detects projects by presence of `TASKS.md`, parses frontmatter + task phases + session history
+- **Settings** — `GET/PUT /api/settings/antigravity` stores `antigravity_scan_root` in `app_settings`; configure the root folder in Settings → Antigravity Integration
+
+### Projects Page
+The "Link folder" modal now accepts `TASKS.md`, `CLAUDE.md`, or `ANTIGRAVITY.md` as the marker file, and the project badge shows **AI SYNC** for any linked integration (Claude Code or Antigravity).
