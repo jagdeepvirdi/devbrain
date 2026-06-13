@@ -29,9 +29,12 @@ CREATE TABLE IF NOT EXISTS users (
   role          TEXT        NOT NULL DEFAULT 'editor'
                   CHECK (role IN ('admin', 'editor', 'viewer')),
   ldap_dn       TEXT,                    -- LDAP distinguished name if LDAP user
+  is_active     BOOLEAN     NOT NULL DEFAULT true,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Idempotent backfill for databases created before is_active was introduced
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
 
 CREATE OR REPLACE TRIGGER trg_users_updated_at
   BEFORE UPDATE ON users
@@ -460,6 +463,18 @@ CREATE TABLE IF NOT EXISTS templates (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS templates_project_idx ON templates (project_id);
+
+-- Phase 26: User invites
+CREATE TABLE IF NOT EXISTS user_invites (
+  id          TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  email       TEXT        NOT NULL UNIQUE,
+  role        TEXT        NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member', 'viewer')),
+  token_hash  TEXT        NOT NULL,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_by  TEXT        REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS user_invites_token_idx ON user_invites (token_hash);
 
 
 
