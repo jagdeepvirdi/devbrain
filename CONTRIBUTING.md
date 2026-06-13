@@ -1,6 +1,6 @@
 # Contributing to DevBrain
 
-DevBrain is a private developer knowledge base. This guide covers local setup, the branching model, and coding standards for contributors.
+DevBrain is a private developer knowledge base — currently at **v1.0.0**. This guide covers local setup, the branching model, and coding standards for contributors.
 
 ## Prerequisites
 
@@ -37,7 +37,7 @@ cd server && npm run dev
 cd client && npm run dev
 ```
 
-The app is available at http://localhost:5174 (frontend proxies API calls to port 3001).
+The app is available at http://localhost:5173 (frontend proxies API calls to port 3001).
 
 ## Validation
 

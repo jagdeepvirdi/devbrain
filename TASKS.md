@@ -1,5 +1,16 @@
 # TASKS.md — DevBrain (Work Knowledge Base)
 
+## Release Status
+
+| Version | Date | Status |
+|---|---|---|
+| **v1.0.0** | 2026-06-13 | Released — all phases complete, CI green |
+
+Completed phases are archived below for reference.
+Active development resumes at **v1.x backlog** items at the bottom of this file.
+
+---
+
 ## Known Risks & Mitigations
 
 | Risk | Mitigation |
@@ -238,7 +249,9 @@
 - [x] **Daily Digest**: enabled toggle + time picker (hour selector)
 - [x] "Send Test Notification" button → calls `POST /api/notify/test` → shows inline success/fail result
 
-### Backlog (future phases)
+### v1.x Backlog — External Notification Senders
+These are integrations in other personal projects that push notifications to DevBrain's `/api/notify` endpoint. Not blocking v1.0.0.
+
 - [ ] Apprise URL config fully replaces `.env` vars — zero env setup needed
 - [ ] FlowForge pipeline completion → POST to `/api/notify`
 - [ ] Memex re-index completion → POST to `/api/notify`

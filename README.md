@@ -12,14 +12,51 @@ A private developer knowledge base for organizing work artifacts across all acti
 
 ## Features
 
-- **Document Q&A (RAG)** — upload PDFs, DOCX, Markdown, spreadsheets, or URLs and ask questions against them. Answers stream in real time with citations.
-- **Issue Investigation** — structured investigation flow with steps, notes, linked docs, and resolution tracking.
-- **Commands Library** — searchable snippets across all your projects with syntax highlighting and one-click copy.
-- **Release Notes** — version timeline with features, fixes, and breaking changes per project.
-- **Runbooks** — step-by-step operational playbooks with optional commands per step.
-- **Global Search (⌘K)** — hybrid semantic + full-text search across all projects simultaneously.
-- **Multi-project** — switch between projects with a top-bar dropdown; all views scope to the selected project or show global across all.
-- **100% local AI** — all inference runs on your GPU via Ollama. No cloud AI costs.
+### Knowledge Base
+- **Document Q&A (RAG)** — upload PDFs, DOCX, Markdown, spreadsheets, or URLs and ask questions against them. Answers stream in real time with source citations.
+- **Issue Investigation** — structured investigation flow with steps, notes, linked docs, linked commands, and resolution tracking.
+- **Commands Library** — searchable snippets with syntax highlighting and one-click copy; usage tracking, favorites, and AI explanation on demand.
+- **Release Notes** — semver timeline with features, fixes, and breaking changes per project; AI drafting from resolved issues.
+- **Runbooks** — step-by-step operational playbooks with optional commands and notes per step.
+- **Templates** — built-in Bug Report, Investigation, Deployment Runbook, and Postmortem templates; create custom templates scoped per-project.
+- **Multi-project** — top-bar project switcher; all views scope to the selected project or show a unified global view across all.
+
+### AI (100% local via Ollama — zero cost)
+- **RAG document Q&A** — `mistral:7b` answers questions using only your documents; cites sources.
+- **Auto-tagging** — `gemma3:4b` suggests tags on upload and issue creation.
+- **Command explanation** — `gemma3:4b` explains any command snippet on demand.
+- **Issue summarization** — `mistral:7b` generates a 3-bullet TL;DR for any issue.
+- **AI release drafting** — `mistral:7b` drafts release notes from a date range of resolved issues.
+
+### Search & Filtering
+- **Global Search (⌘K)** — hybrid pgvector semantic + PostgreSQL full-text search across all projects.
+- **Advanced filters** — issues and documents filterable by status, priority, tags, date range, project, and file type.
+- **Saved filter presets** — named filter presets stored per-user and applied in one click.
+- **Search history** — last 20 queries surfaced in ⌘K.
+
+### Multi-user & Org Sharing
+- **RBAC** — three roles: admin (full access), member (create/edit), viewer (read-only).
+- **User management** — invite by email (one-time token), deactivate/reactivate, admin password reset.
+- **LDAP / AD** — configure and test LDAP; auto-provisions users on first bind; falls back to local bcrypt.
+- **Per-project access control** — members see only their assigned projects.
+- **Audit log** — paginated mutation history in Settings with entity-type filter and CSV export.
+
+### Git & External Sync
+- **Local git** — browse commit history and branches per project.
+- **Commit linking** — link commit SHAs to issues directly from the Git tab.
+- **External issue sync** — import from GitHub, Linear, and Jira with source badge chips.
+
+### Notifications & Apprise Hub
+- **In-app notifications** — bell icon with unread badge; slide-in panel with Today / Earlier grouping.
+- **Stale issue alerts** — background job notifies you of issues open past a configurable threshold.
+- **External delivery** — send notifications to any Apprise-compatible channel (Telegram, Slack, Discord, and 80+ others).
+- **Daily digest** — scheduled Python job summarises open issues and stale projects each morning.
+- **`POST /api/notify`** — public endpoint so your other projects can push notifications into DevBrain.
+
+### Bulk Operations
+- **Multi-select** — checkbox column on Issues, Documents, and Commands.
+- **Floating action bar** — bulk tag, status change, re-embed, favorite, or delete.
+- **Triage view** — dedicated Issues tab showing stale and high-priority open items sorted by urgency.
 
 ## Tech Stack
 
@@ -33,10 +70,12 @@ A private developer knowledge base for organizing work artifacts across all acti
 | AI — embeddings | `nomic-embed-text` via Ollama |
 | AI — optional | Anthropic Claude API (manual opt-in only, never auto-called) |
 | Search | pgvector cosine similarity + PostgreSQL tsvector hybrid |
-| File parsing | `pdf-parse`, `mammoth`, `marked`, `xlsx` |
+| File parsing | MarkItDown (Python bridge) with JS fallbacks (`pdf-parse`, `mammoth`, `marked`, `xlsx`) |
+| Notifications | Apprise (Python) — Telegram, Slack, Discord, and 80+ channels |
 | Code highlighting | Shiki |
-| Auth | bcrypt + JWT |
-| Infrastructure | Docker Compose |
+| Auth | bcrypt + JWT (local); LDAP/AD with auto-provisioning |
+| Credentials at rest | AES-256-GCM encryption for OAuth tokens and LDAP bind passwords |
+| Infrastructure | Docker Compose (PostgreSQL); Ollama runs natively for direct GPU access |
 
 ## Prerequisites
 
@@ -151,22 +190,27 @@ Log in with the `AUTH_PASSWORD` you set in `server/.env`.
 
 ```
 devbrain/
-├── client/              # React + Vite frontend
+├── client/                   # React + Vite frontend
 │   ├── src/
-│   │   ├── components/  # issues, docs, commands, search, releases
-│   │   ├── pages/       # Dashboard, Documents, Issues, Commands, Releases
-│   │   └── lib/         # api.ts, ai.ts, streaming.ts
-│   └── e2e/             # Playwright end-to-end tests
-├── server/              # Express + TypeScript backend
-│   ├── routes/          # REST endpoints
-│   ├── services/        # ai, ollama, rag, parser, embedder, backup, exporter
-│   ├── lib/             # errors, utilities
-│   └── db/              # schema.sql, seed, migrations
+│   │   ├── components/       # issues, docs, commands, search, releases, notifications
+│   │   ├── pages/            # Dashboard, Documents, Issues, Commands, Releases,
+│   │   │                     # Runbooks, Settings, NotificationLog
+│   │   └── lib/              # api.ts, ai.ts, streaming.ts
+│   └── e2e/                  # Playwright end-to-end tests
+├── server/                   # Express + TypeScript backend
+│   ├── routes/               # REST endpoints
+│   ├── services/             # ai, ollama, rag, parser, embedder, notifier,
+│   │                         # ldap, crypto, backup, exporter, integrations
+│   ├── scripts/              # apprise_client.py, digest_scheduler.py, markitdown_bridge.py
+│   ├── lib/                  # env, errors, utilities
+│   └── db/                   # schema.sql, seed, migrations
+├── integrations/
+│   └── claude-code/          # SessionStart/End hooks + /devbrain skill
 ├── shared/
-│   └── types.ts         # Shared TypeScript types
+│   └── types.ts              # Shared TypeScript types
 ├── docker-compose.yml
-├── devbrain.ps1         # Windows start script
-└── devbrain.sh          # macOS/Linux start script
+├── devbrain.ps1              # Windows start script
+└── devbrain.sh               # macOS/Linux start script
 ```
 
 ## Optional: Claude API
@@ -179,6 +223,30 @@ USE_CLAUDE=true
 ```
 
 The "Enhance with Claude" button in the UI is the only place the Claude API is ever called automatically — all other AI calls always go through Ollama.
+
+## Optional: Apprise Notifications
+
+To enable Telegram (or any other channel) notifications:
+
+```env
+TELEGRAM_BOT_TOKEN=your-bot-token
+TELEGRAM_CHAT_ID=your-chat-id
+```
+
+Or configure channels via Settings > Notification Hub. See `server/scripts/requirements.txt` for Python dependencies (`pip install apprise apscheduler`).
+
+## Claude Code Integration
+
+The `integrations/claude-code/` directory contains hooks that automatically scaffold `TASKS.md` and `SESSION.md` in every Claude Code project and post session-complete notifications to DevBrain.
+
+**Install (Windows):** `powershell -ExecutionPolicy Bypass -File integrations\claude-code\install.ps1`  
+**Install (macOS/Linux):** `cd integrations/claude-code && ./install.sh`
+
+See [integrations/claude-code/README.md](integrations/claude-code/README.md) for full details.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
 ## License
 
