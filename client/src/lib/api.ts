@@ -343,6 +343,68 @@ export const claudeProjectsApi = {
   },
 }
 
+export const antigravityProjectsApi = {
+  scan: () =>
+    request<{ root: string; count: number; candidates: ScanCandidate[] }>('/antigravity-projects/scan', { method: 'POST' }),
+
+  getTasks: (id: string) =>
+    request<TaskTreeData>(`/antigravity-projects/${id}/tasks`),
+
+  getSessions: (
+    id:      string,
+    params?: { status?: SessionStatus; q?: string; page?: number; limit?: number },
+  ) => {
+    const qs = new URLSearchParams()
+    if (params?.status) qs.set('status', params.status)
+    if (params?.q)      qs.set('q',      params.q)
+    if (params?.page)   qs.set('page',   String(params.page))
+    if (params?.limit)  qs.set('limit',  String(params.limit))
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return request<SessionsPage>(`/antigravity-projects/${id}/sessions${suffix}`)
+  },
+
+  getSession: (id: string, sessionId: string) =>
+    request<SessionDetailData>(`/antigravity-projects/${id}/sessions/${sessionId}`),
+
+  watchTasks: (
+    id:       string,
+    onUpdate: (tree: TaskTreeData) => void,
+  ): (() => void) => {
+    const ctrl  = new AbortController()
+
+    ;(async () => {
+      try {
+        const res = await fetch(`${BASE}/antigravity-projects/${id}/tasks/watch`, {
+          credentials: 'include',
+          signal:      ctrl.signal,
+        })
+        if (!res.ok || !res.body) return
+
+        const reader  = res.body.getReader()
+        const decoder = new TextDecoder()
+        let   buf     = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += decoder.decode(value, { stream: true })
+          const lines = buf.split('\n')
+          buf = lines.pop() ?? ''
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue
+            try { onUpdate(JSON.parse(line.slice(6)) as TaskTreeData) } catch { /* skip */ }
+          }
+        }
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') console.error('watchTasks error', err)
+      }
+    })()
+
+    return () => ctrl.abort()
+  },
+}
+
+
 // ── Documents ─────────────────────────────────────────────────────────────
 
 export type EmbeddingStatus = 'pending' | 'processing' | 'done' | 'failed'
@@ -1140,6 +1202,15 @@ export const settingsApi = {
 
   saveClaudeSettings: (scan_root: string | null) =>
     request<{ scan_root: string | null }>('/settings/claude', {
+      method: 'PUT',
+      body: JSON.stringify({ scan_root }),
+    }),
+
+  getAntigravitySettings: () =>
+    request<{ scan_root: string | null }>('/settings/antigravity'),
+
+  saveAntigravitySettings: (scan_root: string | null) =>
+    request<{ scan_root: string | null }>('/settings/antigravity', {
       method: 'PUT',
       body: JSON.stringify({ scan_root }),
     }),

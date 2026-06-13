@@ -157,6 +157,44 @@ router.put('/claude', requireRole('admin'), async (req, res) => {
   }
 })
 
+// ── GET /api/settings/antigravity ──────────────────────────────────────────
+
+router.get('/antigravity', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT value FROM app_settings WHERE key = 'antigravity_scan_root'`
+    )
+    const value = rows[0]?.value as { scan_root: string | null } | undefined
+    res.json({ data: { scan_root: value?.scan_root ?? null } })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── PUT /api/settings/antigravity ──────────────────────────────────────────
+
+const AntigravitySettingsBody = z.object({
+  scan_root: z.string().min(1).nullable(),
+})
+
+router.put('/antigravity', requireRole('admin'), async (req, res) => {
+  const parsed = AntigravitySettingsBody.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
+  }
+  try {
+    await pool.query(
+      `INSERT INTO app_settings (key, value)
+       VALUES ('antigravity_scan_root', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [JSON.stringify({ scan_root: parsed.data.scan_root })]
+    )
+    res.json({ data: { scan_root: parsed.data.scan_root } })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
 // GET /api/settings/backup — full JSON export (excludes raw document content + chunk embeddings)
 router.get('/backup', async (_req, res) => {
   try {

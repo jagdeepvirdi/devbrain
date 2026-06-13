@@ -130,6 +130,8 @@ import notificationsRouter from './routes/notifications.js'
 app.use('/api/notifications', notificationsRouter)
 import claudeProjectsRouter from './routes/claude-projects.js'
 app.use('/api/claude-projects', claudeProjectsRouter)
+import antigravityProjectsRouter from './routes/antigravity-projects.js'
+app.use('/api/antigravity-projects', antigravityProjectsRouter)
 import exportRouter from './routes/export.js'
 app.use('/api/export', exportRouter)
 import templatesRouter from './routes/templates.js'

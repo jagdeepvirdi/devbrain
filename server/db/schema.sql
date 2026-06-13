@@ -350,6 +350,10 @@ VALUES ('claude_scan_root', '{"scan_root": null}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
 INSERT INTO app_settings (key, value)
+VALUES ('antigravity_scan_root', '{"scan_root": null}'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO app_settings (key, value)
 VALUES ('backup_settings', '{"path": null, "schedule": "off", "last_backup_at": null}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 

@@ -178,7 +178,7 @@ export function ProjectsPage() {
                         color: '#818CF8', background: 'rgba(99,102,241,.12)', border: '1px solid rgba(99,102,241,.3)',
                         letterSpacing: '0.03em',
                       }}>
-                        CLAUDE
+                        AI SYNC
                       </span>
                     )}
                     <span style={{
@@ -279,13 +279,13 @@ export function ProjectsPage() {
                     </>
                   )}
                   {!isLinked && (
-                    <span title="Link a folder in Settings → Claude Integration to enable task and session sync" style={{ fontSize: '11px', color: 'var(--fg-4)', display: 'flex', alignItems: 'center', gap: 4, cursor: 'default' }}>
+                    <span title="Link a folder in Settings → Claude/Antigravity Integration to enable task and session sync" style={{ fontSize: '11px', color: 'var(--fg-4)', display: 'flex', alignItems: 'center', gap: 4, cursor: 'default' }}>
                       ⊘ No folder linked
                     </span>
                   )}
                   <button
                     onClick={() => openLink(p)}
-                    title={isLinked ? `Linked: ${p.fs_path}` : 'Link to Claude project folder'}
+                    title={isLinked ? `Linked: ${p.fs_path}` : 'Link to project folder'}
                     style={{ height: 24, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: isLinked ? '#818CF8' : 'var(--fg-3)', fontSize: '11.5px' }}
                   >
                     {isLinked ? '⊙ Linked' : '⊕ Link'}
@@ -371,9 +371,9 @@ export function ProjectsPage() {
       {linking && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(5,5,10,.65)', backdropFilter: 'blur(4px)', zIndex: 300, display: 'grid', placeItems: 'center' }}>
           <div style={{ background: 'var(--bg-elev)', border: '1px solid var(--line-3)', borderRadius: '10px', padding: '24px', maxWidth: '440px', width: '100%', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: 'var(--fg)' }}>Link to Claude project folder</h3>
+            <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: 'var(--fg)' }}>Link project folder</h3>
             <p style={{ margin: 0, fontSize: '12px', color: 'var(--fg-3)', lineHeight: 1.6 }}>
-              Enter the absolute path to the project directory that contains a <code style={{ background: 'var(--bg-elev-2)', padding: '1px 4px', borderRadius: 3 }}>TASKS.md</code> or <code style={{ background: 'var(--bg-elev-2)', padding: '1px 4px', borderRadius: 3 }}>CLAUDE.md</code> file. DevBrain will watch for changes and sync tasks live.
+              Enter the absolute path to the project directory that contains a <code style={{ background: 'var(--bg-elev-2)', padding: '1px 4px', borderRadius: 3 }}>TASKS.md</code>, <code style={{ background: 'var(--bg-elev-2)', padding: '1px 4px', borderRadius: 3 }}>CLAUDE.md</code> or <code style={{ background: 'var(--bg-elev-2)', padding: '1px 4px', borderRadius: 3 }}>ANTIGRAVITY.md</code> file. DevBrain will watch for changes and sync tasks live.
             </p>
             <input
               type="text"
