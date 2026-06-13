@@ -98,12 +98,16 @@ jobs:
         run: npx tsx db/setup.ts
         working-directory: server
 
+      - name: Build server
+        run: npm run build
+        working-directory: server
+
       - name: Start API server
         run: npm start &
         working-directory: server
 
       - name: Wait for API server
-        run: npx --yes wait-on http://localhost:3001/api/health --timeout 60000
+        run: npx --yes wait-on tcp:3001 --timeout 60000
 
       - uses: actions/setup-node@v4
         with:
