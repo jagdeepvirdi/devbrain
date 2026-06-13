@@ -78,11 +78,9 @@ function UserManagement() {
       setInvites(prev => [inv, ...prev])
       setNewInvite({ email: '', role: 'member' })
       setShowInvite(false)
-      
-      // In a real app, email is sent. Here we show the token.
-      const inviteUrl = `${window.location.origin}/register?token=${inv.token}`
-      navigator.clipboard.writeText(inviteUrl)
       toast(`Invite created for ${inv.email}. URL copied to clipboard.`, 'success')
+      const inviteUrl = `${window.location.origin}/register?token=${inv.token}`
+      navigator.clipboard.writeText(inviteUrl).catch(() => {})
     } catch (err) {
       toast((err as Error).message, 'error')
     } finally {

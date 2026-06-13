@@ -76,6 +76,14 @@ export function GlobalSearch({ onNavigate, open, onClose }: Props) {
     }
   }, [open, currProject?.id])
 
+  // Document-level Escape so closing works regardless of which element has focus
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [open, onClose])
+
   const doSearch = useCallback(async (q: string, pid: string | null, lim: number) => {
     setLoading(true)
     try {
