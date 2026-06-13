@@ -199,7 +199,7 @@ router.post('/invite', async (req, res) => {
          expires_at = EXCLUDED.expires_at,
          created_at = now()
        RETURNING id, email, role, expires_at`,
-      [parsed.data.email, parsed.data.role, hash, expires, req.user!.id]
+      [parsed.data.email, parsed.data.role, hash, expires, req.user!.id === 'dev' ? null : req.user!.id]
     )
     
     // In a real app, we'd send an email here.
