@@ -102,6 +102,9 @@ jobs:
         run: npm start &
         working-directory: server
 
+      - name: Wait for API server
+        run: npx --yes wait-on http://localhost:3001/api/health --timeout 60000
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
