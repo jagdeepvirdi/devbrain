@@ -105,7 +105,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     const u = userRows[0]
     if (!u.is_active) { res.status(403).json({ error: 'Account is deactivated' }); return }
 
-    const ok = await bcrypt.compare(password, u.password_hash)
+    const ok = await bcrypt.compare(password, u.password_hash!)
     if (!ok) { res.status(401).json({ error: 'Invalid credentials' }); return }
     const token = signToken(u.id, u.username, u.role)
     res.cookie('devbrain_token', token, COOKIE_OPTS)

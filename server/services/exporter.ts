@@ -1,7 +1,4 @@
-import { createRequire } from 'module'
-const require = createRequire(import.meta.url)
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const archiver = require('archiver') as typeof import('archiver')
+import type { Archiver } from 'archiver'
 import matter from 'gray-matter'
 import { pool } from '../db/pool.js'
 
@@ -138,7 +135,7 @@ interface DbRunbook  { id: string; title: string; steps: unknown; tags: string[]
 
 // ── Core export function ──────────────────────────────────────────────────
 
-export async function addProjectToArchive(archive: archiver.Archiver, project: ExportProject): Promise<void> {
+export async function addProjectToArchive(archive: Archiver, project: ExportProject): Promise<void> {
   const p = project.short_name
 
   const [docs, issues, commands, releases, runbooks] = await Promise.all([
@@ -195,7 +192,7 @@ export async function addProjectToArchive(archive: archiver.Archiver, project: E
 }
 
 export async function buildZipToStream(
-  archive: archiver.Archiver,
+  archive: Archiver,
   projectIds: string[] | 'all',
 ): Promise<void> {
   let projects: ExportProject[]

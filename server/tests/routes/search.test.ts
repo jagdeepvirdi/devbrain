@@ -79,7 +79,7 @@ describe('Search and Filter Route Handlers', () => {
     }
     const res = { json: vi.fn(), status: vi.fn().mockReturnThis() }
 
-    const routeStack = router.stack.find(s => s.route?.path === '/filters' && s.route.methods.post) as any
+    const routeStack = router.stack.find(s => s.route?.path === '/filters' && (s.route as any)?.methods.post) as any
     const handler = routeStack.route.stack[0].handle
     await handler(req as any, res as any, () => {})
 

@@ -7,7 +7,7 @@ vi.mock('../../db/pool.js', () => ({
 }))
 
 vi.mock('../../middleware/auth.js', () => ({
-  requireRole: () => (req: any, res: any, next: any) => next(),
+  requireRole: () => (_req: any, _res: any, next: any) => next(),
 }))
 
 import router from '../../routes/templates.js'
@@ -31,8 +31,8 @@ describe('Templates Route Handlers', () => {
     const req = { query: { type: 'issue', projectId: 'p1' } }
     const res = { json: vi.fn(), status: vi.fn().mockReturnThis() }
 
-    const handler = router.stack.find(s => s.route?.path === '/' && s.route?.methods.get)?.route.stack[0].handle
-    await handler(req as any, res as any, () => {})
+    const handler = router.stack.find(s => s.route?.path === '/' && (s.route as any)?.methods.get)?.route?.stack[0]?.handle
+    await handler!(req as any, res as any, () => {})
 
     expect(mockQuery).toHaveBeenCalled()
     const sql = mockQuery.mock.calls[0][0]
@@ -63,7 +63,7 @@ describe('Templates Route Handlers', () => {
     }
     const res = { json: vi.fn(), status: vi.fn().mockReturnThis() }
 
-    const routeStack = router.stack.find(s => s.route?.path === '/' && s.route?.methods.post) as any
+    const routeStack = router.stack.find(s => s.route?.path === '/' && (s.route as any)?.methods.post) as any
     const handler = routeStack.route.stack[routeStack.route.stack.length - 1].handle
     await handler(req as any, res as any, () => {})
 
@@ -87,7 +87,7 @@ describe('Templates Route Handlers', () => {
     }
     const res = { json: vi.fn(), status: vi.fn().mockReturnThis() }
 
-    const routeStack = router.stack.find(s => s.route?.path === '/:id' && s.route?.methods.put) as any
+    const routeStack = router.stack.find(s => s.route?.path === '/:id' && (s.route as any)?.methods.put) as any
     const handler = routeStack.route.stack[routeStack.route.stack.length - 1].handle
     await handler(req as any, res as any, () => {})
 
@@ -123,7 +123,7 @@ describe('Templates Route Handlers', () => {
     const req = { params: { id: 't3' } }
     const res = { json: vi.fn(), status: vi.fn().mockReturnThis() }
 
-    const routeStack = router.stack.find(s => s.route?.path === '/:id' && s.route?.methods.delete) as any
+    const routeStack = router.stack.find(s => s.route?.path === '/:id' && (s.route as any)?.methods.delete) as any
     const handler = routeStack.route.stack[routeStack.route.stack.length - 1].handle
     await handler(req as any, res as any, () => {})
 

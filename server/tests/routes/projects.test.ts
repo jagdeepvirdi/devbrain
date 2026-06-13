@@ -7,7 +7,7 @@ vi.mock('../../db/pool.js', () => ({
 }))
 
 vi.mock('../../middleware/auth.js', () => ({
-  requireRole: () => (req: any, res: any, next: any) => next(),
+  requireRole: () => (_req: any, _res: any, next: any) => next(),
 }))
 
 import router from '../../routes/projects.js'
@@ -26,8 +26,8 @@ describe('Project Visibility Logic', () => {
     const req = { user: { role: 'admin', id: 'a1' } }
     const res = { json: vi.fn(), status: vi.fn().mockReturnThis() }
 
-    const handler = router.stack.find(s => s.route?.path === '/' && s.route?.methods.get)?.route.stack[0].handle
-    await handler(req as any, res as any, () => {})
+    const handler = router.stack.find(s => s.route?.path === '/' && (s.route as any)?.methods.get)?.route?.stack[0]?.handle
+    await handler!(req as any, res as any, () => {})
 
     const sql = mockQuery.mock.calls[0][0]
     expect(sql).not.toContain('JOIN project_members')
@@ -41,8 +41,8 @@ describe('Project Visibility Logic', () => {
     const req = { user: { role: 'member', id: 'u1' } }
     const res = { json: vi.fn(), status: vi.fn().mockReturnThis() }
 
-    const handler = router.stack.find(s => s.route?.path === '/' && s.route?.methods.get)?.route.stack[0].handle
-    await handler(req as any, res as any, () => {})
+    const handler = router.stack.find(s => s.route?.path === '/' && (s.route as any)?.methods.get)?.route?.stack[0]?.handle
+    await handler!(req as any, res as any, () => {})
 
     const sql = mockQuery.mock.calls[0][0]
     expect(sql).toContain('JOIN project_members pm ON pm.project_id = p.id')
@@ -56,8 +56,8 @@ describe('Project Visibility Logic', () => {
     const req = { params: { id: 'p2' }, user: { role: 'member', id: 'u1' } }
     const res = { json: vi.fn(), status: vi.fn().mockReturnThis() }
 
-    const handler = router.stack.find(s => s.route?.path === '/:id' && s.route?.methods.get)?.route.stack[0].handle
-    await handler(req as any, res as any, () => {})
+    const handler = router.stack.find(s => s.route?.path === '/:id' && (s.route as any)?.methods.get)?.route?.stack[0]?.handle
+    await handler!(req as any, res as any, () => {})
 
     expect(res.status).toHaveBeenCalledWith(404)
     expect(res.json).toHaveBeenCalledWith({ error: 'Project not found' })

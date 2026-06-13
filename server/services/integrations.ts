@@ -1,5 +1,4 @@
 import { pool } from '../db/pool.js'
-import { decrypt } from './crypto.js'
 
 export async function syncGitHub(integration: any, token: string | null) {
   const [owner, repo] = integration.external_project_id.split('/')

@@ -17,7 +17,7 @@ vi.mock('../../services/crypto.js', () => ({
 }))
 
 vi.mock('../../middleware/auth.js', () => ({
-  requireRole: () => (req: any, res: any, next: any) => next(),
+  requireRole: () => (_req: any, _res: any, next: any) => next(),
 }))
 
 // Import router (we'll call its handlers directly for unit testing logic)
@@ -39,7 +39,7 @@ describe('Git Route Logic', () => {
       rows: [{ repo_url: 'https://github.com/org/repo', github_pat_enc: null, fs_path: '/local/path' }],
     } as any)
 
-    mockExec.mockImplementation(((cmd: string, opts: any, cb: any) => {
+    mockExec.mockImplementation(((_cmd: string, _opts: any, cb: any) => {
       cb(null, { stdout: 'sha1|message1|author1|2026-01-01T00:00:00Z\nsha2|message2|author2|2026-01-02T00:00:00Z' })
     }) as any)
 
@@ -47,8 +47,8 @@ describe('Git Route Logic', () => {
     const res = { json: vi.fn(), status: vi.fn().mockReturnThis() }
 
     // Find the handler
-    const handler = router.stack.find(s => s.route?.path === '/:projectId/commits' && s.route?.methods.get)?.route.stack[0].handle
-    await handler(req as any, res as any, () => {})
+    const handler = router.stack.find(s => s.route?.path === '/:projectId/commits' && (s.route as any)?.methods.get)?.route?.stack[0]?.handle
+    await handler!(req as any, res as any, () => {})
 
     expect(mockExec).toHaveBeenCalledWith(
       expect.stringContaining('git log'),
@@ -68,7 +68,7 @@ describe('Git Route Logic', () => {
       rows: [{ repo_url: 'https://github.com/org/repo', github_pat_enc: 'enc:token', fs_path: '/bad/path' }],
     } as any)
 
-    mockExec.mockImplementation(((cmd: string, opts: any, cb: any) => {
+    mockExec.mockImplementation(((_cmd: string, _opts: any, cb: any) => {
       cb(new Error('Git not found'), { stdout: '' })
     }) as any)
 
@@ -82,8 +82,8 @@ describe('Git Route Logic', () => {
     const req = { params: { projectId: 'p1' }, query: {} }
     const res = { json: vi.fn(), status: vi.fn().mockReturnThis() }
 
-    const handler = router.stack.find(s => s.route?.path === '/:projectId/commits' && s.route?.methods.get)?.route.stack[0].handle
-    await handler(req as any, res as any, () => {})
+    const handler = router.stack.find(s => s.route?.path === '/:projectId/commits' && (s.route as any)?.methods.get)?.route?.stack[0]?.handle
+    await handler!(req as any, res as any, () => {})
 
     expect(fetch).toHaveBeenCalledWith(expect.stringContaining('api.github.com'), expect.any(Object))
     expect(res.json).toHaveBeenCalledWith({

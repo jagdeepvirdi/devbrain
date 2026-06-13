@@ -8,7 +8,7 @@ vi.mock('../../db/pool.js', () => ({
 }))
 
 vi.mock('../../middleware/auth.js', () => ({
-  requireRole: () => (req: any, res: any, next: any) => next(),
+  requireRole: () => (_req: any, _res: any, next: any) => next(),
 }))
 
 import router from '../../routes/audit.js'
@@ -36,8 +36,8 @@ describe('Audit Route Logic', () => {
     }
 
     // Find the actual handler (skipping middleware)
-    const route = router.stack.find(s => s.route?.path === '/export' && s.route?.methods.get)
-    const handler = route.route.stack[route.route.stack.length - 1].handle
+    const route = router.stack.find(s => s.route?.path === '/export' && (s.route as any)?.methods.get)
+    const handler = route!.route!.stack[route!.route!.stack.length - 1].handle
     
     await handler(req as any, res as any, () => {})
 
@@ -56,8 +56,8 @@ describe('Audit Route Logic', () => {
     const req = { query: { entityType: 'document', limit: '10', offset: '0' } }
     const res = { json: vi.fn(), status: vi.fn().mockReturnThis() }
 
-    const route = router.stack.find(s => s.route?.path === '/' && s.route?.methods.get)
-    const handler = route.route.stack[route.route.stack.length - 1].handle
+    const route = router.stack.find(s => s.route?.path === '/' && (s.route as any)?.methods.get)
+    const handler = route!.route!.stack[route!.route!.stack.length - 1].handle
     
     await handler(req as any, res as any, () => {})
 

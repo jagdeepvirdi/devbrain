@@ -48,8 +48,8 @@ describe('User Registration with Tokens', () => {
       cookie: vi.fn()
     }
 
-    const handler = router.stack.find(s => s.route?.path === '/register' && s.route?.methods.post)?.route.stack[0].handle
-    await handler(req as any, res as any, () => {})
+    const handler = router.stack.find(s => s.route?.path === '/register' && (s.route as any)?.methods.post)?.route?.stack[0]?.handle
+    await handler!(req as any, res as any, () => {})
 
     expect(mockQuery).toHaveBeenCalledWith(
       expect.stringContaining('FROM user_invites'),
@@ -69,8 +69,8 @@ describe('User Registration with Tokens', () => {
     const req = { body: { username: 'newuser', password: 'password123', token: 'bad-token' } }
     const res = { json: vi.fn(), status: vi.fn().mockReturnThis() }
 
-    const handler = router.stack.find(s => s.route?.path === '/register' && s.route?.methods.post)?.route.stack[0].handle
-    await handler(req as any, res as any, () => {})
+    const handler = router.stack.find(s => s.route?.path === '/register' && (s.route as any)?.methods.post)?.route?.stack[0]?.handle
+    await handler!(req as any, res as any, () => {})
 
     expect(res.status).toHaveBeenCalledWith(401)
     expect(res.json).toHaveBeenCalledWith({ error: 'Invalid or expired invite token' })

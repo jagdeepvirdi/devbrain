@@ -17,7 +17,6 @@ vi.mock('ldapjs', () => ({
 }))
 
 import { ldapAuth, type LdapConfig } from '../../services/ldap.js'
-import ldap from 'ldapjs'
 
 describe('LDAP Service', () => {
   const config: LdapConfig = {
@@ -39,10 +38,10 @@ describe('LDAP Service', () => {
 
   it('should authenticate correctly on successful bind and search', async () => {
     // 1. Admin bind success
-    mockBind.mockImplementationOnce((dn, pwd, cb) => cb(null))
+    mockBind.mockImplementationOnce((_dn: any, _pwd: any, cb: any) => cb(null))
     
     // 2. Search success
-    mockSearch.mockImplementationOnce((base, opts, cb) => {
+    mockSearch.mockImplementationOnce((_base: any, _opts: any, cb: any) => {
       const res = {
         on: vi.fn((event, handler) => {
           if (event === 'searchEntry') {
@@ -55,7 +54,7 @@ describe('LDAP Service', () => {
     })
 
     // 3. User bind success
-    mockBind.mockImplementationOnce((dn, pwd, cb) => cb(null))
+    mockBind.mockImplementationOnce((_dn: any, _pwd: any, cb: any) => cb(null))
 
     const result = await ldapAuth('testuser', 'secret', config)
 
@@ -68,7 +67,7 @@ describe('LDAP Service', () => {
   })
 
   it('should return null if admin bind fails', async () => {
-    mockBind.mockImplementationOnce((dn, pwd, cb) => cb(new Error('Invalid admin credentials')))
+    mockBind.mockImplementationOnce((_dn: any, _pwd: any, cb: any) => cb(new Error('Invalid admin credentials')))
     
     const result = await ldapAuth('user', 'pass', config)
     expect(result).toBeNull()
@@ -76,8 +75,8 @@ describe('LDAP Service', () => {
   })
 
   it('should return null if user search finds no entries', async () => {
-    mockBind.mockImplementationOnce((dn, pwd, cb) => cb(null))
-    mockSearch.mockImplementationOnce((base, opts, cb) => {
+    mockBind.mockImplementationOnce((_dn: any, _pwd: any, cb: any) => cb(null))
+    mockSearch.mockImplementationOnce((_base: any, _opts: any, cb: any) => {
       const res = {
         on: vi.fn((event, handler) => {
           if (event === 'end') handler()
