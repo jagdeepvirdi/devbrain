@@ -327,3 +327,41 @@ These are integrations in other personal projects that push notifications to Dev
 - [x] Settings > Templates page: list all templates with type badge and project scope; create / edit / delete custom templates; built-ins are read-only but show a "Duplicate" action
 - [x] Template editor: name, type selector, project scope dropdown, body — step-builder UI for runbooks, freeform markdown textarea for issues/docs
 
+---
+
+## Phase 29 — Antigravity / Gemini CLI Integration — COMPLETED
+
+> Mirrors the Claude Code integration pattern for the Gemini CLI / Antigravity AI assistant.
+> Same TASKS.md + SESSION.md session-tracking model, with one addition: automatic archival of stale completed tasks.
+
+### Hooks (`integrations/antigravity/`)
+- [x] `src/hooks/session-start.ps1` — Windows native PowerShell hook: scaffold `TASKS.md`, archive `[x]` tasks stamped `<!-- done: YYYY-MM-DD -->` older than 7 days into `TASKS_ARCHIVE.md`, create timestamped session folder + `SESSION.md`, print per-phase task progress + last session summary to stdout for model context injection
+- [x] `src/hooks/session-start.sh` — macOS/Linux/WSL bash equivalent
+- [x] `src/hooks/session-end.ps1` — write completion timestamp, append row to `sessions/index.md`
+- [x] `src/hooks/session-end.sh` — bash equivalent
+- [x] `src/skills/devbrain/SKILL.md` — `/devbrain` slash command: triggers mid-session task update + session summary
+- [x] `src/templates/TASKS.md` + `src/templates/SESSION.md` — scaffold templates with YAML frontmatter
+- [x] `src/config/hooks.reference.json` — reference hooks.json block for manual installation
+- [x] `install.ps1` — Windows installer: copies hooks to `~\.gemini\config\scripts\`, registers in `~\.gemini\config\hooks.json`, copies skill
+- [x] `install.sh` — macOS/Linux/WSL installer: copies hooks, makes executable, merges into `~/.gemini/config/hooks.json`, backs up existing config; `--uninstall` flag for clean removal
+
+### Server-side (`server/`)
+- [x] `server/services/antigravity-discovery.ts` — walks a configured `scan_root`, detects Antigravity-tracked projects by `TASKS.md` presence, parses frontmatter + per-phase task progress + session history
+- [x] `server/routes/antigravity-projects.ts` — REST + SSE endpoints: `POST /scan`, `GET /:id/tasks`, `GET /:id/sessions`, `GET /:id/sessions/:sid`, `GET /:id/tasks/watch` (SSE live updates)
+- [x] `server/routes/settings.ts` — `GET/PUT /api/settings/antigravity` — stores `antigravity_scan_root` in `app_settings`
+- [x] `server/index.ts` — register `antigravityProjectsRouter` at `/api/antigravity-projects`
+- [x] `server/db/schema.sql` — seed `antigravity_scan_root` default row into `app_settings`
+
+### Client-side (`client/`)
+- [x] `client/src/lib/api.ts` — add `antigravityProjectsApi` (scan, getTasks, getSessions, getSession, watchTasks SSE) + `settingsApi.getAntigravitySettings` / `saveAntigravitySettings`
+- [x] `client/src/pages/Settings.tsx` — add `AntigravityIntegrationSection`: scan root config, scan trigger, candidate list with link actions
+- [x] `client/src/pages/Projects.tsx` — rename project badge from "CLAUDE" → "AI SYNC"; update link modal to accept `ANTIGRAVITY.md` alongside `TASKS.md` / `CLAUDE.md` as marker file; update tooltip copy to be integration-agnostic
+
+### Documentation
+- [x] `integrations/antigravity/README.md` — full install guide (Windows / macOS / Linux / WSL / Git Bash options), file format specs, DevBrain viewer setup, how hooks work
+- [x] `CLAUDE.md` — updated project structure tree + Antigravity Integration section
+- [x] `GEMINI.md` — added Antigravity Integration section with session-end responsibilities
+- [x] `README.md` — expanded "Claude Code Integration" into "AI Assistant Integrations" section; added Antigravity subsection; added Documentation section linking Feature Guide, Changelog, Startup Guide, Contributing
+- [x] `CHANGELOG.md` — added `[Unreleased]` section documenting all Antigravity changes
+- [x] `docs/FEATURE_GUIDE.md` — new 747-line feature guide covering all 22 feature areas with step-by-step test instructions for new users
+
