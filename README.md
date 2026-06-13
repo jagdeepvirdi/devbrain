@@ -260,9 +260,12 @@ In DevBrain, configure the scan root under **Settings → Antigravity Integratio
 
 See [integrations/antigravity/README.md](integrations/antigravity/README.md) for full details.
 
-## Changelog
+## Documentation
 
-See [CHANGELOG.md](CHANGELOG.md) for the full release history.
+- [Feature Guide](docs/FEATURE_GUIDE.md) — complete walkthrough of every feature with step-by-step test instructions
+- [Changelog](CHANGELOG.md) — full release history
+- [Startup Guide](STARTUP_GUIDE.md) — how to run DevBrain from scratch or after a reboot
+- [Contributing](CONTRIBUTING.md) — local setup, branching model, and code standards
 
 ## License
 
