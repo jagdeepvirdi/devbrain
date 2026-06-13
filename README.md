@@ -205,7 +205,8 @@ devbrain/
 │   ├── lib/                  # env, errors, utilities
 │   └── db/                   # schema.sql, seed, migrations
 ├── integrations/
-│   └── claude-code/          # SessionStart/End hooks + /devbrain skill
+│   ├── claude-code/          # SessionStart/End hooks + /devbrain skill for Claude Code
+│   └── antigravity/          # SessionStart/End hooks + /devbrain skill for Antigravity/Gemini CLI
 ├── shared/
 │   └── types.ts              # Shared TypeScript types
 ├── docker-compose.yml
@@ -235,14 +236,29 @@ TELEGRAM_CHAT_ID=your-chat-id
 
 Or configure channels via Settings > Notification Hub. See `server/scripts/requirements.txt` for Python dependencies (`pip install apprise apscheduler`).
 
-## Claude Code Integration
+## AI Assistant Integrations
 
-The `integrations/claude-code/` directory contains hooks that automatically scaffold `TASKS.md` and `SESSION.md` in every Claude Code project and post session-complete notifications to DevBrain.
+DevBrain ships hooks for two AI CLI tools. Both follow the same pattern: `TASKS.md` for phase-based task tracking, `SESSION.md` per session, and a `/devbrain` skill that lets the model update tasks and write session summaries on demand.
+
+### Claude Code
+
+The `integrations/claude-code/` directory hooks into Claude Code's SessionStart/SessionEnd lifecycle.
 
 **Install (Windows):** `powershell -ExecutionPolicy Bypass -File integrations\claude-code\install.ps1`  
 **Install (macOS/Linux):** `cd integrations/claude-code && ./install.sh`
 
 See [integrations/claude-code/README.md](integrations/claude-code/README.md) for full details.
+
+### Antigravity / Gemini CLI
+
+The `integrations/antigravity/` directory hooks into the Gemini CLI / Antigravity SessionStart/SessionEnd lifecycle. Adds automatic archival of completed tasks older than 7 days to `TASKS_ARCHIVE.md`.
+
+**Install (Windows):** `powershell -ExecutionPolicy Bypass -File integrations\antigravity\install.ps1`  
+**Install (macOS/Linux):** `cd integrations/antigravity && ./install.sh`
+
+In DevBrain, configure the scan root under **Settings → Antigravity Integration** to surface all your Antigravity-tracked projects in the Projects view with live task and session sync.
+
+See [integrations/antigravity/README.md](integrations/antigravity/README.md) for full details.
 
 ## Changelog
 

@@ -47,3 +47,20 @@
 - **Task Tracking**: Maintain `TASKS.md` as the primary source of truth for phase-based progress.
 - **Session Logging**: Use the `reviews/` directory for significant architectural reviews or session summaries.
 - **Commit Style**: Use descriptive, atomic commits. Gather context from `git status` and `git diff` before proposing commit messages.
+
+## Antigravity Integration
+
+This project uses the **DevBrain × Antigravity** integration (`integrations/antigravity/`), which hooks into Gemini CLI / Antigravity's SessionStart and SessionEnd lifecycle events.
+
+**Install (Windows):** `powershell -ExecutionPolicy Bypass -File integrations\antigravity\install.ps1`  
+**Install (macOS/Linux/WSL):** `cd integrations/antigravity && ./install.sh`
+
+### What the Hooks Do
+- **SessionStart** — scaffolds `TASKS.md` if absent, archives `[x]` tasks stamped `<!-- done: YYYY-MM-DD -->` older than 7 days into `TASKS_ARCHIVE.md`, creates a timestamped session folder under `sessions/`, and prints per-phase task progress + the last session summary to stdout so this model has full context at session open.
+- **SessionEnd** — writes the completion timestamp and appends a row to `sessions/index.md`.
+
+### Responsibilities at Session End
+1. Update `TASKS.md` checkboxes: `[x]` done · `[~]` in-progress · `[!]` blocked. Stamp completed items with `<!-- done: YYYY-MM-DD -->` so the archive job can clean them up automatically.
+2. Fill in the active `SESSION.md`: Goals, Work Done, Decisions, Open Items — bullets only, max 5 each.
+
+Trigger manually at any point: `/devbrain` — or say "update tasks", "write session summary", or "mark X as done".

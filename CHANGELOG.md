@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Antigravity / Gemini CLI integration** — `integrations/antigravity/` mirrors the Claude Code integration pattern for Gemini CLI / Antigravity sessions. SessionStart/End hooks (PS1 + SH) scaffold `TASKS.md` and `SESSION.md`, archive completed tasks older than 7 days to `TASKS_ARCHIVE.md`, and inject per-phase task progress + last-session summary into the model's context window at session open. A `/devbrain` skill allows on-demand task updates and session summaries.
+- **Antigravity project discovery** — `server/services/antigravity-discovery.ts` scans a configured root directory for projects tracked by `TASKS.md`; `server/routes/antigravity-projects.ts` exposes scan, task tree, session list, session detail, and live task-watch (SSE) endpoints.
+- **Antigravity settings** — `GET /api/settings/antigravity` and `PUT /api/settings/antigravity` store the `antigravity_scan_root` path in `app_settings`. Configurable under **Settings → Antigravity Integration**.
+- **Projects page** — "Link folder" modal now recognises `ANTIGRAVITY.md` alongside `TASKS.md` and `CLAUDE.md` as a valid marker file. Project badge updated from "CLAUDE" to **"AI SYNC"** to reflect both integrations.
+
+---
+
 ## [1.0.0] — 2026-06-13
 
 First stable release. DevBrain ships as a complete local-first developer knowledge base
