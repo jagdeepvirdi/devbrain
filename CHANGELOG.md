@@ -6,7 +6,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
+## [1.1.0] — 2026-06-13
 
 ### Added
 
@@ -14,6 +14,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Antigravity project discovery** — `server/services/antigravity-discovery.ts` scans a configured root directory for projects tracked by `TASKS.md`; `server/routes/antigravity-projects.ts` exposes scan, task tree, session list, session detail, and live task-watch (SSE) endpoints.
 - **Antigravity settings** — `GET /api/settings/antigravity` and `PUT /api/settings/antigravity` store the `antigravity_scan_root` path in `app_settings`. Configurable under **Settings → Antigravity Integration**.
 - **Projects page** — "Link folder" modal now recognises `ANTIGRAVITY.md` alongside `TASKS.md` and `CLAUDE.md` as a valid marker file. Project badge updated from "CLAUDE" to **"AI SYNC"** to reflect both integrations.
+- **Feature Guide** — `docs/FEATURE_GUIDE.md` — comprehensive walkthrough of all 22 feature areas with step-by-step test instructions for new users.
+- **Documentation section in README** — links to Feature Guide, Changelog, Startup Guide, and Contributing from a single place.
 
 ---
 
