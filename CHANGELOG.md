@@ -15,6 +15,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`devbrain restart` command** — `devbrain.ps1` and `devbrain.sh` now support `dev restart` and `prod restart` (stop → build if prod → start). Accepts all existing flags (`-SkipBuild` / `--skip-build`, `--follow`).
 - **`devbrain status` command** — Reports live health of all services: Ollama, Postgres (Docker healthcheck), Express server (port 3001), and Vite client (port 5174, dev only). Lists tracked PIDs from the PID file.
 - **Settings sidebar navigation** — The Settings page is reorganised from a single flat scroll of 16 sections into a two-column layout: a 168px left sidebar with 8 tab groups (General, Account, Users & Auth, Data, Notifications, Integrations, Templates, Audit Log) and a right content pane that renders only the active group. Admin-only tabs (Users & Auth, Audit Log) are hidden from non-admin users.
+- **Font Size / UI Scale** — Settings → General now has a Font Size section with four options: Small (12px), Medium (13px, default), Large (15px), XL (16px). The entire interface — top bar, sidebar, and all page content — scales uniformly using CSS `zoom` with a compensated height so nothing is clipped. The selection is persisted to `localStorage` (`devbrain_density`) and survives page refreshes. Sidebar drag-to-resize is corrected to track the cursor at any zoom level.
+- **Feature Guide section 23** — `docs/FEATURE_GUIDE.md` updated with a new section covering Font Size & UI Scale, including a test walkthrough and localStorage persistence check.
+
+### Fixed
+
+- E2E tests (`sharing.spec.ts`) — three tests navigated to Settings and asserted on content (User Management, Audit Log, Invite User) without first clicking the relevant sidebar tab. Added tab-click steps to fix the CI failure introduced by the Settings reorganisation.
 
 ---
 

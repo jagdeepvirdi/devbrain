@@ -4,7 +4,7 @@
 
 | Version | Date | Status |
 |---|---|---|
-| **v1.2.0** | 2026-06-15 | Released — Gemini API provider, restart/status scripts, Settings sidebar nav |
+| **v1.2.0** | 2026-06-15 | Released — Gemini API provider, restart/status scripts, Settings sidebar nav, font size scaling |
 | **v1.1.0** | 2026-06-13 | Released — Antigravity integration, Feature Guide |
 | **v1.0.0** | 2026-06-13 | Released — all phases complete, CI green |
 
@@ -398,10 +398,10 @@ These are integrations in other personal projects that push notifications to Dev
 
 ---
 
-## Phase 31 — Settings Page Reorganization — COMPLETED
+## Phase 31 — Settings UX Improvements — COMPLETED
 
+### Settings Page Reorganization
 > Replace the flat single-column scroll of 16 stacked sections with a sidebar-nav two-column layout.
-> No new functionality — pure UX improvement so settings are navigable and grouped logically.
 
 - [x] Add `const [tab, setTab] = useState('general')` to `SettingsPage` state
 - [x] Define `NAV` array of 8 tab groups with `adminOnly` flag; filter non-admin tabs from the sidebar
@@ -415,4 +415,19 @@ These are integrations in other personal projects that push notifications to Dev
   - **Integrations** — External Issue Sync *(admin)* + Claude Code + Antigravity/Gemini CLI
   - **Templates** — Templates manager
   - **Audit Log** *(admin)* — Audit Log paginated view + CSV export
+- [x] Fix E2E tests in `sharing.spec.ts` — three tests broke because they expected Settings content without tab navigation; added tab-click steps before assertions
+
+### Font Size / UI Scale
+> Let the user scale the entire interface to one of four sizes; persisted to localStorage.
+
+- [x] Add `[data-density="xl"]` variant to `tokens.css` — `--fs: 16px`, `--row-h: 42px`, proportional spacing
+- [x] Add `DENSITY_LS_KEY = 'devbrain_density'` constant; initialise `density` state from localStorage (was hardcoded `'normal'`, reset on every refresh)
+- [x] Persist density to localStorage via `useEffect` on density change
+- [x] Add `DENSITY_ZOOM` map (`compact: 0.92`, `normal: 1`, `comfy: 1.15`, `xl: 1.23`) in `App.tsx`
+- [x] Apply `zoom: DENSITY_ZOOM[density]` + `height: 100vh/zoom` on `.app` so the entire UI (top bar, sidebar, content) scales uniformly without clipping
+- [x] Fix sidebar resize handler — divide drag delta by zoom factor so the handle tracks the cursor correctly at any scale
+- [x] Pass `density` + `setDensity` as props to `SettingsPage`
+- [x] Add **Font Size** section to Settings → General tab — four buttons (Small / Medium / Large / XL) with live "A" preview at each size; active option highlighted in accent colour
+- [x] Update sidebar footer quick-toggle to include `xl` option
+- [x] Add section 23 (Font Size & UI Scale) to `docs/FEATURE_GUIDE.md`
 
