@@ -28,7 +28,8 @@ const SIDEBAR_DEFAULT = 220
 const SIDEBAR_MIN     = 180
 const SIDEBAR_MAX     = 420
 const SIDEBAR_LS_KEY  = 'devbrain_sidebar_w'
-type Density = 'compact' | 'normal' | 'comfy'
+const DENSITY_LS_KEY  = 'devbrain_density'
+type Density = 'compact' | 'normal' | 'comfy' | 'xl'
 type Tint    = 'cool' | 'black' | 'warm'
 
 const ROUTE_PATHS: Record<RouteId, string> = {
@@ -81,7 +82,10 @@ export default function App() {
     navigate(`${ROUTE_PATHS[r]}${qs ? '?' + qs : ''}`)
   }
 
-  const [density,    setDensity]    = useState<Density>('normal')
+  const [density,    setDensity]    = useState<Density>(() => {
+    const saved = localStorage.getItem(DENSITY_LS_KEY)
+    return (saved as Density | null) ?? 'normal'
+  })
   const [tint]                      = useState<Tint>('cool')
   const [sidebar,    setSidebar]    = useState<'open' | 'collapsed'>('open')
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -152,6 +156,11 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(SIDEBAR_LS_KEY, String(sidebarWidth))
   }, [sidebarWidth])
+
+  // Persist density to localStorage
+  useEffect(() => {
+    localStorage.setItem(DENSITY_LS_KEY, density)
+  }, [density])
 
   function onResizeHandleMouseDown(e: React.MouseEvent) {
     if (sidebar === 'collapsed') return
@@ -229,7 +238,7 @@ export default function App() {
       case 'releases':  return wrap('releases',  <ReleasesPage />)
       case 'runbooks':  return wrap('runbooks',  <RunbooksPage />)
       case 'dashboard': return wrap('dashboard', <DashboardPage />)
-      case 'settings':  return wrap('settings',  <SettingsPage onLogout={() => { setAuthed(false); setCurrentUser(null) }} currentUser={currentUser} />)
+      case 'settings':  return wrap('settings',  <SettingsPage onLogout={() => { setAuthed(false); setCurrentUser(null) }} currentUser={currentUser} density={density} setDensity={setDensity} />)
       case 'notificationLog': return wrap('notificationLog', <NotificationLogPage />)
       default:
         return (

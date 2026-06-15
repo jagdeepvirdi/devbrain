@@ -73,6 +73,15 @@
   --fs-sm:  12.5px;
   --fs-xs:  11.5px;
 }
+[data-density="xl"] {
+  --row-h:  42px;
+  --pad:    20px;
+  --pad-sm: 16px;
+  --gap:    18px;
+  --fs:     16px;
+  --fs-sm:  14px;
+  --fs-xs:  12.5px;
+}
 
 /* Background tint variants */
 [data-tint="black"] {

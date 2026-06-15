@@ -2297,7 +2297,21 @@ function TemplatesSection({ projects }: TemplatesSectionProps) {
 
 // ── Main Settings page ────────────────────────────────────────────────────
 
-export function SettingsPage({ onLogout, currentUser }: { onLogout: () => void; currentUser: AuthUser | null }) {
+type Density = 'compact' | 'normal' | 'comfy' | 'xl'
+
+const FONT_SIZE_OPTIONS: { value: Density; label: string; size: string }[] = [
+  { value: 'compact', label: 'Small',  size: '12px' },
+  { value: 'normal',  label: 'Medium', size: '13px' },
+  { value: 'comfy',   label: 'Large',  size: '15px' },
+  { value: 'xl',      label: 'XL',     size: '16px' },
+]
+
+export function SettingsPage({ onLogout, currentUser, density, setDensity }: {
+  onLogout: () => void
+  currentUser: AuthUser | null
+  density: Density
+  setDensity: (d: Density) => void
+}) {
   const { toast } = useToast()
   const [settings,      setSettings]      = useState<SettingsData | null>(null)
   const [loading,       setLoading]       = useState(true)
@@ -2426,6 +2440,36 @@ export function SettingsPage({ onLogout, currentUser }: { onLogout: () => void; 
               {/* ── General ──────────────────────────────────────────── */}
               {tab === 'general' && (
                 <>
+                  <Section title="Font Size">
+                    <div style={{ paddingTop: 4 }}>
+                      <div style={{ fontSize: 12, color: 'var(--fg-3)', marginBottom: 10 }}>
+                        Adjusts the base text size across the entire interface. Saved automatically.
+                      </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        {FONT_SIZE_OPTIONS.map(opt => {
+                          const active = density === opt.value
+                          return (
+                            <button
+                              key={opt.value}
+                              onClick={() => setDensity(opt.value)}
+                              style={{
+                                flex: 1, padding: '10px 0', borderRadius: 'var(--radius)',
+                                border: `1px solid ${active ? 'var(--accent)' : 'var(--line-2)'}`,
+                                background: active ? 'var(--accent-dim)' : 'var(--bg-elev)',
+                                color: active ? 'var(--accent-2)' : 'var(--fg-3)',
+                                cursor: 'pointer', display: 'flex', flexDirection: 'column',
+                                alignItems: 'center', gap: 4,
+                              }}
+                            >
+                              <span style={{ fontSize: opt.size, fontWeight: 600, lineHeight: 1 }}>A</span>
+                              <span style={{ fontSize: 11, fontWeight: active ? 600 : 400 }}>{opt.label}</span>
+                              <span style={{ fontSize: 10, color: active ? 'var(--accent-2)' : 'var(--fg-4)' }}>{opt.size}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </Section>
                   <Section title="AI Backend">
                     <Row label="Provider"    value={settings?.ai.backend    ?? '—'} />
                     <Row label="Chat model"  value={settings?.ai.chatModel  ?? '—'} mono />
