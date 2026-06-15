@@ -5,8 +5,10 @@ vi.mock('../../lib/env.js', () => ({
   env: {
     OLLAMA_URL:        'http://localhost:11434',
     OLLAMA_CHAT_MODEL: 'test-model',
-    USE_CLAUDE:        false,
+    AI_PROVIDER:       'ollama',
     ANTHROPIC_API_KEY: undefined,
+    GEMINI_API_KEY:    undefined,
+    GEMINI_CHAT_MODEL: 'gemini-2.0-flash',
   },
 }))
 

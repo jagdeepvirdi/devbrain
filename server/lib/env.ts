@@ -7,8 +7,10 @@ const schema = z.object({
   PORT:               z.coerce.number().int().positive().default(3001),
   JWT_SECRET:         z.string().min(16, 'JWT_SECRET must be at least 16 characters'),
   AUTH_PASSWORD:      z.string().optional(),
-  USE_CLAUDE:         z.enum(['true', 'false']).default('false').transform(v => v === 'true'),
+  AI_PROVIDER:        z.enum(['ollama', 'claude', 'gemini']).default('ollama'),
   ANTHROPIC_API_KEY:  z.string().optional(),
+  GEMINI_API_KEY:     z.string().optional(),
+  GEMINI_CHAT_MODEL:  z.string().default('gemini-2.0-flash'),
   NODE_ENV:           z.enum(['development', 'production', 'test']).default('development'),
   FORCE_HTTPS:        z.enum(['true', 'false']).default('false').transform(v => v === 'true'),
   // LDAP — all optional; set LDAP_URL to activate
@@ -18,11 +20,18 @@ const schema = z.object({
   LDAP_SEARCH_BASE:   z.string().optional(),
   LDAP_USER_ATTR:     z.string().default('uid'),
 }).superRefine((data, ctx) => {
-  if (data.USE_CLAUDE && !data.ANTHROPIC_API_KEY) {
+  if (data.AI_PROVIDER === 'claude' && !data.ANTHROPIC_API_KEY) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'ANTHROPIC_API_KEY is required when USE_CLAUDE=true',
+      message: 'ANTHROPIC_API_KEY is required when AI_PROVIDER=claude',
       path: ['ANTHROPIC_API_KEY'],
+    })
+  }
+  if (data.AI_PROVIDER === 'gemini' && !data.GEMINI_API_KEY) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'GEMINI_API_KEY is required when AI_PROVIDER=gemini',
+      path: ['GEMINI_API_KEY'],
     })
   }
   if (data.NODE_ENV === 'production' && !data.AUTH_PASSWORD) {

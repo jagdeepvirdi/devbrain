@@ -32,8 +32,10 @@ services:
       PORT:              3001
       JWT_SECRET:        ${JWT_SECRET:?JWT_SECRET must be set}
       AUTH_PASSWORD:     ${AUTH_PASSWORD:?AUTH_PASSWORD must be set in production}
-      USE_CLAUDE:        ${USE_CLAUDE:-false}
+      AI_PROVIDER:       ${AI_PROVIDER:-ollama}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY:    ${GEMINI_API_KEY:-}
+      GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-2.0-flash}
       FORCE_HTTPS:       true
       NODE_ENV:          production
       ENCRYPT_KEY:       ${ENCRYPT_KEY:-}

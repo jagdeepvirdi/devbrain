@@ -10,7 +10,7 @@ export default defineConfig({
       JWT_SECRET:        'test-secret-at-least-16-chars!!',
       OLLAMA_URL:        'http://localhost:11434',
       OLLAMA_CHAT_MODEL: 'mistral',
-      USE_CLAUDE:        'false',
+      AI_PROVIDER:       'ollama',
     },
     coverage: {
       provider: 'v8',

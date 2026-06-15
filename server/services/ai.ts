@@ -1,15 +1,26 @@
-// Unified AI client — Ollama (default, local, zero-cost) or Claude API (opt-in).
-// All AI calls in the codebase go through this module. Never import Ollama or
-// Anthropic directly from routes or other services.
+// Unified AI client — Ollama (default, local, zero-cost), Claude API, or Gemini API.
+// All AI calls in the codebase go through this module. Never import provider
+// clients directly from routes or other services.
 
 import { env } from '../lib/env.js'
 
 const OLLAMA_BASE = env.OLLAMA_URL
 const CHAT_MODEL  = env.OLLAMA_CHAT_MODEL
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta'
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
 type Message = { role: 'system' | 'user' | 'assistant'; content: string }
+
+// Gemini uses "model" for assistant role and a separate system_instruction field.
+function toGeminiContents(messages: Message[]) {
+  return messages
+    .filter(m => m.role !== 'system')
+    .map(m => ({
+      role:  m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    }))
+}
 
 // ── aiChat ────────────────────────────────────────────────────────────────
 
@@ -19,7 +30,7 @@ type Message = { role: 'system' | 'user' | 'assistant'; content: string }
  * callers don't need to know the provider's message format.
  */
 export async function aiChat(prompt: string, system: string): Promise<string> {
-  if (env.USE_CLAUDE) {
+  if (env.AI_PROVIDER === 'claude') {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -42,6 +53,30 @@ export async function aiChat(prompt: string, system: string): Promise<string> {
 
     const data = await res.json() as { content: Array<{ text: string }> }
     return data.content[0].text
+  }
+
+  if (env.AI_PROVIDER === 'gemini') {
+    const model = env.GEMINI_CHAT_MODEL
+    const url   = `${GEMINI_BASE}/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`
+    const res   = await fetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal:  AbortSignal.timeout(30_000),
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: system }] },
+        contents:           [{ role: 'user', parts: [{ text: prompt }] }],
+      }),
+    })
+
+    if (!res.ok) {
+      const body = await res.text()
+      throw new Error(`Gemini API error ${res.status}: ${body}`)
+    }
+
+    const data = await res.json() as {
+      candidates: Array<{ content: { parts: Array<{ text: string }> } }>
+    }
+    return data.candidates[0].content.parts[0].text
   }
 
   // Default: Ollama (local, free)
@@ -110,8 +145,8 @@ export async function aiChatStream(
   messages: Message[],
   onChunk: (chunk: string) => void
 ): Promise<void> {
-  if (env.USE_CLAUDE) {
-    const system = messages.find(m => m.role === 'system')?.content ?? ''
+  if (env.AI_PROVIDER === 'claude') {
+    const system      = messages.find(m => m.role === 'system')?.content ?? ''
     const userMessages = messages.filter(m => m.role !== 'system')
 
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -152,6 +187,49 @@ export async function aiChatStream(
           if (json.type === 'content_block_delta' && json.delta?.text) {
             onChunk(json.delta.text)
           }
+        } catch {
+          // incomplete JSON line — skip
+        }
+      }
+    }
+    return
+  }
+
+  if (env.AI_PROVIDER === 'gemini') {
+    const system = messages.find(m => m.role === 'system')?.content ?? ''
+    const model  = env.GEMINI_CHAT_MODEL
+    const url    = `${GEMINI_BASE}/models/${model}:streamGenerateContent?key=${env.GEMINI_API_KEY}&alt=sse`
+
+    const res = await fetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal:  AbortSignal.timeout(120_000),
+      body: JSON.stringify({
+        system_instruction: system ? { parts: [{ text: system }] } : undefined,
+        contents:           toGeminiContents(messages),
+      }),
+    })
+
+    if (!res.ok) {
+      const body = await res.text()
+      throw new Error(`Gemini stream error ${res.status}: ${body}`)
+    }
+
+    const reader  = res.body!.getReader()
+    const decoder = new TextDecoder()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const lines = decoder.decode(value, { stream: true }).split('\n')
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue
+        try {
+          const json = JSON.parse(line.slice(5)) as {
+            candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+          }
+          const text = json.candidates?.[0]?.content?.parts?.[0]?.text
+          if (text) onChunk(text)
         } catch {
           // incomplete JSON line — skip
         }

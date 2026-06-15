@@ -106,8 +106,12 @@ router.get('/', (_req, res) => {
   res.json({
     data: {
       ai: {
-        backend:    env.USE_CLAUDE ? 'claude' : 'ollama',
-        chatModel:  env.USE_CLAUDE ? 'claude-sonnet-4-6' : env.OLLAMA_CHAT_MODEL,
+        backend:    env.AI_PROVIDER,
+        chatModel:  env.AI_PROVIDER === 'claude'
+          ? 'claude-sonnet-4-6'
+          : env.AI_PROVIDER === 'gemini'
+          ? env.GEMINI_CHAT_MODEL
+          : env.OLLAMA_CHAT_MODEL,
         embedModel: 'nomic-embed-text',
         ollamaUrl:  env.OLLAMA_URL,
       },

@@ -50,8 +50,12 @@ app.get('/api/health', async (_req, res) => {
       ollama: ollama ? 'ok' : 'unreachable',
     },
     config: {
-      ai_backend:  env.USE_CLAUDE ? 'claude' : 'ollama',
-      chat_model:  env.USE_CLAUDE ? 'claude-sonnet-4-6' : env.OLLAMA_CHAT_MODEL,
+      ai_backend:  env.AI_PROVIDER,
+      chat_model:  env.AI_PROVIDER === 'claude'
+        ? 'claude-sonnet-4-6'
+        : env.AI_PROVIDER === 'gemini'
+        ? env.GEMINI_CHAT_MODEL
+        : env.OLLAMA_CHAT_MODEL,
       embed_model: 'nomic-embed-text',
     },
   })
