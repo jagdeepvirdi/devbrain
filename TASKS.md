@@ -365,3 +365,32 @@ These are integrations in other personal projects that push notifications to Dev
 - [x] `CHANGELOG.md` — added `[Unreleased]` section documenting all Antigravity changes
 - [x] `docs/FEATURE_GUIDE.md` — new 747-line feature guide covering all 22 feature areas with step-by-step test instructions for new users
 
+---
+
+## Phase 30 — Gemini API Integration — COMPLETED
+
+> Add Google Gemini as a third AI provider option alongside Ollama (default) and Claude API.
+> Free tier (`gemini-2.0-flash`) gives 1500 RPD / 1M TPM at zero cost — useful when Ollama is unavailable or GPU is busy.
+
+### Core
+- [x] Replace binary `USE_CLAUDE` toggle with `AI_PROVIDER` enum (`'ollama' | 'claude' | 'gemini'`, default `'ollama'`) in `server/lib/env.ts`
+- [x] Add `GEMINI_API_KEY` and `GEMINI_CHAT_MODEL` (default `gemini-2.0-flash`) to env schema with Zod validation
+- [x] Add `toGeminiContents()` helper in `server/services/ai.ts` — maps internal `Message[]` to Gemini's format (role `'assistant'` → `'model'`, system message → `system_instruction` field)
+- [x] Add Gemini branch to `aiChat` — `POST /v1beta/models/{model}:generateContent?key=...`
+- [x] Add Gemini branch to `aiChatStream` — `POST /v1beta/models/{model}:streamGenerateContent?key=...&alt=sse` with SSE chunk parsing
+- [x] Embeddings (`aiEmbed`) remain on local Ollama — Gemini embedding API is not on the free tier
+
+### Config & Infrastructure
+- [x] `server/.env` — replace `USE_CLAUDE=false` with `AI_PROVIDER=ollama`, add `GEMINI_API_KEY=` and `GEMINI_CHAT_MODEL=gemini-2.0-flash`
+- [x] `server/index.ts` — health endpoint `config.ai_backend` and `config.chat_model` updated to reflect `AI_PROVIDER`
+- [x] `server/routes/settings.ts` — `GET /api/settings` AI section reflects active provider and model
+- [x] `docker-compose.yml` + `docker-compose.prod.yml` — pass `AI_PROVIDER`, `GEMINI_API_KEY`, `GEMINI_CHAT_MODEL` env vars
+
+### Tests
+- [x] `server/vitest.config.ts` — replace `USE_CLAUDE: 'false'` with `AI_PROVIDER: 'ollama'`
+- [x] `server/tests/services/ai.test.ts` — update env mock: `AI_PROVIDER: 'ollama'`, add `GEMINI_API_KEY` and `GEMINI_CHAT_MODEL` fields
+- [x] `server/tests/services/embedder.test.ts` — same mock update
+
+### Script Utilities
+- [x] `devbrain.ps1` + `devbrain.sh` — added `restart` and `stop` commands; `status` command shows live health of Ollama, Postgres, server, and Vite client
+
