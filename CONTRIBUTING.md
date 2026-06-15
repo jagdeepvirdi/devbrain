@@ -1,6 +1,6 @@
 # Contributing to DevBrain
 
-DevBrain is a private developer knowledge base — currently at **v1.0.0**. This guide covers local setup, the branching model, and coding standards for contributors.
+DevBrain is a private developer knowledge base — currently at **v1.2.0**. This guide covers local setup, the branching model, and coding standards for contributors.
 
 ## Prerequisites
 

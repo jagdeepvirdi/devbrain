@@ -4,6 +4,8 @@
 
 | Version | Date | Status |
 |---|---|---|
+| **v1.2.0** | 2026-06-15 | Released — Gemini API provider, restart/status scripts |
+| **v1.1.0** | 2026-06-13 | Released — Antigravity integration, Feature Guide |
 | **v1.0.0** | 2026-06-13 | Released — all phases complete, CI green |
 
 Completed phases are archived below for reference.
