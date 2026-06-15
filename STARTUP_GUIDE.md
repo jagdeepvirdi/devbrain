@@ -76,14 +76,26 @@ ollama pull nomic-embed-text # Embeddings — ~300 MB VRAM
 # Stop development
 .\devbrain.ps1 dev stop
 
+# Restart development (stop → start)
+.\devbrain.ps1 dev restart
+
+# Check service health (Ollama, Postgres, server, Vite)
+.\devbrain.ps1 dev status
+
 # Production (build + start)
 .\devbrain.ps1 prod start
 
 # Production — restart without rebuilding (fast)
 .\devbrain.ps1 prod start -SkipBuild
 
+# Restart production (stop → start)
+.\devbrain.ps1 prod restart
+
 # Stop production
 .\devbrain.ps1 prod stop
+
+# Check production service health
+.\devbrain.ps1 prod status
 ```
 
 If PowerShell blocks the script with an execution-policy error:
@@ -104,6 +116,12 @@ powershell -ExecutionPolicy Bypass -File .\devbrain.ps1 dev start
 # Stop development
 ./devbrain.sh dev stop
 
+# Restart development (stop → start)
+./devbrain.sh dev restart
+
+# Check service health (Ollama, Postgres, server, Vite)
+./devbrain.sh dev status
+
 # Production (build + start)
 ./devbrain.sh prod start
 
@@ -113,8 +131,14 @@ powershell -ExecutionPolicy Bypass -File .\devbrain.ps1 dev start
 # Production with live log streaming
 ./devbrain.sh prod start --follow
 
+# Restart production (stop → start)
+./devbrain.sh prod restart
+
 # Stop production
 ./devbrain.sh prod stop
+
+# Check production service health
+./devbrain.sh prod status
 ```
 
 If the script is not executable:

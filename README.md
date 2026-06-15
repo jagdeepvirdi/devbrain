@@ -68,7 +68,7 @@ A private developer knowledge base for organizing work artifacts across all acti
 | AI — RAG / chat | `mistral:7b` via Ollama |
 | AI — classification | `gemma3:4b` via Ollama |
 | AI — embeddings | `nomic-embed-text` via Ollama |
-| AI — optional | Anthropic Claude API (manual opt-in only, never auto-called) |
+| AI — optional | Anthropic Claude API or Google Gemini (`AI_PROVIDER` env — `ollama` default) |
 | Search | pgvector cosine similarity + PostgreSQL tsvector hybrid |
 | File parsing | MarkItDown (Python bridge) with JS fallbacks (`pdf-parse`, `mammoth`, `marked`, `xlsx`) |
 | Notifications | Apprise (Python) — Telegram, Slack, Discord, and 80+ channels |
@@ -139,12 +139,14 @@ Log in with the `AUTH_PASSWORD` you set in `server/.env`.
 |---|---|---|
 | `DATABASE_URL` | `postgresql://devbrain:devbrain@localhost:5432/devbrain` | Postgres connection string |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama API base URL |
-| `OLLAMA_CHAT_MODEL` | `mistral` | Model used for RAG chat |
+| `OLLAMA_CHAT_MODEL` | `mistral` | Model used for RAG chat (Ollama provider) |
 | `PORT` | `3001` | Express server port |
 | `JWT_SECRET` | — | **Required** — min 32 chars |
 | `AUTH_PASSWORD` | — | Login password (required in production) |
-| `ANTHROPIC_API_KEY` | — | Optional — only used when `USE_CLAUDE=true` |
-| `USE_CLAUDE` | `false` | Route AI calls through Claude API instead of Ollama |
+| `AI_PROVIDER` | `ollama` | AI backend: `ollama` \| `claude` \| `gemini` |
+| `ANTHROPIC_API_KEY` | — | Required when `AI_PROVIDER=claude` |
+| `GEMINI_API_KEY` | — | Required when `AI_PROVIDER=gemini` |
+| `GEMINI_CHAT_MODEL` | `gemini-2.0-flash` | Gemini model (free-tier default) |
 
 ## Architecture
 
@@ -214,16 +216,24 @@ devbrain/
 └── devbrain.sh               # macOS/Linux start script
 ```
 
-## Optional: Claude API
+## Optional: Alternative AI Providers
 
-All AI features run locally by default. To route chat through the Claude API instead:
+All AI features run locally via Ollama by default. To switch providers, set `AI_PROVIDER` in `server/.env`:
 
+**Claude API:**
 ```env
+AI_PROVIDER=claude
 ANTHROPIC_API_KEY=sk-ant-...
-USE_CLAUDE=true
 ```
 
-The "Enhance with Claude" button in the UI is the only place the Claude API is ever called automatically — all other AI calls always go through Ollama.
+**Google Gemini (free tier — 1500 RPD / 1M TPM):**
+```env
+AI_PROVIDER=gemini
+GEMINI_API_KEY=AIza...
+GEMINI_CHAT_MODEL=gemini-2.0-flash
+```
+
+Embeddings always remain on local Ollama (`nomic-embed-text`) regardless of the `AI_PROVIDER` setting. The active provider and model are shown in **Settings → General → AI Backend**.
 
 ## Optional: Apprise Notifications
 

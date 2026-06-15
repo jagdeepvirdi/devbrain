@@ -112,8 +112,10 @@ Optional:
 
 | Variable | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | Enables Claude API for manual "Enhance" features |
-| `USE_CLAUDE` | Set to `true` to route chat/RAG through Claude instead of Ollama |
+| `AI_PROVIDER` | `ollama` (default) \| `claude` \| `gemini` — selects the AI backend for chat and RAG |
+| `ANTHROPIC_API_KEY` | Required when `AI_PROVIDER=claude` |
+| `GEMINI_API_KEY` | Required when `AI_PROVIDER=gemini` (free tier: 1500 RPD, 1M TPM) |
+| `GEMINI_CHAT_MODEL` | Gemini model name (default: `gemini-2.0-flash`) |
 | `FORCE_HTTPS` | Set to `true` behind a reverse proxy to redirect HTTP → HTTPS |
 
 ## API Reference

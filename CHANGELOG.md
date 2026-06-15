@@ -14,6 +14,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`AI_PROVIDER` enum** — Replaces the binary `USE_CLAUDE` toggle with a three-way `AI_PROVIDER` setting (`ollama` | `claude` | `gemini`, default `ollama`). Health endpoint and Settings page reflect the active provider and model name.
 - **`devbrain restart` command** — `devbrain.ps1` and `devbrain.sh` now support `dev restart` and `prod restart` (stop → build if prod → start). Accepts all existing flags (`-SkipBuild` / `--skip-build`, `--follow`).
 - **`devbrain status` command** — Reports live health of all services: Ollama, Postgres (Docker healthcheck), Express server (port 3001), and Vite client (port 5174, dev only). Lists tracked PIDs from the PID file.
+- **Settings sidebar navigation** — The Settings page is reorganised from a single flat scroll of 16 sections into a two-column layout: a 168px left sidebar with 8 tab groups (General, Account, Users & Auth, Data, Notifications, Integrations, Templates, Audit Log) and a right content pane that renders only the active group. Admin-only tabs (Users & Auth, Audit Log) are hidden from non-admin users.
 
 ---
 

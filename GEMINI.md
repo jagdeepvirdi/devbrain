@@ -3,7 +3,7 @@
 ## Foundational Mandates
 - **Local AI First**: All primary AI features must run locally via Ollama. Use `mistral:7b` for generation, `gemma3:4b` for fast classification/tagging, and `nomic-embed-text` for embeddings.
 - **Structured Parsing**: Use Microsoft MarkItDown (Python) for high-quality file-to-markdown conversion to improve RAG accuracy.
-- **Zero Cost**: Avoid external API dependencies unless explicitly requested by the user. Claude API is supported as an opt-in for high-quality chat/RAG.
+- **Zero Cost**: Avoid external API dependencies unless explicitly requested by the user. The `AI_PROVIDER` env var selects the backend: `ollama` (default, free), `claude` (Anthropic API, opt-in), or `gemini` (Google free tier — 1500 RPD/1M TPM, opt-in). Embeddings always stay on local Ollama regardless of provider.
 - **Privacy**: No data should leave the local environment without explicit action.
 
 ## Engineering Standards
@@ -15,7 +15,7 @@
 
 ### Architecture
 - **Service Layer**: Keep business logic in `server/services/`. Routes should be thin and handle only request/response orchestration.
-- **Unified AI Client**: All AI interactions must go through `server/services/ai.ts`. Never call Ollama or Claude APIs directly from routes.
+- **Unified AI Client**: All AI interactions must go through `server/services/ai.ts`. Never call Ollama, Claude, or Gemini APIs directly from routes.
 - **State Management**: Use Zustand for client-side state. Use React Query for server-state synchronization and caching.
 - **Routing**: Use `react-router-dom` for navigation. Avoid custom event systems for routing.
 - **Zero-dependency Analytics**: Visualization widgets (charts/heatmaps) must use Vanilla CSS/HTML. Avoid external charting libraries to keep the bundle lean and maintainable.

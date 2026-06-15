@@ -4,7 +4,7 @@
 
 | Version | Date | Status |
 |---|---|---|
-| **v1.2.0** | 2026-06-15 | Released — Gemini API provider, restart/status scripts |
+| **v1.2.0** | 2026-06-15 | Released — Gemini API provider, restart/status scripts, Settings sidebar nav |
 | **v1.1.0** | 2026-06-13 | Released — Antigravity integration, Feature Guide |
 | **v1.0.0** | 2026-06-13 | Released — all phases complete, CI green |
 
@@ -395,4 +395,24 @@ These are integrations in other personal projects that push notifications to Dev
 
 ### Script Utilities
 - [x] `devbrain.ps1` + `devbrain.sh` — added `restart` and `stop` commands; `status` command shows live health of Ollama, Postgres, server, and Vite client
+
+---
+
+## Phase 31 — Settings Page Reorganization — COMPLETED
+
+> Replace the flat single-column scroll of 16 stacked sections with a sidebar-nav two-column layout.
+> No new functionality — pure UX improvement so settings are navigable and grouped logically.
+
+- [x] Add `const [tab, setTab] = useState('general')` to `SettingsPage` state
+- [x] Define `NAV` array of 8 tab groups with `adminOnly` flag; filter non-admin tabs from the sidebar
+- [x] Render 168px left sidebar with nav buttons; active tab highlighted in indigo; admin-only tabs hidden from non-admins
+- [x] Replace flat content pane with conditional rendering per tab:
+  - **General** — AI Backend (provider, models, Ollama URL) + About (version, stack)
+  - **Account** — Auth mode, change-password form, sign-out button
+  - **Users & Auth** *(admin)* — User Management + LDAP Configuration
+  - **Data** — Export JSON, Import JSON (dry run + live), Scheduled Backup, Export by Project (zip), Import from Zip, Danger Zone (reset seed, admin only)
+  - **Notifications** — Notification Rules + Notification Hub
+  - **Integrations** — External Issue Sync *(admin)* + Claude Code + Antigravity/Gemini CLI
+  - **Templates** — Templates manager
+  - **Audit Log** *(admin)* — Audit Log paginated view + CSV export
 

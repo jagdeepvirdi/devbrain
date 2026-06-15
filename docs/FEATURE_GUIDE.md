@@ -627,35 +627,42 @@ Every create, update, delete, login, and password-change event is recorded in th
 ## 20. Settings & Backup
 
 ### What it does
-Settings is the admin control panel. Sections include:
+Settings uses a **two-column sidebar-nav layout**: a 168px left sidebar with 8 tab groups, and a right content pane that shows only the active group. Admin-only tabs (Users & Auth, Audit Log) are hidden from non-admin users.
 
-| Section | Purpose |
+| Tab | Sections inside |
 |---|---|
-| **Authentication** | Change the login password |
-| **User Management** | Invite, deactivate, and manage users and roles |
-| **LDAP** | Configure LDAP/AD host, base DN, bind credentials, and test the connection |
-| **Claude Integration** | Set the scan root directory for Claude Code project discovery |
-| **Antigravity Integration** | Set the scan root directory for Antigravity project discovery |
-| **Notification Hub** | Add Apprise channels (Telegram, Slack, Discord…); per-project toggles; digest schedule |
-| **Integrations** | Add/remove GitHub, Linear, Jira connections |
-| **Templates** | Manage custom and built-in templates |
-| **Audit Log** | View and export the full mutation history |
-| **Backup** | Export a full JSON snapshot of all content; configure an auto-backup path and schedule |
+| **General** | AI Backend (active provider, models, Ollama URL) · About (version, stack) |
+| **Account** | Auth mode · Change password · Sign out |
+| **Users & Auth** *(admin)* | User Management · LDAP Configuration |
+| **Data** | Export JSON backup · Import JSON backup (dry run + live) · Scheduled Backup · Export by Project (zip) · Import from Zip · Danger Zone (reset seed) |
+| **Notifications** | Notification Rules · Notification Hub (Apprise channels, digest) |
+| **Integrations** | External Issue Sync *(admin)* · Claude Code scan root · Antigravity scan root |
+| **Templates** | Manage built-in and custom templates |
+| **Audit Log** *(admin)* | Paginated mutation history + CSV export |
 
 ### How to test
 
+**Navigating tabs:**
+1. Open **Settings** from the sidebar.
+2. Click each tab in the left nav — only the sections for that group render on the right.
+3. Confirm **Users & Auth** and **Audit Log** tabs are absent when logged in as a non-admin `member` or `viewer`.
+
 **Changing password:**
-1. Settings → Authentication → enter current password and new password → click **Save**.
+1. Settings → **Account** → enter current password and new password → click **Update**.
 2. Log out and log in with the new password.
 
 **Backup:**
-1. Settings → Backup → click **Export now**.
+1. Settings → **Data** → **Export backup** → click **Download**.
 2. A JSON file is downloaded containing all projects, documents (without raw content and embeddings), issues, commands, releases, and runbooks.
-3. To configure auto-backup: set a local folder path and a schedule (e.g. "daily at 02:00") → click Save.
+3. To configure auto-backup: go to **Scheduled Backup** inside the same Data tab, set a path and schedule → Save.
 
 **LDAP test:**
-1. Settings → LDAP → enter server details.
+1. Settings → **Users & Auth** → LDAP Configuration → enter server details.
 2. Click **Test Connection** — DevBrain attempts a bind and reports success or the error message.
+
+**AI Backend:**
+1. Settings → **General** → AI Backend shows the active provider (`ollama` / `claude` / `gemini`), the chat model in use, and the Ollama URL.
+2. To switch providers, set `AI_PROVIDER` in `server/.env` and restart the server.
 
 ---
 
@@ -739,9 +746,10 @@ cd integrations/antigravity && ./install.sh
 | Bulk operations | Any list page — hover rows to reveal checkboxes |
 | Templates | Settings → Templates or "Use template" in create modals |
 | Notifications | Bell icon (top bar) |
-| Audit log | Settings → Audit Log |
-| Backup | Settings → Backup |
-| User management | Settings → User Management |
+| Audit log | Settings → Audit Log tab |
+| Backup | Settings → Data tab → Export backup |
+| User management | Settings → Users & Auth tab |
+| AI backend info | Settings → General tab |
 | Git history | Projects page → project card → Git tab |
 | Claude Code hooks | `integrations/claude-code/` |
 | Antigravity hooks | `integrations/antigravity/` |
