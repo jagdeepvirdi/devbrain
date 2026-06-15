@@ -28,6 +28,7 @@ A complete walkthrough of every feature in DevBrain, with step-by-step instructi
 20. [Settings & Backup](#20-settings--backup)
 21. [Claude Code Integration](#21-claude-code-integration)
 22. [Antigravity / Gemini CLI Integration](#22-antigravity--gemini-cli-integration)
+23. [Font Size & UI Scale](#23-font-size--ui-scale)
 
 ---
 
@@ -733,6 +734,32 @@ cd integrations/antigravity && ./install.sh
 
 ---
 
+## 23. Font Size & UI Scale
+
+### What it does
+DevBrain lets you scale the entire interface — top bar, sidebar, and all page content — to one of four sizes. The choice is saved to `localStorage` and persists across page refreshes.
+
+| Option | Base size | When to use |
+|--------|-----------|-------------|
+| **Small** | 12px | Dense data view; more content visible at once |
+| **Medium** | 13px | Default — balanced density |
+| **Large** | 15px | More comfortable reading |
+| **XL** | 16px | High-DPI monitors or accessibility needs |
+
+The setting uses CSS `zoom` on the app container with a compensated height (`100vh ÷ zoom`) so nothing is clipped and the layout stays intact at all sizes.
+
+### How to test
+
+1. Go to **Settings → General** (first tab in the sidebar nav).
+2. You will see a **Font Size** section at the top with four buttons: Small, Medium, Large, XL. Each button shows a live "A" preview at that size.
+3. Click **Large** — the entire interface (top bar, sidebar, page content) should immediately scale up. No page refresh required.
+4. Click **XL** — the interface scales further. Verify you can still scroll to see all content on the Dashboard.
+5. Click **Small** — the interface shrinks. More content fits on screen at once.
+6. Refresh the page — the font size you selected should be remembered (stored in localStorage as `devbrain_density`).
+7. Return to **Medium** to restore the default.
+
+---
+
 ## Quick Reference: Where to Find Things
 
 | Feature | Location |
@@ -750,6 +777,7 @@ cd integrations/antigravity && ./install.sh
 | Backup | Settings → Data tab → Export backup |
 | User management | Settings → Users & Auth tab |
 | AI backend info | Settings → General tab |
+| Font size / UI scale | Settings → General tab → Font Size |
 | Git history | Projects page → project card → Git tab |
 | Claude Code hooks | `integrations/claude-code/` |
 | Antigravity hooks | `integrations/antigravity/` |
