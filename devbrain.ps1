@@ -1,11 +1,16 @@
-# devbrain.ps1 - Unified dev/prod start and stop for Windows
+# devbrain.ps1 - Unified dev/prod start, stop, restart, and status for Windows
 #
 # Usage:
 #   .\devbrain.ps1 dev   start              # hot-reload dev environment
 #   .\devbrain.ps1 dev   stop               # stop dev servers and Postgres
+#   .\devbrain.ps1 dev   restart            # stop then start dev
+#   .\devbrain.ps1 dev   status             # show running status of all services
 #   .\devbrain.ps1 prod  start              # build + start production
 #   .\devbrain.ps1 prod  start -SkipBuild   # restart prod without rebuilding
 #   .\devbrain.ps1 prod  stop               # stop prod server and Postgres
+#   .\devbrain.ps1 prod  restart            # stop, build, then start prod
+#   .\devbrain.ps1 prod  restart -SkipBuild # stop then restart without rebuilding
+#   .\devbrain.ps1 prod  status             # show running status of all services
 
 param(
     [Parameter(Position = 0, Mandatory)]
@@ -13,7 +18,7 @@ param(
     [string]$Mode,
 
     [Parameter(Position = 1, Mandatory)]
-    [ValidateSet('start', 'stop')]
+    [ValidateSet('start', 'stop', 'restart', 'status')]
     [string]$Action,
 
     [switch]$SkipBuild
@@ -140,6 +145,54 @@ function Build-All {
     OK "Client assets in server/public"
 }
 
+# ── Status ────────────────────────────────────────────────────────────────────
+function Show-Status([bool]$IncludeClient = $false) {
+    Step "DevBrain status..."
+
+    # Ollama
+    try {
+        $null = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -UseBasicParsing -TimeoutSec 2
+        OK "Ollama        running   http://localhost:11434"
+    } catch {
+        Warn "Ollama        NOT running"
+    }
+
+    # Postgres
+    $id = docker compose ps -q postgres 2>$null
+    if ($id) {
+        $h = docker inspect --format "{{.State.Health.Status}}" $id 2>$null
+        if ($h -eq "healthy") { OK "Postgres      healthy   localhost:5435" }
+        else                   { Warn "Postgres      $h" }
+    } else {
+        Warn "Postgres      NOT running"
+    }
+
+    # Server
+    $srv = Test-NetConnection -ComputerName localhost -Port 3001 -WarningAction SilentlyContinue -InformationLevel Quiet
+    if ($srv) { OK "Server        running   http://localhost:3001" }
+    else       { Warn "Server        NOT running" }
+
+    # Vite client (dev only)
+    if ($IncludeClient) {
+        $cli = Test-NetConnection -ComputerName localhost -Port 5174 -WarningAction SilentlyContinue -InformationLevel Quiet
+        if ($cli) { OK "Client        running   http://localhost:5174" }
+        else       { Warn "Client        NOT running" }
+    }
+
+    # Tracked PIDs
+    if (Test-Path $PidFile) {
+        $pids = (Get-Content $PidFile | Where-Object { $_ -match '^\d+$' }) -join ', '
+        Write-Host "`n    Tracked PIDs: $pids" -ForegroundColor DarkGray
+    } else {
+        Write-Host "`n    No PID file (servers may not be managed by this script)" -ForegroundColor DarkGray
+    }
+    Write-Host ""
+}
+
+# ── Restart ───────────────────────────────────────────────────────────────────
+function Restart-Dev  { Stop-Dev;  Start-Dev }
+function Restart-Prod { Stop-Prod; Start-Prod }
+
 # ══════════════════════════════════════════════════════════════════════════════
 # DEV
 # ══════════════════════════════════════════════════════════════════════════════
@@ -226,8 +279,12 @@ function Stop-Prod {
 
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 switch ("$Mode/$Action") {
-    "dev/start"  { Start-Dev }
-    "dev/stop"   { Stop-Dev }
-    "prod/start" { Start-Prod }
-    "prod/stop"  { Stop-Prod }
+    "dev/start"    { Start-Dev }
+    "dev/stop"     { Stop-Dev }
+    "dev/restart"  { Restart-Dev }
+    "dev/status"   { Show-Status $true }
+    "prod/start"   { Start-Prod }
+    "prod/stop"    { Stop-Prod }
+    "prod/restart" { Restart-Prod }
+    "prod/status"  { Show-Status $false }
 }

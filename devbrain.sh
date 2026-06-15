@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
-# devbrain.sh — Unified dev/prod start and stop (macOS / Linux)
+# devbrain.sh — Unified dev/prod start, stop, restart, and status (macOS / Linux)
 #
 # Usage:
-#   ./devbrain.sh dev  start [--follow]       # hot-reload dev environment
-#   ./devbrain.sh dev  stop                   # stop dev servers and Postgres
-#   ./devbrain.sh prod start [--skip-build]   # build + start production
-#   ./devbrain.sh prod start --follow         # build, start, then tail logs
-#   ./devbrain.sh prod stop                   # stop prod server and Postgres
+#   ./devbrain.sh dev  start [--follow]              # hot-reload dev environment
+#   ./devbrain.sh dev  stop                          # stop dev servers and Postgres
+#   ./devbrain.sh dev  restart [--follow]            # stop then start dev
+#   ./devbrain.sh dev  status                        # show running status of all services
+#   ./devbrain.sh prod start [--skip-build]          # build + start production
+#   ./devbrain.sh prod start --follow                # build, start, then tail logs
+#   ./devbrain.sh prod stop                          # stop prod server and Postgres
+#   ./devbrain.sh prod restart [--skip-build]        # stop, build, then start prod
+#   ./devbrain.sh prod restart --follow              # restart then tail logs
+#   ./devbrain.sh prod status                        # show running status of all services
 
 set -euo pipefail
 
@@ -28,7 +33,7 @@ for arg in "${@:3}"; do
 done
 
 if [[ -z "$MODE" || -z "$ACTION" ]]; then
-    echo "Usage: $0 <dev|prod> <start|stop> [--skip-build] [--follow]"
+    echo "Usage: $0 <dev|prod> <start|stop|restart|status> [--skip-build] [--follow]"
     exit 1
 fi
 
@@ -236,11 +241,69 @@ prod_stop() {
     printf "\n  \033[32mDevBrain PROD stopped.\033[0m\n\n"
 }
 
+# ── Status ────────────────────────────────────────────────────────────────────
+show_status() {
+    local include_client="${1:-false}"
+    step "DevBrain status..."
+
+    # Ollama
+    if curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; then
+        ok "Ollama        running   http://localhost:11434"
+    else
+        warn "Ollama        NOT running"
+    fi
+
+    # Postgres
+    local id; id=$(docker compose ps -q postgres 2>/dev/null || true)
+    if [[ -n "$id" ]]; then
+        local h; h=$(docker inspect --format "{{.State.Health.Status}}" "$id" 2>/dev/null || true)
+        if [[ "$h" == "healthy" ]]; then
+            ok "Postgres      healthy   localhost:5435"
+        else
+            warn "Postgres      $h"
+        fi
+    else
+        warn "Postgres      NOT running"
+    fi
+
+    # Server
+    if nc -z localhost 3001 2>/dev/null; then
+        ok "Server        running   http://localhost:3001"
+    else
+        warn "Server        NOT running"
+    fi
+
+    # Vite client (dev only)
+    if [[ "$include_client" == "true" ]]; then
+        if nc -z localhost 5174 2>/dev/null; then
+            ok "Client        running   http://localhost:5174"
+        else
+            warn "Client        NOT running"
+        fi
+    fi
+
+    # Tracked PIDs
+    if [[ -f "$PID_FILE" ]]; then
+        printf "\n    Tracked PIDs: %s\n" "$(tr '\n' ' ' < "$PID_FILE")"
+    else
+        printf "\n    No PID file (servers may not be managed by this script)\n"
+    fi
+    printf "\n"
+}
+
+# ── Restart ───────────────────────────────────────────────────────────────────
+dev_restart()  { dev_stop;  dev_start; }
+prod_restart() { prod_stop; prod_start; }
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 case "$MODE/$ACTION" in
-    dev/start)  dev_start ;;
-    dev/stop)   dev_stop ;;
-    prod/start) prod_start ;;
-    prod/stop)  prod_stop ;;
-    *) printf "Unknown command: %s %s\nUsage: %s <dev|prod> <start|stop>\n" "$MODE" "$ACTION" "$0"; exit 1 ;;
+    dev/start)    dev_start ;;
+    dev/stop)     dev_stop ;;
+    dev/restart)  dev_restart ;;
+    dev/status)   show_status true ;;
+    prod/start)   prod_start ;;
+    prod/stop)    prod_stop ;;
+    prod/restart) prod_restart ;;
+    prod/status)  show_status false ;;
+    *) printf "Unknown command: %s %s\nUsage: %s <dev|prod> <start|stop|restart|status>\n" "$MODE" "$ACTION" "$0"; exit 1 ;;
 esac
