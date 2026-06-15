@@ -30,6 +30,7 @@ const SIDEBAR_MAX     = 420
 const SIDEBAR_LS_KEY  = 'devbrain_sidebar_w'
 const DENSITY_LS_KEY  = 'devbrain_density'
 type Density = 'compact' | 'normal' | 'comfy' | 'xl'
+const DENSITY_ZOOM: Record<Density, number> = { compact: 0.92, normal: 1, comfy: 1.15, xl: 1.23 }
 type Tint    = 'cool' | 'black' | 'warm'
 
 const ROUTE_PATHS: Record<RouteId, string> = {
@@ -480,7 +481,7 @@ export default function App() {
             </div>
             {/* Density quick-toggle */}
             <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
-              {(['compact', 'normal', 'comfy'] as Density[]).map(d => (
+              {(['compact', 'normal', 'comfy', 'xl'] as Density[]).map(d => (
                 <button key={d} onClick={() => setDensity(d)}
                   style={{ flex: 1, height: 18, borderRadius: 3, border: '1px solid var(--line-2)', background: density === d ? 'var(--accent)' : 'var(--bg-elev)', color: density === d ? 'white' : 'var(--fg-4)', fontSize: '9px', cursor: 'default' }}>
                   {d[0].toUpperCase()}
@@ -492,7 +493,7 @@ export default function App() {
       </nav>
 
       {/* ── Main ─────────────────────────────────────────────────────────── */}
-      <main style={{ overflow: 'hidden', position: 'relative', display: 'flex', flexDirection: 'column', background: 'var(--bg)', minWidth: 0 }}>
+      <main style={{ overflow: 'hidden', position: 'relative', display: 'flex', flexDirection: 'column', background: 'var(--bg)', minWidth: 0, zoom: DENSITY_ZOOM[density] }}>
         {offline && (
           <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 100, background: '#F59E0B', color: '#000', fontSize: 12, fontWeight: 500, padding: '5px 16px', textAlign: 'center' }}>
             You are offline — some features may be unavailable

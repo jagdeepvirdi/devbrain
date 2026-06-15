@@ -91,11 +91,6 @@ a { color: inherit; text-decoration: none; }
 }
 .app[data-sidebar="collapsed"] { --sidebar-w: 56px; }
 
-/* Font size scaling — zoom scales ALL content including hardcoded px inline styles */
-.app[data-density="compact"] { zoom: 0.92; }
-/* normal → zoom: 1 (browser default, no rule needed) */
-.app[data-density="comfy"]   { zoom: 1.15; }
-.app[data-density="xl"]      { zoom: 1.23; }
 
 /* Collapsed sidebar — hide text labels */
 .app[data-sidebar="collapsed"] .sidebar-label,
