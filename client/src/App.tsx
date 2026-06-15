@@ -173,7 +173,7 @@ export default function App() {
     function onMouseMove(ev: MouseEvent) {
       if (!dragRef.current) return
       const newW = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN,
-        dragRef.current.startW + ev.clientX - dragRef.current.startX
+        dragRef.current.startW + (ev.clientX - dragRef.current.startX) / DENSITY_ZOOM[density]
       ))
       setSidebarWidth(newW)
     }
@@ -297,7 +297,11 @@ export default function App() {
       data-density={density}
       data-tint={tint}
       data-sidebar={sidebar}
-      style={sidebar === 'open' ? { '--sidebar-w': `${sidebarWidth}px` } as React.CSSProperties : {}}
+      style={{
+        ...(sidebar === 'open' ? { '--sidebar-w': `${sidebarWidth}px` } : {}),
+        zoom: DENSITY_ZOOM[density],
+        height: `${100 / DENSITY_ZOOM[density]}vh`,
+      } as React.CSSProperties}
     >
 
       {/* ── Top bar ──────────────────────────────────────────────────────── */}
@@ -493,7 +497,7 @@ export default function App() {
       </nav>
 
       {/* ── Main ─────────────────────────────────────────────────────────── */}
-      <main style={{ overflow: 'hidden', position: 'relative', display: 'flex', flexDirection: 'column', background: 'var(--bg)', minWidth: 0, zoom: DENSITY_ZOOM[density] }}>
+      <main style={{ overflow: 'hidden', position: 'relative', display: 'flex', flexDirection: 'column', background: 'var(--bg)', minWidth: 0 }}>
         {offline && (
           <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 100, background: '#F59E0B', color: '#000', fontSize: 12, fontWeight: 500, padding: '5px 16px', textAlign: 'center' }}>
             You are offline — some features may be unavailable
