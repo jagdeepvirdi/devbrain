@@ -8,7 +8,7 @@ import { pool }        from '../db/pool.js'
 import { env }         from '../lib/env.js'
 import { decrypt }     from '../services/crypto.js'
 import { ldapAuth, type LdapConfig } from '../services/ldap.js'
-import { requireAuth } from '../middleware/auth.js'
+import { requireAuth, tryApiToken, API_TOKEN_PREFIX } from '../middleware/auth.js'
 import { logAudit }    from '../services/audit.js'
 import { serverError } from '../lib/errors.js'
 
@@ -238,7 +238,7 @@ router.post('/register', async (req, res) => {
 
 // ── GET /api/auth/me ──────────────────────────────────────────────────────
 
-router.get('/me', (req, res) => {
+router.get('/me', async (req, res) => {
   if (!env.AUTH_PASSWORD) {
     res.json({ data: { authed: true, devMode: true, user: { id: 'dev', username: 'dev', role: 'admin' } } })
     return
@@ -251,6 +251,12 @@ router.get('/me', (req, res) => {
   const token = cookieToken ?? bearerToken
 
   if (!token) { res.json({ data: { authed: false } }); return }
+
+  if (token.startsWith(API_TOKEN_PREFIX)) {
+    const user = await tryApiToken(token).catch(() => null)
+    res.json(user ? { data: { authed: true, devMode: false, user } } : { data: { authed: false } })
+    return
+  }
 
   try {
     const payload = jwt.verify(token, env.JWT_SECRET, JWT_VERIFY_OPTS) as Record<string, unknown>

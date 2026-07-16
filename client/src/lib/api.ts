@@ -187,6 +187,54 @@ export const auditApi = {
   },
 }
 
+// ── API Tokens ────────────────────────────────────────────────────────────
+
+export type ApiToken = {
+  id:           string
+  name:         string
+  token_prefix: string
+  last_used_at: string | null
+  expires_at:   string | null
+  created_at:   string
+}
+
+export const apiTokensApi = {
+  list:   ()                                                     => request<ApiToken[]>('/api-tokens'),
+  create: (body: { name: string; expiresInDays?: number })       =>
+    request<ApiToken & { token: string }>('/api-tokens', { method: 'POST', body: JSON.stringify(body) }),
+  revoke: (id: string)                                           => request<{ deleted: string }>(`/api-tokens/${id}`, { method: 'DELETE' }),
+}
+
+// ── Entity Links (general cross-entity linking) ────────────────────────────
+
+export type LinkEntityType = 'task' | 'document' | 'issue' | 'release' | 'command'
+
+export type EntityLink = {
+  linkId:    string
+  type:      LinkEntityType
+  id:        string
+  title:     string
+  subtitle:  string | null
+  createdAt: string
+}
+
+export type GraphNode = { type: LinkEntityType; id: string; title: string; subtitle: string | null }
+export type GraphEdge = { linkId: string; from: { type: LinkEntityType; id: string }; to: { type: LinkEntityType; id: string } }
+
+export const linksApi = {
+  list: (entityType: LinkEntityType, entityId: string) =>
+    request<EntityLink[]>(`/links?entityType=${entityType}&entityId=${encodeURIComponent(entityId)}`),
+  create: (aType: LinkEntityType, aId: string, bType: LinkEntityType, bId: string) =>
+    request<{ id: string; created_at: string }>('/links', {
+      method: 'POST',
+      body: JSON.stringify({ aType, aId, bType, bId }),
+    }),
+  remove: (linkId: string) =>
+    request<{ deleted: string }>(`/links/${linkId}`, { method: 'DELETE' }),
+  graph: () =>
+    request<{ nodes: GraphNode[]; edges: GraphEdge[] }>('/links/graph'),
+}
+
 // ── Projects ──────────────────────────────────────────────────────────────
 
 export type Project = {
@@ -413,19 +461,30 @@ export type DocMeta = {
   id:               string
   project_id:       string | null
   title:            string
-  file_type:        'pdf' | 'docx' | 'md' | 'txt' | 'xlsx' | 'url'
+  file_type:        'pdf' | 'docx' | 'md' | 'txt' | 'xlsx' | 'url' | 'code'
   tags:             string[]
+  component:        string | null
+  language:         string | null
   source:           string
   content_hash:     string | null
   embedding_status: EmbeddingStatus
   created_at:       string
   content_length:   number
   chunk_count:      number
+  explanation_stale: boolean
+  diagram_stale:    boolean
   project_name:     string | null
   project_color:    string | null
 }
 
-export type DocDetail = DocMeta & { content: string }
+export type DocDetail = DocMeta & {
+  content:                    string
+  explanation:                string | null
+  diagram:                    string | null
+  source_document_id:         string | null
+  linked_explanation_id:      string | null
+  linked_explanation_title:   string | null
+}
 
 export const documentsApi = {
   list: (params?: {
@@ -433,6 +492,7 @@ export const documentsApi = {
     projectIds?: string[]
     fileType?: string[]
     tags?: string[]
+    component?: string[]
     dateFrom?: string
     dateTo?: string
     q?: string
@@ -451,6 +511,9 @@ export const documentsApi = {
     if (params?.tags) {
       params.tags.forEach(t => qs.append('tags[]', t))
     }
+    if (params?.component) {
+      params.component.forEach(c => qs.append('component[]', c))
+    }
     if (params?.dateFrom) qs.set('dateFrom', params.dateFrom)
     if (params?.dateTo) qs.set('dateTo', params.dateTo)
     if (params?.q) qs.set('q', params.q)
@@ -462,11 +525,12 @@ export const documentsApi = {
   },
   get: (id: string) => request<DocDetail>(`/documents/${id}`),
 
-  upload: async (file: File, projectId?: string, tags: string[] = []): Promise<DocMeta> => {
+  upload: async (file: File, projectId?: string, tags: string[] = [], component?: string): Promise<DocMeta> => {
     const fd = new FormData()
     fd.append('file', file)
     if (projectId) fd.append('projectId', projectId)
     fd.append('tags', JSON.stringify(tags))
+    if (component) fd.append('component', component)
     const res = await fetch('/api/documents', { method: 'POST', credentials: 'include', body: fd })
     const json = await res.json() as { data?: DocMeta; error?: string; existingId?: string }
     if (!res.ok) {
@@ -477,14 +541,22 @@ export const documentsApi = {
     return json.data!
   },
 
-  importUrl: (url: string, projectId?: string, tags: string[] = []) =>
+  importUrl: (url: string, projectId?: string, tags: string[] = [], component?: string) =>
     request<DocMeta>('/documents/url', {
       method: 'POST',
-      body: JSON.stringify({ url, projectId: projectId ?? null, tags }),
+      body: JSON.stringify({ url, projectId: projectId ?? null, tags, component }),
     }),
 
-  patch: (id: string, body: { title?: string; tags?: string[]; projectId?: string | null }) =>
+  patch: (id: string, body: { title?: string; tags?: string[]; component?: string | null; projectId?: string | null }) =>
     request<DocDetail>(`/documents/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+  components: (projectId?: string) =>
+    request<string[]>(`/documents/components${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+
+  chunkContext: (documentId: string, chunkIndex: number) =>
+    request<{ chunkIndex: number; chunks: { chunkIndex: number; content: string }[] }>(
+      `/documents/${documentId}/chunks/${chunkIndex}`
+    ),
 
   remove: (id: string) =>
     request<{ deleted: { id: string; title: string } }>(`/documents/${id}`, { method: 'DELETE' }),
@@ -492,9 +564,37 @@ export const documentsApi = {
   reembed: (id: string) =>
     request<{ id: string; embedding_status: EmbeddingStatus }>(`/documents/${id}/reembed`, { method: 'POST' }),
 
+  updateContent: async (id: string, file: File): Promise<DocDetail> => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await fetch(`/api/documents/${id}/update-content`, { method: 'POST', credentials: 'include', body: fd })
+    const json = await res.json() as { data?: DocDetail; error?: string }
+    if (!res.ok) throw new Error(json.error ?? `Update failed: ${res.status}`)
+    return json.data!
+  },
+
+  explain: (id: string) =>
+    request<{ explanation: string }>(`/documents/${id}/explain`, { method: 'POST' }),
+
+  diagram: (id: string) =>
+    request<{ diagram: string }>(`/documents/${id}/diagram`, { method: 'POST' }),
+
+  saveExplanation: (id: string) =>
+    request<DocMeta & { created: boolean }>(`/documents/${id}/save-explanation`, { method: 'POST' }),
+
   suggestTags: (title: string, hint?: string) =>
     request<{ tags: string[] }>('/documents/suggest-tags', { method: 'POST', body: JSON.stringify({ title, hint }) }),
-  bulk: (ids: string[], action: 're-embed' | 'tag' | 'delete', value?: string) =>
+
+  suggestTagsFromFile: async (file: File): Promise<{ tags: string[] }> => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await fetch('/api/documents/suggest-tags-from-file', { method: 'POST', credentials: 'include', body: fd })
+    const json = await res.json() as { data?: { tags: string[] }; error?: string }
+    if (!res.ok) throw new Error(json.error ?? `Request failed: ${res.status}`)
+    return json.data!
+  },
+
+  bulk: (ids: string[], action: 're-embed' | 'tag' | 'component' | 'delete', value?: string) =>
     request<{ success: boolean }>('/documents/bulk', { method: 'PATCH', body: JSON.stringify({ ids, action, value }) }),
 }
 
@@ -714,6 +814,7 @@ export const tasksApi = {
     const q = qs.toString()
     return request<Task[]>(`/tasks${q ? `?${q}` : ''}`)
   },
+  get:    (id: string)                             => request<Task>(`/tasks/${id}`),
   create: (body: TaskInput)                       => request<Task>('/tasks',       { method: 'POST', body: JSON.stringify(body) }),
   update: (id: string, body: Partial<TaskInput>)  => request<Task>(`/tasks/${id}`, { method: 'PUT',  body: JSON.stringify(body) }),
   remove:   (id: string)                            => request<{ deleted: { id: string; title: string } }>(`/tasks/${id}`, { method: 'DELETE' }),
@@ -999,6 +1100,7 @@ export const dashboardApi = {
 
 export type ChatCitation = {
   index:         number
+  id:            string
   documentId:    string
   documentTitle: string
   chunkIndex:    number
@@ -1006,24 +1108,49 @@ export type ChatCitation = {
   excerpt:       string
 }
 
-export type ChatScope = 'all' | 'project' | 'document'
+export type ChatScope = 'all' | 'project' | 'document' | 'component'
 
-export async function chatStream(
-  question:   string,
-  scope:      ChatScope,
-  projectId?: string | null,
-  documentId?: string | null,
-  onCitations?: (citations: ChatCitation[]) => void,
-  onChunk?:     (text: string) => void,
-): Promise<void> {
+export type ChatSession = {
+  id:             string
+  project_id:     string | null
+  component:      string | null
+  title:          string
+  created_at:     string
+  updated_at:     string
+  message_count:  number
+}
+
+export type ChatMessage = {
+  id:         string
+  role:       'user' | 'assistant'
+  content:    string
+  citations:  ChatCitation[] | null
+  created_at: string
+}
+
+export async function chatStream(opts: {
+  question:    string
+  scope:       ChatScope
+  sessionId?:  string | null
+  projectId?:  string | null
+  documentId?: string | null
+  component?:  string | null
+  onSession?:   (sessionId: string) => void
+  onCitations?: (citations: ChatCitation[]) => void
+  onChunk?:     (text: string) => void
+}): Promise<void> {
+  const { question, scope, sessionId, projectId, documentId, component, onSession, onCitations, onChunk } = opts
+
   const res = await fetch('/api/chat', {
     method:      'POST',
     credentials: 'include',
     headers:     { 'Content-Type': 'application/json' },
     body:        JSON.stringify({
       question,
+      sessionId:  sessionId ?? null,
       projectId:  scope === 'all' ? null : (projectId ?? null),
       documentId: scope === 'document' ? (documentId ?? null) : null,
+      component:  scope === 'component' ? (component ?? null) : null,
     }),
   })
 
@@ -1047,12 +1174,24 @@ export async function chatStream(
       if (raw === '[DONE]') return
       try {
         const evt = JSON.parse(raw) as { type: string; [k: string]: unknown }
+        if (evt.type === 'session')   onSession?.(evt.sessionId as string)
         if (evt.type === 'citations') onCitations?.(evt.citations as ChatCitation[])
         if (evt.type === 'chunk')     onChunk?.(evt.text as string)
         if (evt.type === 'error')     throw new Error(evt.message as string)
       } catch { /* skip malformed */ }
     }
   }
+}
+
+export const chatSessionsApi = {
+  list: (projectId?: string | null) =>
+    request<ChatSession[]>(`/chat/sessions${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+
+  getMessages: (sessionId: string) =>
+    request<ChatMessage[]>(`/chat/sessions/${sessionId}/messages`),
+
+  remove: (sessionId: string) =>
+    request<{ deleted: string }>(`/chat/sessions/${sessionId}`, { method: 'DELETE' }),
 }
 
 // ── Git Integration ───────────────────────────────────────────────────────

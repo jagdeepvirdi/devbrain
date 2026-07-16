@@ -22,6 +22,13 @@ logs/
 # TypeScript build cache
 *.tsbuildinfo
 
+# Downloaded ML model weights (reranker)
+server/.cache/
+
+# Playwright test artifacts
+client/playwright-report/
+client/test-results/
+
 # OS
 .DS_Store
 Thumbs.db

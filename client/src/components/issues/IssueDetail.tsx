@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { issuesApi, runbooksApi } from '../../lib/api'
 import type { Issue, IssueStep, IssueNote, RelatedDoc, RelatedIssue, RelatedCommand } from '../../lib/api'
 import { useToast } from '../Toast'
@@ -6,8 +7,10 @@ import { PRIORITY_META, STATUS_META } from './issueConstants'
 import type { Priority, Status } from './issueConstants'
 import { StepText } from './StepText'
 import { useRecentlyViewed } from '../../hooks/useRecentlyViewed'
+import { LinkedItems } from '../LinkedItems'
 
 export function IssueDetail({ issueId, onBack, onDeleted }: { issueId: string; onBack: () => void; onDeleted: () => void }) {
+  const navigate = useNavigate()
   const [issue,          setIssue]          = useState<Issue | null>(null)
   const [loading,        setLoading]        = useState(true)
   const [saving,         setSaving]         = useState(false)
@@ -564,6 +567,13 @@ export function IssueDetail({ issueId, onBack, onDeleted }: { issueId: string; o
               </button>
             </div>
           </div>
+
+          {/* General cross-entity links (Tasks / Documents / Codes / Releases / Commands) */}
+          <LinkedItems
+            entityType="issue"
+            entityId={issue.id}
+            onNavigate={(route, id) => navigate(`${route}?open=${id}`)}
+          />
 
         </div>
 

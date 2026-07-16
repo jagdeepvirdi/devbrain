@@ -7,6 +7,7 @@ import { ProjectSwitcher } from './components/projects/ProjectSwitcher'
 import { ProjectsPage }   from './pages/Projects'
 import { AiTaskPage }     from './pages/AiTask'
 import { DocumentsPage }  from './pages/Documents'
+import { CodesPage }      from './pages/Codes'
 import { DocChatPage }    from './pages/DocChat'
 import { IssuesPage }    from './pages/Issues'
 import { TasksPage }     from './pages/Tasks'
@@ -14,6 +15,7 @@ import { CommandsPage }  from './pages/Commands'
 import { ReleasesPage }  from './pages/Releases'
 import { RunbooksPage }  from './pages/Runbooks'
 import { DashboardPage } from './pages/Dashboard'
+import { GraphPage }     from './pages/Graph'
 import { SettingsPage }  from './pages/Settings'
 import { NotificationLogPage } from './pages/NotificationLog'
 import { LoginPage }     from './pages/Login'
@@ -22,7 +24,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { NotificationsPanel } from './components/NotificationsPanel'
 
 
-type RouteId = 'dashboard' | 'docs' | 'chat' | 'issues' | 'tasks' | 'commands' | 'releases' | 'runbooks' | 'projects' | 'aitask' | 'settings' | 'notificationLog'
+type RouteId = 'dashboard' | 'docs' | 'codes' | 'chat' | 'issues' | 'tasks' | 'commands' | 'releases' | 'runbooks' | 'graph' | 'projects' | 'aitask' | 'settings' | 'notificationLog'
 
 const SIDEBAR_DEFAULT = 220
 const SIDEBAR_MIN     = 180
@@ -36,12 +38,14 @@ type Tint    = 'cool' | 'black' | 'warm'
 const ROUTE_PATHS: Record<RouteId, string> = {
   dashboard: '/',
   docs:      '/docs',
+  codes:     '/codes',
   chat:      '/chat',
   issues:    '/issues',
   tasks:     '/tasks',
   commands:  '/commands',
   releases:  '/releases',
   runbooks:  '/runbooks',
+  graph:     '/graph',
   aitask:    '/aitask',
   projects:  '/projects',
   settings:  '/settings',
@@ -56,12 +60,14 @@ function pathToRoute(pathname: string): RouteId {
 const NAV_ITEMS: { id: RouteId; label: string; icon: string; dividerBefore?: boolean }[] = [
   { id: 'dashboard', label: 'Dashboard',  icon: '⊞' },
   { id: 'docs',      label: 'Documents',  icon: '📄' },
+  { id: 'codes',     label: 'Codes',      icon: '{}' },
   { id: 'chat',      label: 'Ask AI',     icon: '◆' },
   { id: 'issues',    label: 'Issues',     icon: '⚠' },
   { id: 'tasks',     label: 'Tasks',      icon: '☑' },
   { id: 'commands',  label: 'Commands',   icon: '>' },
   { id: 'releases',  label: 'Releases',   icon: '🏷' },
   { id: 'runbooks',  label: 'Runbooks',   icon: '▶' },
+  { id: 'graph',     label: 'Graph',      icon: '◈' },
   { id: 'aitask',    label: 'AI Task',    icon: '◆', dividerBefore: true },
   { id: 'projects',  label: 'Projects',   icon: '⊛' },
   { id: 'settings',  label: 'Settings',   icon: '⚙', dividerBefore: true },
@@ -232,12 +238,14 @@ export default function App() {
       case 'projects':  return wrap('projects',  <ProjectsPage />)
       case 'aitask':    return wrap('aitask',    <AiTaskPage />)
       case 'docs':      return wrap('docs',      <DocumentsPage />)
+      case 'codes':     return wrap('codes',     <CodesPage />)
       case 'chat':      return wrap('chat',      <DocChatPage />)
       case 'issues':    return wrap('issues',    <IssuesPage />)
       case 'tasks':     return wrap('tasks',     <TasksPage />)
       case 'commands':  return wrap('commands',  <CommandsPage />)
       case 'releases':  return wrap('releases',  <ReleasesPage />)
       case 'runbooks':  return wrap('runbooks',  <RunbooksPage />)
+      case 'graph':     return wrap('graph',     <GraphPage />)
       case 'dashboard': return wrap('dashboard', <DashboardPage />)
       case 'settings':  return wrap('settings',  <SettingsPage onLogout={() => { setAuthed(false); setCurrentUser(null) }} currentUser={currentUser} density={density} setDensity={setDensity} />)
       case 'notificationLog': return wrap('notificationLog', <NotificationLogPage />)

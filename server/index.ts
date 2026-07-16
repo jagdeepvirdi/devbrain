@@ -94,6 +94,9 @@ app.post('/api/documents',                mutationLimiter)
 app.post('/api/chat',                     mutationLimiter)
 app.post('/api/issues/:id/summarize',     mutationLimiter)
 app.post('/api/commands/:id/explain',     mutationLimiter)
+app.post('/api/documents/:id/explain',    mutationLimiter)
+app.post('/api/documents/:id/diagram',    mutationLimiter)
+app.post('/api/documents/:id/save-explanation', mutationLimiter)
 
 // ── Routes ────────────────────────────────────────────────────────────────
 
@@ -140,6 +143,10 @@ import exportRouter from './routes/export.js'
 app.use('/api/export', exportRouter)
 import templatesRouter from './routes/templates.js'
 app.use('/api/templates', templatesRouter)
+import apiTokensRouter from './routes/api-tokens.js'
+app.use('/api/api-tokens', apiTokensRouter)
+import linksRouter from './routes/links.js'
+app.use('/api/links', linksRouter)
 
 // ── Static client (production) ────────────────────────────────────────────
 

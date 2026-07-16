@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useProjectStore } from '../store/projectStore'
-import { searchApi } from '../lib/api'
+import { searchApi, documentsApi } from '../lib/api'
 import type { SavedFilter } from '../lib/api'
 import { useToast } from './Toast'
 
@@ -9,6 +9,7 @@ export interface FilterState {
   status: string[]
   priority: string[]
   tags: string[]
+  component: string[]
   dateFrom: string
   dateTo: string
   fileType: string[]
@@ -19,6 +20,7 @@ export const initialFilterState: FilterState = {
   status: [],
   priority: [],
   tags: [],
+  component: [],
   dateFrom: '',
   dateTo: '',
   fileType: [],
@@ -31,7 +33,7 @@ interface FilterBarProps {
 }
 
 export function FilterBar({ entityType, filters, onChange }: FilterBarProps) {
-  const { projects } = useProjectStore()
+  const { projects, selectedId } = useProjectStore()
   const { toast } = useToast()
 
   const [isOpen, setIsOpen] = useState(false)
@@ -39,9 +41,18 @@ export function FilterBar({ entityType, filters, onChange }: FilterBarProps) {
   const [showSaveModal, setShowSaveModal] = useState(false)
   const [newPresetName, setNewPresetName] = useState('')
   const [isSavingPreset, setIsSavingPreset] = useState(false)
+  const [componentOptions, setComponentOptions] = useState<string[]>([])
 
   // Tag input state
   const [tagInput, setTagInput] = useState('')
+
+  // Load distinct component values for the current project scope (documents only)
+  useEffect(() => {
+    if (entityType !== 'documents') return
+    documentsApi.components(selectedId ?? undefined)
+      .then(setComponentOptions)
+      .catch(() => setComponentOptions([]))
+  }, [entityType, selectedId])
 
   // Load presets on mount
   const loadPresets = async () => {
@@ -64,6 +75,7 @@ export function FilterBar({ entityType, filters, onChange }: FilterBarProps) {
       filters.status.length > 0 ||
       filters.priority.length > 0 ||
       filters.tags.length > 0 ||
+      filters.component.length > 0 ||
       filters.dateFrom !== '' ||
       filters.dateTo !== '' ||
       filters.fileType.length > 0
@@ -93,6 +105,13 @@ export function FilterBar({ entityType, filters, onChange }: FilterBarProps) {
       ? filters.fileType.filter(v => v !== val)
       : [...filters.fileType, val]
     onChange({ ...filters, fileType: next })
+  }
+
+  const toggleComponent = (val: string) => {
+    const next = filters.component.includes(val)
+      ? filters.component.filter(v => v !== val)
+      : [...filters.component, val]
+    onChange({ ...filters, component: next })
   }
 
   const toggleProject = (val: string) => {
@@ -384,7 +403,7 @@ export function FilterBar({ entityType, filters, onChange }: FilterBarProps) {
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {[
                   { value: 'pdf', label: 'PDF' },
-                  { value: 'docx', label: 'Word (DOCX)' },
+                  { value: 'docx', label: 'Word (DOC/DOCX)' },
                   { value: 'md', label: 'Markdown' },
                   { value: 'txt', label: 'Text' },
                   { value: 'xlsx', label: 'Excel (XLSX)' },
@@ -410,6 +429,41 @@ export function FilterBar({ entityType, filters, onChange }: FilterBarProps) {
                   )
                 })}
               </div>
+            </div>
+          )}
+
+          {/* Component (Documents only) */}
+          {entityType === 'documents' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Component</span>
+              {componentOptions.length === 0 ? (
+                <span style={{ fontSize: '11.5px', color: 'var(--fg-4)' }}>
+                  No components set yet — assign one when uploading or via bulk select.
+                </span>
+              ) : (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {componentOptions.map(c => {
+                    const isActive = filters.component.includes(c)
+                    return (
+                      <button
+                        key={c}
+                        onClick={() => toggleComponent(c)}
+                        style={{
+                          padding: '4px 10px',
+                          borderRadius: 12,
+                          background: isActive ? 'var(--accent-dim)' : 'transparent',
+                          border: `1px solid ${isActive ? 'var(--accent)' : 'var(--line-2)'}`,
+                          fontSize: '11.5px',
+                          color: isActive ? 'var(--accent-2)' : 'var(--fg-3)',
+                          transition: 'all 0.15s ease',
+                        }}
+                      >
+                        {c}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -585,6 +639,27 @@ export function FilterBar({ entityType, filters, onChange }: FilterBarProps) {
             >
               Type: {ft}
               <button onClick={() => toggleFileType(ft)} style={{ color: 'var(--fg-3)', fontSize: 12 }}>✕</button>
+            </span>
+          ))}
+
+          {/* Component Pills */}
+          {filters.component.map(c => (
+            <span
+              key={c}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '2px 8px',
+                borderRadius: 12,
+                background: 'var(--bg-elev-2)',
+                border: '1px solid var(--line-2)',
+                fontSize: '11px',
+                color: 'var(--fg)',
+              }}
+            >
+              Component: {c}
+              <button onClick={() => toggleComponent(c)} style={{ color: 'var(--fg-3)', fontSize: 12 }}>✕</button>
             </span>
           ))}
 

@@ -1,7 +1,9 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useProjectStore } from '../store/projectStore'
-import { documentsApi, chatStream } from '../lib/api'
-import type { DocMeta, ChatCitation, ChatScope } from '../lib/api'
+import { documentsApi, chatStream, chatSessionsApi } from '../lib/api'
+import type { DocMeta, ChatCitation, ChatScope, ChatSession } from '../lib/api'
+
+const CHAT_SESSION_LS_KEY = 'devbrain_chat_session'
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -81,7 +83,13 @@ function inlineMd(text: string): string {
 
 // ── Sub-components ────────────────────────────────────────────────────────
 
-function CitationCard({ c }: { c: ChatCitation }) {
+function CitationCard({ c, refCount, onViewContext }: { c: ChatCitation; refCount: number; onViewContext: () => void }) {
+  // chunkIndex -1 = document-level summary sentinel, -2 = Full Context Mode
+  // (Phase 32.6) — neither has real neighbor chunks, so "view in context"
+  // doesn't apply to either.
+  const isSummary = c.chunkIndex === -1
+  const isFullDoc = c.chunkIndex === -2
+  const noNeighbors = isSummary || isFullDoc
   return (
     <details style={{
       marginTop: 6, borderRadius: 5,
@@ -104,8 +112,23 @@ function CitationCard({ c }: { c: ChatCitation }) {
         <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {c.documentTitle}
         </span>
+        {refCount > 1 && (
+          <span style={{ color: 'var(--fg-4)', fontSize: '10px', flexShrink: 0 }}>
+            referenced {refCount}×
+          </span>
+        )}
+        {!noNeighbors && (
+          <button
+            onClick={e => { e.preventDefault(); e.stopPropagation(); onViewContext() }}
+            title="View in context"
+            style={{ color: 'var(--fg-3)', fontSize: '11px', padding: '1px 5px', borderRadius: 3, flexShrink: 0, cursor: 'default' }}
+          >
+            ⤢
+          </button>
+        )}
         <span style={{ color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', fontSize: '10.5px', flexShrink: 0 }}>
-          §{c.chunkIndex} · {Math.round(c.score * 100)}%
+          {isSummary ? '📝 summary' : isFullDoc ? '📄 full document' : `§${c.chunkIndex}`}
+          {!isFullDoc && ` · ${Math.round(c.score * 100)}%`}
         </span>
       </summary>
       <div style={{
@@ -119,7 +142,73 @@ function CitationCard({ c }: { c: ChatCitation }) {
   )
 }
 
-function AiMessage({ msg }: { msg: Extract<Message, { role: 'ai' }> }) {
+// ── Citation "view in context" modal ─────────────────────────────────────
+
+function ChunkContextModal({ citation, onClose }: { citation: ChatCitation; onClose: () => void }) {
+  const [data, setData] = useState<{ chunkIndex: number; chunks: { chunkIndex: number; content: string }[] } | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    documentsApi.chunkContext(citation.documentId, citation.chunkIndex)
+      .then(setData)
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [citation.documentId, citation.chunkIndex])
+
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(5,5,10,.65)', backdropFilter: 'blur(4px)', zIndex: 300, display: 'grid', placeItems: 'center' }}
+      onClick={e => e.target === e.currentTarget && onClose()}
+    >
+      <div style={{
+        background: 'var(--bg-elev)', border: '1px solid var(--line-3)', borderRadius: 10,
+        width: 560, maxWidth: '90vw', maxHeight: '70vh',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        boxShadow: '0 20px 60px rgba(0,0,0,.5)',
+      }}>
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {citation.documentTitle}
+          </span>
+          <button onClick={onClose} style={{ color: 'var(--fg-3)', fontSize: 13, padding: '2px 6px', borderRadius: 'var(--radius)' }}>✕</button>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
+          {loading ? (
+            <div style={{ color: 'var(--fg-4)', fontSize: 12.5 }}>Loading…</div>
+          ) : !data ? (
+            <div style={{ color: 'var(--fg-4)', fontSize: 12.5 }}>Couldn't load this chunk.</div>
+          ) : (
+            data.chunks.map(ch => {
+              const isCited = ch.chunkIndex === citation.chunkIndex
+              return (
+                <div key={ch.chunkIndex} style={{
+                  marginBottom: 12, padding: '10px 12px', borderRadius: 6,
+                  background: isCited ? 'var(--accent-dim)' : 'var(--bg-elev-2)',
+                  border: `1px solid ${isCited ? 'var(--accent-line)' : 'var(--line)'}`,
+                }}>
+                  <div style={{ fontSize: 10.5, color: isCited ? 'var(--accent-2)' : 'var(--fg-4)', fontFamily: 'var(--font-mono)', marginBottom: 6, fontWeight: isCited ? 700 : 400 }}>
+                    §{ch.chunkIndex}{isCited ? ' — cited' : ''}
+                  </div>
+                  <div style={{ fontSize: 12.5, color: 'var(--fg-2)', lineHeight: 1.6, whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)' }}>
+                    {ch.content}
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AiMessage({ msg, onViewContext }: { msg: Extract<Message, { role: 'ai' }>; onViewContext: (c: ChatCitation) => void }) {
+  const refCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const c of msg.citations) counts[c.documentId] = (counts[c.documentId] ?? 0) + 1
+    return counts
+  }, [msg.citations])
   return (
     <div data-testid="ai-message" style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
       <div style={{
@@ -151,7 +240,9 @@ function AiMessage({ msg }: { msg: Extract<Message, { role: 'ai' }> }) {
       </div>
       {msg.citations.length > 0 && !msg.streaming && (
         <div style={{ paddingLeft: 28, width: '88%' }}>
-          {msg.citations.map(c => <CitationCard key={c.index} c={c} />)}
+          {msg.citations.map(c => (
+            <CitationCard key={c.index} c={c} refCount={refCounts[c.documentId]} onViewContext={() => onViewContext(c)} />
+          ))}
         </div>
       )}
     </div>
@@ -171,9 +262,64 @@ export function DocChatPage() {
   const [busy,       setBusy]       = useState(false)
   const [scope,      setScope]      = useState<ChatScope>('all')
   const [activeDoc,  setActiveDoc]  = useState<DocMeta | null>(null)
+  const [componentOptions, setComponentOptions] = useState<string[]>([])
+  const [activeComponent,  setActiveComponent]  = useState<string | null>(null)
+  const [sessionId,   setSessionId]   = useState<string | null>(null)
+  const [sessions,    setSessions]    = useState<ChatSession[]>([])
+  const [showSessions, setShowSessions] = useState(false)
+  const [viewingCitation, setViewingCitation] = useState<ChatCitation | null>(null)
 
   const endRef      = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  const loadSessions = useCallback(() => {
+    chatSessionsApi.list(project?.id).then(setSessions).catch(() => setSessions([]))
+  }, [project])
+
+  useEffect(() => { loadSessions() }, [loadSessions])
+
+  // Resume the last active session (if any) on mount, so history survives a refresh.
+  useEffect(() => {
+    const savedId = localStorage.getItem(CHAT_SESSION_LS_KEY)
+    if (!savedId) return
+    chatSessionsApi.getMessages(savedId)
+      .then(dbMessages => {
+        setSessionId(savedId)
+        setMessages(dbMessages.map(m => m.role === 'user'
+          ? { role: 'user', text: m.content }
+          : { role: 'ai', text: m.content, citations: m.citations ?? [], streaming: false }
+        ))
+      })
+      .catch(() => localStorage.removeItem(CHAT_SESSION_LS_KEY))
+  }, [])
+
+  function handleNewChat() {
+    setSessionId(null)
+    setMessages([])
+    localStorage.removeItem(CHAT_SESSION_LS_KEY)
+    setShowSessions(false)
+  }
+
+  async function handleSelectSession(s: ChatSession) {
+    try {
+      const dbMessages = await chatSessionsApi.getMessages(s.id)
+      setSessionId(s.id)
+      localStorage.setItem(CHAT_SESSION_LS_KEY, s.id)
+      setMessages(dbMessages.map(m => m.role === 'user'
+        ? { role: 'user', text: m.content }
+        : { role: 'ai', text: m.content, citations: m.citations ?? [], streaming: false }
+      ))
+    } finally {
+      setShowSessions(false)
+    }
+  }
+
+  async function handleDeleteSession(id: string, e: React.MouseEvent) {
+    e.stopPropagation()
+    await chatSessionsApi.remove(id).catch(() => {})
+    if (id === sessionId) handleNewChat()
+    loadSessions()
+  }
 
   // Load documents scoped to project (or all if no project selected)
   const loadDocs = useCallback(async () => {
@@ -190,6 +336,11 @@ export function DocChatPage() {
 
   useEffect(() => { loadDocs() }, [loadDocs])
 
+  // Load distinct component values scoped to project (or all if no project selected)
+  useEffect(() => {
+    documentsApi.components(project?.id).then(setComponentOptions).catch(() => setComponentOptions([]))
+  }, [project])
+
   // Auto-scroll to latest message
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -199,6 +350,11 @@ export function DocChatPage() {
   useEffect(() => {
     if (!activeDoc && scope === 'document') setScope('all')
   }, [activeDoc, scope])
+
+  // Reset scope when active component cleared
+  useEffect(() => {
+    if (!activeComponent && scope === 'component') setScope('all')
+  }, [activeComponent, scope])
 
   function appendChunk(text: string) {
     setMessages(prev => {
@@ -236,14 +392,18 @@ export function DocChatPage() {
     setMessages(prev => [...prev, userMsg, aiMsg])
 
     try {
-      await chatStream(
-        q,
+      await chatStream({
+        question:    q,
         scope,
-        project?.id ?? null,
-        activeDoc?.id ?? null,
-        setCitations,
-        appendChunk,
-      )
+        sessionId,
+        projectId:   project?.id ?? null,
+        documentId:  activeDoc?.id ?? null,
+        component:   activeComponent,
+        onSession:   (id) => { setSessionId(id); localStorage.setItem(CHAT_SESSION_LS_KEY, id) },
+        onCitations: setCitations,
+        onChunk:     appendChunk,
+      })
+      loadSessions()
     } catch (err) {
       setMessages(prev => {
         const last = prev[prev.length - 1]
@@ -269,9 +429,10 @@ export function DocChatPage() {
   }
 
   const scopeLabel: Record<ChatScope, string> = {
-    all:      'All docs',
-    project:  project ? project.name : 'All docs',
-    document: activeDoc?.title ?? 'This doc',
+    all:       'All docs',
+    project:   project ? project.name : 'All docs',
+    document:  activeDoc?.title ?? 'This doc',
+    component: activeComponent ?? 'Component',
   }
 
   return (
@@ -290,6 +451,31 @@ export function DocChatPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 4 }}>
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: project.color, flexShrink: 0 }} />
               <span style={{ fontSize: '12px', color: 'var(--fg-3)' }}>{project.name}</span>
+            </div>
+          )}
+          {componentOptions.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
+              {componentOptions.map(c => {
+                const active = activeComponent === c
+                return (
+                  <button
+                    key={c}
+                    onClick={() => {
+                      setActiveComponent(active ? null : c)
+                      if (!active) setScope('component')
+                    }}
+                    style={{
+                      padding: '2px 8px', borderRadius: 10, fontSize: '10.5px', fontWeight: 600,
+                      background: active ? 'var(--accent)' : 'var(--bg-elev-2)',
+                      color: active ? 'white' : 'var(--fg-3)',
+                      border: `1px solid ${active ? 'var(--accent)' : 'var(--line)'}`,
+                      cursor: 'default',
+                    }}
+                  >
+                    {c}
+                  </button>
+                )
+              })}
             </div>
           )}
         </div>
@@ -364,8 +550,8 @@ export function DocChatPage() {
         }}>
           <span style={{ fontSize: '11.5px', color: 'var(--fg-3)', flexShrink: 0 }}>Scope:</span>
           <div style={{ display: 'flex', gap: 3, background: 'var(--bg)', border: '1px solid var(--line)', borderRadius: 5, padding: 2 }}>
-            {(['all', 'project', 'document'] as ChatScope[]).map(s => {
-              const disabled = (s === 'project' && !project) || (s === 'document' && !activeDoc)
+            {(['all', 'project', 'document', 'component'] as ChatScope[]).map(s => {
+              const disabled = (s === 'project' && !project) || (s === 'document' && !activeDoc) || (s === 'component' && !activeComponent)
               return (
                 <button
                   key={s}
@@ -385,7 +571,7 @@ export function DocChatPage() {
               )
             })}
           </div>
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, position: 'relative' }}>
             <span style={{
               fontSize: '10.5px', color: 'var(--fg-4)',
               background: 'var(--bg-elev-2)', border: '1px solid var(--line)',
@@ -393,13 +579,77 @@ export function DocChatPage() {
             }}>
               ⚡ local
             </span>
+
+            <button
+              onClick={() => setShowSessions(v => !v)}
+              style={{
+                fontSize: '11px', color: 'var(--fg-2)', padding: '3px 8px', borderRadius: 4,
+                background: showSessions ? 'var(--bg-elev-2)' : 'transparent',
+                border: '1px solid var(--line)', cursor: 'default',
+              }}
+            >
+              💬 Chats {sessions.length > 0 && `(${sessions.length})`}
+            </button>
+
             {messages.length > 0 && (
               <button
-                onClick={() => setMessages([])}
+                onClick={handleNewChat}
                 style={{ fontSize: '11px', color: 'var(--fg-4)', padding: '2px 6px', borderRadius: 4, cursor: 'default' }}
               >
-                Clear
+                New chat
               </button>
+            )}
+
+            {showSessions && (
+              <div style={{
+                position: 'absolute', top: '100%', right: 0, marginTop: 6,
+                width: 260, maxHeight: 320, overflowY: 'auto',
+                background: 'var(--bg-elev)', border: '1px solid var(--line-2)', borderRadius: 8,
+                boxShadow: '0 10px 30px rgba(0,0,0,.4)', zIndex: 50, padding: 6,
+              }}>
+                <button
+                  onClick={handleNewChat}
+                  style={{
+                    width: '100%', textAlign: 'left', padding: '7px 8px', borderRadius: 5,
+                    fontSize: '12px', color: 'var(--accent-2)', background: 'var(--accent-dim)',
+                    border: '1px solid var(--accent-line)', marginBottom: 4, cursor: 'default',
+                  }}
+                >
+                  + New chat
+                </button>
+                {sessions.length === 0 ? (
+                  <div style={{ padding: '10px 8px', fontSize: '11.5px', color: 'var(--fg-4)' }}>No saved chats yet.</div>
+                ) : (
+                  sessions.map(s => (
+                    <div
+                      key={s.id}
+                      onClick={() => handleSelectSession(s)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 6, padding: '7px 8px', borderRadius: 5,
+                        background: s.id === sessionId ? 'var(--bg-elev-2)' : 'transparent',
+                        boxShadow: s.id === sessionId ? 'inset 0 0 0 1px var(--accent)' : 'none',
+                        cursor: 'default',
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: '12px', color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {s.title}
+                        </div>
+                        <div style={{ fontSize: '10.5px', color: 'var(--fg-4)' }}>
+                          {s.message_count} message{s.message_count !== 1 ? 's' : ''}
+                        </div>
+                      </div>
+                      <button
+                        onClick={(e) => handleDeleteSession(s.id, e)}
+                        style={{ color: 'var(--fg-4)', fontSize: 11, padding: '2px 5px', borderRadius: 3, opacity: 0.6 }}
+                        title="Delete chat"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -421,11 +671,15 @@ export function DocChatPage() {
                 </div>
               </div>
             ) : (
-              <AiMessage key={i} msg={msg} />
+              <AiMessage key={i} msg={msg} onViewContext={setViewingCitation} />
             )
           ))}
           <div ref={endRef} />
         </div>
+
+        {viewingCitation && (
+          <ChunkContextModal citation={viewingCitation} onClose={() => setViewingCitation(null)} />
+        )}
 
         {/* Composer */}
         <div style={{

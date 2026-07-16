@@ -5,6 +5,7 @@ import { pool }   from '../db/pool.js'
 import { aiChat, aiEmbed } from '../services/ai.js'
 import { buildSetClause }  from '../lib/db.js'
 import { requireRole } from '../middleware/auth.js'
+import { deleteLinksFor } from '../services/links.js'
 
 function embedIssueAsync(id: string, title: string, description: string): void {
   const text = [title, description].filter(Boolean).join('. ')
@@ -477,6 +478,7 @@ router.delete('/:id', requireRole('member'), async (req, res) => {
       [req.params.id]
     )
     if (!rows.length) return res.status(404).json({ error: 'Issue not found' })
+    await deleteLinksFor('issue', req.params.id as string)
     res.json({ data: { deleted: rows[0] } })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })

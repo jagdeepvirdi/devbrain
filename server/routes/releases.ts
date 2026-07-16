@@ -3,6 +3,7 @@ import { z }      from 'zod'
 import { pool }   from '../db/pool.js'
 import { aiChat } from '../services/ai.js'
 import { requireRole } from '../middleware/auth.js'
+import { deleteLinksFor } from '../services/links.js'
 
 const router = Router()
 
@@ -394,6 +395,7 @@ router.delete('/:id', requireRole('member'), async (req, res) => {
       [req.params.id]
     )
     if (!rows.length) return res.status(404).json({ error: 'Release not found' })
+    await deleteLinksFor('release', req.params.id as string)
     res.json({ data: { deleted: rows[0] } })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })

@@ -82,9 +82,25 @@ CREATE TABLE IF NOT EXISTS documents (
   project_id       TEXT        REFERENCES projects(id) ON DELETE CASCADE,
   title            TEXT        NOT NULL,
   file_type        TEXT        NOT NULL
-                     CHECK (file_type IN ('pdf', 'docx', 'md', 'txt', 'xlsx', 'url')),
+                     CHECK (file_type IN ('pdf', 'docx', 'md', 'txt', 'xlsx', 'url', 'code')),
   content          TEXT        NOT NULL DEFAULT '',
   tags             TEXT[]      NOT NULL DEFAULT '{}',
+  -- Single-select feature/module grouping, e.g. 'SAP', 'BPP', 'Payment' — distinct from tags (multi-select).
+  component        TEXT,
+  -- Set only when file_type = 'code' — source language, e.g. 'typescript', 'python'.
+  language         TEXT,
+  -- AI-generated explanation, populated on demand via POST /:id/explain (code files only).
+  explanation      TEXT,
+  -- content_hash at the moment `explanation` was generated — lets the API report
+  -- explanation_stale when content_hash has since moved on (see update-content route).
+  explanation_hash TEXT,
+  -- AI-generated Mermaid diagram definition, populated on demand via POST /:id/diagram
+  -- (code files only). diagram_hash mirrors explanation_hash's staleness pattern.
+  diagram          TEXT,
+  diagram_hash     TEXT,
+  -- Set when this doc was generated FROM another doc (e.g. "Save as document" on a
+  -- code file's explanation) — points at the source, not the other way round.
+  source_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
   source           TEXT        NOT NULL DEFAULT '',
   content_hash     TEXT,
   -- 'pending' | 'processing' | 'done' | 'failed'
@@ -105,6 +121,8 @@ CREATE INDEX IF NOT EXISTS documents_tsv_idx        ON documents USING GIN (tsv)
 CREATE INDEX IF NOT EXISTS documents_project_idx    ON documents (project_id);
 CREATE INDEX IF NOT EXISTS documents_hash_idx       ON documents (content_hash) WHERE content_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS documents_emb_status_idx ON documents (embedding_status) WHERE embedding_status != 'done';
+CREATE INDEX IF NOT EXISTS documents_component_idx  ON documents (project_id, component) WHERE component IS NOT NULL;
+CREATE INDEX IF NOT EXISTS documents_source_doc_idx  ON documents (source_document_id) WHERE source_document_id IS NOT NULL;
 
 -- ── Document chunks (RAG) ─────────────────────────────────────────────────
 
@@ -115,6 +133,9 @@ CREATE TABLE IF NOT EXISTS document_chunks (
   chunk_index  INTEGER     NOT NULL,
   -- nomic-embed-text -> 768 dimensions
   embedding    VECTOR(768),
+  -- Full-text ranking must happen at chunk granularity, not whole-document —
+  -- used for hybrid search (fused with vector similarity via RRF).
+  tsv          TSVECTOR    GENERATED ALWAYS AS (to_tsvector('english', coalesce(content, ''))) STORED,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (document_id, chunk_index)
 );
@@ -126,6 +147,36 @@ CREATE INDEX IF NOT EXISTS document_chunks_hnsw_idx
   WITH (m = 16, ef_construction = 64);
 
 CREATE INDEX IF NOT EXISTS document_chunks_doc_idx ON document_chunks (document_id);
+CREATE INDEX IF NOT EXISTS document_chunks_tsv_idx ON document_chunks USING GIN (tsv);
+
+-- ── Chat sessions & messages (DocChat conversation memory) ────────────────
+
+CREATE TABLE IF NOT EXISTS chat_sessions (
+  id         TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  user_id    TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id TEXT        REFERENCES projects(id) ON DELETE CASCADE,
+  component  TEXT,
+  title      TEXT        NOT NULL DEFAULT 'New chat',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE TRIGGER trg_chat_sessions_updated_at
+  BEFORE UPDATE ON chat_sessions
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX IF NOT EXISTS chat_sessions_user_idx ON chat_sessions (user_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id         TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  session_id TEXT        NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  role       TEXT        NOT NULL CHECK (role IN ('user', 'assistant')),
+  content    TEXT        NOT NULL DEFAULT '',
+  citations  JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS chat_messages_session_idx ON chat_messages (session_id, created_at);
 
 -- ── Issues ────────────────────────────────────────────────────────────────
 
@@ -480,6 +531,46 @@ CREATE TABLE IF NOT EXISTS user_invites (
 );
 CREATE INDEX IF NOT EXISTS user_invites_token_idx ON user_invites (token_hash);
 
+-- ── Entity links (general cross-entity linking) ───────────────────────────
+-- Polymorphic, undirected many-to-many links between Tasks, Documents
+-- (Codes included — they're documents with file_type='code'), Issues,
+-- Releases, and Commands. No FK to the underlying tables is possible since
+-- the id can point into any of five different tables depending on *_type —
+-- routes are responsible for validating the referenced row exists on
+-- create, and for calling deleteLinksFor() when an entity is deleted.
+-- The pair is stored in a canonical (a <= b) order so a link created as
+-- (issue, X) -> (document, Y) and one created as (document, Y) -> (issue, X)
+-- collapse to the same row instead of duplicating.
+
+CREATE TABLE IF NOT EXISTS entity_links (
+  id         TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  a_type     TEXT        NOT NULL CHECK (a_type IN ('task', 'document', 'issue', 'release', 'command')),
+  a_id       TEXT        NOT NULL,
+  b_type     TEXT        NOT NULL CHECK (b_type IN ('task', 'document', 'issue', 'release', 'command')),
+  b_id       TEXT        NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (a_type, a_id, b_type, b_id)
+);
+CREATE INDEX IF NOT EXISTS entity_links_a_idx ON entity_links (a_type, a_id);
+CREATE INDEX IF NOT EXISTS entity_links_b_idx ON entity_links (b_type, b_id);
+
+-- ── API tokens ─────────────────────────────────────────────────────────────
+-- Long-lived personal access tokens for scripting/curl against the API,
+-- generated from Settings > Account. Only the sha256 hash is stored —
+-- the raw token is shown once at creation time, same pattern as user_invites.
+
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id           TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  user_id      TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name         TEXT        NOT NULL,
+  token_hash   TEXT        NOT NULL UNIQUE,
+  token_prefix TEXT        NOT NULL,  -- first 8 chars of the raw token, for display in the list
+  last_used_at TIMESTAMPTZ,
+  expires_at   TIMESTAMPTZ,           -- NULL = never expires
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS api_tokens_user_idx ON api_tokens (user_id);
+CREATE INDEX IF NOT EXISTS api_tokens_hash_idx ON api_tokens (token_hash);
 
 
 

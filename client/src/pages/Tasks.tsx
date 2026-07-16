@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useProjectStore } from '../store/projectStore'
 import { tasksApi } from '../lib/api'
 import type { Task, TaskInput } from '../lib/api'
+import { LinkedItems } from '../components/LinkedItems'
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -186,6 +188,7 @@ function TaskCard({
 // ── Task detail panel ─────────────────────────────────────────────────────
 
 function TaskPanel({ task, onClose, onUpdate }: { task: Task; onClose: () => void; onUpdate: (t: Task) => void }) {
+  const navigate = useNavigate()
   const { projects } = useProjectStore()
   const [form, setForm] = useState({ ...task })
   const [saving, setSaving] = useState(false)
@@ -299,6 +302,13 @@ function TaskPanel({ task, onClose, onUpdate }: { task: Task; onClose: () => voi
             />
           </div>
 
+          {/* General cross-entity links (Documents / Codes / Issues / Releases / Commands) */}
+          <LinkedItems
+            entityType="task"
+            entityId={task.id}
+            onNavigate={(route, id) => navigate(`${route}?open=${id}`)}
+          />
+
           {/* Meta */}
           <div style={{ fontSize: '11px', color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>
             Created {new Date(task.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
@@ -350,6 +360,7 @@ function Column({ col, tasks, onUpdate, onDelete, onExpand }: {
 export function TasksPage() {
   const { selectedProject } = useProjectStore()
   const project = selectedProject()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [tasks,    setTasks]    = useState<Task[]>([])
   const [loading,  setLoading]  = useState(true)
@@ -371,6 +382,15 @@ export function TasksPage() {
   }, [project, filterPriority])
 
   useEffect(() => { load() }, [load])
+
+  // Deep-link support (?open=<id>) — fetches directly by id so a task linked
+  // from a different project still opens, regardless of the current filter.
+  useEffect(() => {
+    const openId = searchParams.get('open')
+    if (!openId || expanded?.id === openId) return
+    tasksApi.get(openId).then(setExpanded).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
 
   async function handleUpdate(id: string, updates: Partial<TaskInput>) {
     const updated = await tasksApi.update(id, updates)
@@ -497,7 +517,7 @@ export function TasksPage() {
       {expanded && (
         <TaskPanel
           task={expanded}
-          onClose={() => setExpanded(null)}
+          onClose={() => { setExpanded(null); if (searchParams.get('open')) setSearchParams({}, { replace: true }) }}
           onUpdate={handlePanelUpdate}
         />
       )}

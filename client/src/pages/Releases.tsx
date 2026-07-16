@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { releasesApi, gitApi, type Release, type ReleaseInput, type AiReleaseNotes } from '../lib/api'
 import { useProjectStore } from '../store/projectStore'
+import { LinkedItems } from '../components/LinkedItems'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -287,7 +288,7 @@ function ReleaseCard({ release, onEdit, onDelete }: {
   const hasContent = release.features.length > 0 || release.fixes.length > 0 || release.breaking_changes.length > 0 || release.notes
 
   return (
-    <div style={{ display: 'flex', gap: 0, marginBottom: 8 }}>
+    <div id={`release-${release.id}`} style={{ display: 'flex', gap: 0, marginBottom: 8 }}>
       {/* Timeline stem + dot */}
       <div style={{ width: 28, position: 'relative', flexShrink: 0 }}>
         <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 2, background: 'var(--line)', transform: 'translateX(-50%)' }} />
@@ -424,6 +425,13 @@ function ReleaseCard({ release, onEdit, onDelete }: {
                 </div>
               </div>
             )}
+
+            {/* General cross-entity links (Tasks / Documents / Codes / Issues / Commands) */}
+            <LinkedItems
+              entityType="release"
+              entityId={release.id}
+              onNavigate={(route, id) => navigate(`${route}?open=${id}`)}
+            />
 
             {/* Actions */}
             <div style={{ display: 'flex', gap: 6, paddingTop: hasContent ? 4 : 0, borderTop: hasContent ? '1px solid var(--line)' : 'none' }}>
@@ -849,6 +857,7 @@ function DraftAiModal({ projectId, onClose, onDraft }: {
 export function ReleasesPage() {
   const { selectedProject } = useProjectStore()
   const proj = selectedProject()
+  const [searchParams] = useSearchParams()
 
   const [releases,      setReleases]      = useState<Release[]>([])
   const [loading,       setLoading]       = useState(true)
@@ -869,6 +878,25 @@ export function ReleasesPage() {
   }, [proj?.id])
 
   useEffect(() => { load() }, [load])
+
+  // Deep-link support (?open=<id>) — if the linked release isn't in the
+  // current project-scoped list (linked from a different project), fetch it
+  // directly and prepend it so it's still visible; then scroll to its card.
+  useEffect(() => {
+    const openId = searchParams.get('open')
+    if (!openId || loading) return
+
+    const scrollTo = () => document.getElementById(`release-${openId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+
+    if (releases.some(r => r.id === openId)) {
+      scrollTo()
+      return
+    }
+    releasesApi.get(openId)
+      .then(r => { setReleases(prev => prev.some(x => x.id === r.id) ? prev : [r, ...prev]); setTimeout(scrollTo, 50) })
+      .catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, loading])
 
   function handleSave(r: Release) {
     setReleases(prev => {

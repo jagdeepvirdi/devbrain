@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { documentsApi, type DocMeta, type DocDetail, type EmbeddingStatus } from '../lib/api'
 import { useProjectStore } from '../store/projectStore'
 import { useToast } from '../components/Toast'
 import { SkeletonRow } from '../components/Skeleton'
 import { FilterBar, initialFilterState } from '../components/FilterBar'
 import type { FilterState } from '../components/FilterBar'
+import { LinkedItems } from '../components/LinkedItems'
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -29,23 +31,28 @@ function fmtDate(iso: string) {
 
 // ── Upload drop zone ──────────────────────────────────────────────────────
 
-function DropZone({ projectId, onDone }: { projectId: string | undefined; onDone: () => void }) {
+function DropZone({ projectId, existingComponents, onDone }: { projectId: string | undefined; existingComponents: string[]; onDone: () => void }) {
   const [dragging,       setDragging]       = useState(false)
   const [uploading,      setUploading]      = useState<string | null>(null)
   const [urlInput,       setUrlInput]       = useState('')
   const [error,          setError]          = useState<string | null>(null)
   const [tagInput,       setTagInput]       = useState('')
   const [tags,           setTags]           = useState<string[]>([])
+  const [component,      setComponent]      = useState('')
   const [suggestedTags,  setSuggestedTags]  = useState<string[]>([])
   const [suggesting,     setSuggesting]     = useState(false)
+  const [stagedFile,     setStagedFile]     = useState<File | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   async function handleSuggestTags() {
-    const hint = urlInput.trim() || tagInput.trim()
-    if (!hint) return
+    // A single staged file gets real content-based suggestions; otherwise
+    // (multi-file batch, or a URL import) fall back to the typed hint.
+    if (!stagedFile && !urlInput.trim() && !tagInput.trim()) return
     setSuggesting(true)
     try {
-      const { tags: suggested } = await documentsApi.suggestTags(hint)
+      const { tags: suggested } = stagedFile
+        ? await documentsApi.suggestTagsFromFile(stagedFile)
+        : await documentsApi.suggestTags(urlInput.trim() || tagInput.trim())
       setSuggestedTags(suggested.filter(t => !tags.includes(t)))
     } catch {
       // silently fail
@@ -68,10 +75,21 @@ function DropZone({ projectId, onDone }: { projectId: string | undefined; onDone
 
   async function handleFiles(files: FileList) {
     setError(null)
-    for (const file of Array.from(files)) {
+    const list = Array.from(files)
+
+    // A single file is staged (not uploaded yet) so Auto-tag can analyze its
+    // real content first. Multi-file drops/selections upload immediately,
+    // same as before — one shared tag set doesn't fit several files anyway.
+    if (list.length === 1) {
+      setStagedFile(list[0])
+      setSuggestedTags([])
+      return
+    }
+
+    for (const file of list) {
       setUploading(file.name)
       try {
-        await documentsApi.upload(file, projectId, tags)
+        await documentsApi.upload(file, projectId, tags, component.trim() || undefined)
       } catch (err) {
         setError((err as Error).message)
       }
@@ -81,13 +99,30 @@ function DropZone({ projectId, onDone }: { projectId: string | undefined; onDone
     onDone()
   }
 
+  async function handleUploadStaged() {
+    if (!stagedFile) return
+    setError(null)
+    setUploading(stagedFile.name)
+    try {
+      await documentsApi.upload(stagedFile, projectId, tags, component.trim() || undefined)
+      setStagedFile(null)
+      setTags([])
+      setSuggestedTags([])
+      onDone()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setUploading(null)
+    }
+  }
+
   async function handleUrl() {
     const url = urlInput.trim()
     if (!url) return
     setError(null)
     setUploading(url)
     try {
-      await documentsApi.importUrl(url, projectId, tags)
+      await documentsApi.importUrl(url, projectId, tags, component.trim() || undefined)
       setUrlInput('')
       setTags([])
       onDone()
@@ -120,15 +155,38 @@ function DropZone({ projectId, onDone }: { projectId: string | undefined; onDone
         </div>
         <div>
           <div style={{ fontSize: 13, color: 'var(--fg)', fontWeight: 500 }}>
-            {uploading ? `Embedding "${uploading}"…` : 'Drop files here or click to browse'}
+            {uploading ? `Embedding "${uploading}"…` : stagedFile ? `Ready to upload "${stagedFile.name}"` : 'Drop files here or click to browse'}
           </div>
           <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 2 }}>
-            PDF · DOCX · MD · TXT · XLSX — up to 50 MB each
+            PDF · DOC · DOCX · MD · TXT · XLSX · YAML · LOG · SQL · JSON · CSV · HTML · IPYNB — up to 50 MB each
           </div>
         </div>
       </div>
-      <input ref={fileRef} type="file" multiple accept=".pdf,.docx,.md,.txt,.xlsx,.xls"
-        style={{ display: 'none' }} onChange={e => e.target.files && handleFiles(e.target.files)} />
+      <input ref={fileRef} type="file" multiple accept=".pdf,.doc,.docx,.md,.txt,.xlsx,.xls,.yaml,.yml,.log,.sql,.json,.csv,.html,.htm,.ipynb"
+        style={{ display: 'none' }}
+        onChange={e => { if (e.target.files) handleFiles(e.target.files); e.target.value = '' }} />
+
+      {stagedFile && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, padding: '8px 10px', background: 'var(--accent-dim)', border: '1px solid var(--accent-line)', borderRadius: 'var(--radius)' }}>
+          <span style={{ fontSize: 12.5, color: 'var(--fg)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            📄 {stagedFile.name} — add tags/component below, then upload
+          </span>
+          <button
+            onClick={handleUploadStaged}
+            disabled={!!uploading}
+            style={{ height: 26, padding: '0 12px', borderRadius: 'var(--radius)', background: 'var(--accent)', color: 'white', fontSize: 11.5, border: 'none', opacity: uploading ? .5 : 1 }}
+          >
+            {uploading ? 'Uploading…' : 'Upload'}
+          </button>
+          <button
+            onClick={() => { setStagedFile(null); setSuggestedTags([]) }}
+            disabled={!!uploading}
+            style={{ height: 26, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-3)', fontSize: 11.5 }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
         <input
@@ -158,6 +216,7 @@ function DropZone({ projectId, onDone }: { projectId: string | undefined; onDone
         <button
           onClick={handleSuggestTags}
           disabled={suggesting}
+          title={stagedFile ? `Analyze "${stagedFile.name}"'s actual content` : 'Suggest tags from typed text (select a single file to analyze its real content instead)'}
           style={{ height: 28, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-2)', fontSize: 11.5 }}
         >
           {suggesting ? 'Suggesting…' : '🪄 Auto-tag'}
@@ -168,6 +227,24 @@ function DropZone({ projectId, onDone }: { projectId: string | undefined; onDone
             <button onClick={() => setTags(prev => prev.filter(x => x !== t))} style={{ color: 'var(--fg-3)' }}>×</button>
           </span>
         ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, marginTop: 8, alignItems: 'center' }}>
+        <input
+          list="component-options"
+          value={component}
+          onChange={e => setComponent(e.target.value)}
+          placeholder="Component (e.g. SAP, BPP, Payment)…"
+          style={{ width: 300, padding: '6px 10px', background: 'var(--bg-elev-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius)', fontSize: 12.5, color: 'var(--fg)' }}
+        />
+        <datalist id="component-options">
+          {existingComponents.map(c => <option key={c} value={c} />)}
+        </datalist>
+        {component && (
+          <button onClick={() => setComponent('')} style={{ color: 'var(--fg-3)', fontSize: 11 }} title="Clear component">
+            × clear
+          </button>
+        )}
       </div>
       {suggestedTags.length > 0 && (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
@@ -211,7 +288,7 @@ function EmbedDot({ status, onClick }: { status: EmbeddingStatus; onClick?: () =
 
 // ── Document preview panel ────────────────────────────────────────────────
 
-function PreviewPanel({ docId, onClose, onReembedSuccess }: { docId: string; onClose: () => void; onReembedSuccess: (id: string, status: EmbeddingStatus) => void }) {
+function PreviewPanel({ docId, onClose, onReembedSuccess, onNavigate }: { docId: string; onClose: () => void; onReembedSuccess: (id: string, status: EmbeddingStatus) => void; onNavigate: (route: string, id: string) => void }) {
   const [doc, setDoc]           = useState<DocDetail | null>(null)
   const [loading, setLoading]   = useState(true)
   const [reembed, setReembed]   = useState(false)
@@ -243,13 +320,23 @@ function PreviewPanel({ docId, onClose, onReembedSuccess }: { docId: string; onC
             {ts.label}
           </span>
         )}
+        {doc?.component && (
+          <span style={{ height: 20, padding: '0 7px', borderRadius: 10, fontSize: 10.5, fontWeight: 600, color: 'var(--accent-2)', background: 'var(--accent-dim)', display: 'inline-flex', alignItems: 'center' }}>
+            {doc.component}
+          </span>
+        )}
         <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {loading ? 'Loading…' : doc?.title}
         </span>
         <button onClick={onClose} style={{ color: 'var(--fg-3)', fontSize: 13, padding: '2px 6px', borderRadius: 'var(--radius)' }}>✕</button>
       </div>
-      <div style={{ flex: 1, overflowY: 'auto', padding: 16, fontSize: 12.5, lineHeight: 1.65, color: 'var(--fg-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-        {loading ? 'Loading…' : (doc?.content ?? '')}
+      <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {doc && (
+          <LinkedItems entityType="document" entityId={doc.id} onNavigate={onNavigate} />
+        )}
+        <div style={{ fontSize: 12.5, lineHeight: 1.65, color: 'var(--fg-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {loading ? 'Loading…' : (doc?.content ?? '')}
+        </div>
       </div>
       {doc && (
         <div style={{ padding: '10px 16px', borderTop: '1px solid var(--line)', fontSize: 11, color: 'var(--fg-4)', display: 'flex', gap: 10, fontFamily: 'var(--font-mono)', alignItems: 'center' }}>
@@ -280,6 +367,8 @@ const PAGE = 25
 export function DocumentsPage() {
   const { selectedId } = useProjectStore()
   const { toast }      = useToast()
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [docs,        setDocs]        = useState<DocMeta[]>([])
   const [total,       setTotal]       = useState(0)
@@ -288,13 +377,22 @@ export function DocumentsPage() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [search,      setSearch]      = useState('')
   const [filters,     setFilters]     = useState<FilterState>(initialFilterState)
-  const [selected,    setSelected]    = useState<string | null>(null)
+  const [selected,    setSelected]    = useState<string | null>(() => searchParams.get('open'))
   const [deleting,    setDeleting]    = useState<DocMeta | null>(null)
 
   const [selectedIds,   setSelectedIds]   = useState<Set<string>>(new Set())
   const [bulkWorking,   setBulkWorking]   = useState(false)
   const [confirmBulkDel, setConfirmBulkDel] = useState(false)
+  const [componentOptions, setComponentOptions] = useState<string[]>([])
   const headerCheckboxRef = useRef<HTMLInputElement>(null)
+
+  const refreshComponentOptions = useCallback(() => {
+    documentsApi.components(selectedId ?? undefined).then(setComponentOptions).catch(() => {})
+  }, [selectedId])
+
+  useEffect(() => {
+    refreshComponentOptions()
+  }, [refreshComponentOptions])
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds(prev => {
@@ -320,6 +418,7 @@ export function DocumentsPage() {
         projectIds: selectedId ? undefined : (filters.projectIds.length > 0 ? filters.projectIds : undefined),
         fileType:   filters.fileType.length > 0 ? filters.fileType : undefined,
         tags:       filters.tags.length > 0 ? filters.tags : undefined,
+        component:  filters.component.length > 0 ? filters.component : undefined,
         dateFrom:   filters.dateFrom || undefined,
         dateTo:     filters.dateTo || undefined,
         q:          search.trim() || undefined,
@@ -407,6 +506,23 @@ export function DocumentsPage() {
     }
   }
 
+  async function handleBulkComponent(component: string) {
+    const value = component.trim()
+    if (!value) return
+    setBulkWorking(true)
+    try {
+      await documentsApi.bulk([...selectedIds], 'component', value)
+      setDocs(prev => prev.map(d => selectedIds.has(d.id) ? { ...d, component: value } : d))
+      toast(`Set component on ${selectedIds.size} document${selectedIds.size !== 1 ? 's' : ''}`, 'success')
+      setSelectedIds(new Set())
+      refreshComponentOptions()
+    } catch {
+      toast('Bulk component update failed', 'error')
+    } finally {
+      setBulkWorking(false)
+    }
+  }
+
   useEffect(() => {
     if (headerCheckboxRef.current) {
       headerCheckboxRef.current.indeterminate = selectedIds.size > 0 && selectedIds.size < docs.length
@@ -432,7 +548,11 @@ export function DocumentsPage() {
       <FilterBar entityType="documents" filters={filters} onChange={setFilters} />
 
       {/* Drop zone */}
-      <DropZone projectId={selectedId ?? undefined} onDone={() => load(0, false)} />
+      <DropZone
+        projectId={selectedId ?? undefined}
+        existingComponents={componentOptions}
+        onDone={() => { load(0, false); refreshComponentOptions() }}
+      />
 
       {/* Table + preview split */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden', marginTop: 16 }}>
@@ -474,7 +594,7 @@ export function DocumentsPage() {
             return (
               <div
                 key={doc.id}
-                onClick={() => setSelected(isSel ? null : doc.id)}
+                onClick={() => { const next = isSel ? null : doc.id; setSelected(next); setSearchParams(next ? { open: next } : {}, { replace: true }) }}
                 className={`bulk-select-row ${isChecked ? 'bulk-select-row-selected' : ''} ${selectedIds.size > 0 ? 'bulk-select-has-selection' : ''}`}
                 style={{
                   display: 'grid', gridTemplateColumns: '24px 32px 1fr 70px 80px 100px 80px',
@@ -504,7 +624,16 @@ export function DocumentsPage() {
                 {/* Title */}
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 12.5, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.title}</div>
-                  {doc.project_name && <div style={{ fontSize: 11, color: 'var(--fg-4)' }}>{doc.project_name}</div>}
+                  {(doc.project_name || doc.component) && (
+                    <div style={{ fontSize: 11, color: 'var(--fg-4)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {doc.project_name && <span>{doc.project_name}</span>}
+                      {doc.component && (
+                        <span style={{ padding: '0 6px', borderRadius: 8, background: 'var(--accent-dim)', color: 'var(--accent-2)', fontSize: 10, fontWeight: 600, lineHeight: '15px' }}>
+                          {doc.component}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Type badge */}
@@ -558,8 +687,9 @@ export function DocumentsPage() {
         {selected && (
           <PreviewPanel
             docId={selected}
-            onClose={() => setSelected(null)}
+            onClose={() => { setSelected(null); setSearchParams({}, { replace: true }) }}
             onReembedSuccess={(id, status) => setDocs(prev => prev.map(d => d.id === id ? { ...d, embedding_status: status } : d))}
+            onNavigate={(route, id) => navigate(`${route}?open=${id}`)}
           />
         )}
       </div>
@@ -612,6 +742,21 @@ export function DocumentsPage() {
                   }
                 }}
                 style={{ fontSize: '11.5px', color: 'var(--fg)', width: 85, background: 'none', border: 'none', outline: 'none' }}
+              />
+            </div>
+
+            {/* Set Component Input — overwrites, doesn't append (single-select) */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg-elev)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 8px' }}>
+              <input
+                list="component-options"
+                placeholder="Set component..."
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    handleBulkComponent(e.currentTarget.value)
+                    e.currentTarget.value = ''
+                  }
+                }}
+                style={{ fontSize: '11.5px', color: 'var(--fg)', width: 105, background: 'none', border: 'none', outline: 'none' }}
               />
             </div>
 

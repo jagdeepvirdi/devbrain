@@ -17,7 +17,7 @@ export interface Project {
   createdAt: Date
 }
 
-export type FileType = 'pdf' | 'docx' | 'md' | 'txt' | 'xlsx' | 'url'
+export type FileType = 'pdf' | 'docx' | 'md' | 'txt' | 'xlsx' | 'url' | 'code'
 
 export interface Document {
   id: string
@@ -26,6 +26,7 @@ export interface Document {
   fileType: FileType
   content: string
   tags: string[]
+  component?: string
   source: string
   createdAt: Date
 }

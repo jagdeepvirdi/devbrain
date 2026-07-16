@@ -14,6 +14,7 @@ import { buildSetClause }   from '../lib/db.js'
 import { serverError }        from '../lib/errors.js'
 import { requireRole } from '../middleware/auth.js'
 import { embedDocument } from '../services/embedder.js'
+import { deleteLinksFor } from '../services/links.js'
 
 const router = Router()
 
@@ -66,6 +67,7 @@ router.get('/', async (req, res) => {
   }
   const fileTypes  = getArrayParam(req.query, 'fileType')
   const tags       = getArrayParam(req.query, 'tags')
+  const components = getArrayParam(req.query, 'component')
   const dateFrom   = req.query.dateFrom as string | undefined
   const dateTo     = req.query.dateTo as string | undefined
   const q          = ((req.query.q || req.query.search) as string | undefined)?.trim()
@@ -101,6 +103,11 @@ router.get('/', async (req, res) => {
     values.push(tags)
   }
 
+  if (components.length > 0) {
+    conditions.push(`d.component = ANY($${idx++})`)
+    values.push(components)
+  }
+
   if (dateFrom) {
     conditions.push(`d.created_at >= $${idx++}::timestamptz`)
     values.push(dateFrom)
@@ -127,10 +134,12 @@ router.get('/', async (req, res) => {
       pool.query(`SELECT COUNT(*)::int AS n FROM documents d LEFT JOIN projects p ON p.id = d.project_id ${where}`, values),
       pool.query(
         `SELECT
-           d.id, d.project_id, d.title, d.file_type, d.tags,
-           d.source, d.content_hash, d.created_at,
+           d.id, d.project_id, d.title, d.file_type, d.tags, d.component, d.language,
+           d.source, d.content_hash, d.created_at, d.embedding_status,
            length(d.content) AS content_length,
-           (SELECT COUNT(*)::int FROM document_chunks dc WHERE dc.document_id = d.id) AS chunk_count,
+           (SELECT COUNT(*)::int FROM document_chunks dc WHERE dc.document_id = d.id AND dc.chunk_index >= 0) AS chunk_count,
+           (d.explanation IS NOT NULL AND d.explanation_hash IS NOT NULL AND d.explanation_hash <> d.content_hash) AS explanation_stale,
+           (d.diagram IS NOT NULL AND d.diagram_hash IS NOT NULL AND d.diagram_hash <> d.content_hash) AS diagram_stale,
            p.name  AS project_name,
            p.color AS project_color
          FROM documents d
@@ -154,7 +163,7 @@ router.patch('/bulk', requireRole('member'), async (req, res) => {
   if (!Array.isArray(ids) || !ids.length) {
     return res.status(400).json({ error: 'ids array is required and cannot be empty' })
   }
-  if (!['re-embed', 'tag', 'delete'].includes(action)) {
+  if (!['re-embed', 'tag', 'component', 'delete'].includes(action)) {
     return res.status(400).json({ error: 'Invalid action' })
   }
 
@@ -162,11 +171,11 @@ router.patch('/bulk', requireRole('member'), async (req, res) => {
   try {
     await client.query('BEGIN')
     if (action === 're-embed') {
-      const { rows } = await client.query('SELECT id, content FROM documents WHERE id = ANY($1)', [ids])
+      const { rows } = await client.query('SELECT id, content, title, language FROM documents WHERE id = ANY($1)', [ids])
       await client.query(`UPDATE documents SET embedding_status = 'processing' WHERE id = ANY($1)`, [ids])
       // Trigger embeddings asynchronously
       for (const row of rows) {
-        embedDocument(row.id, row.content)
+        embedDocument(row.id, row.content, { title: row.title, language: row.language })
           .then(() => pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [row.id]))
           .catch(() => pool.query(`UPDATE documents SET embedding_status = 'failed' WHERE id = $1`, [row.id]))
       }
@@ -178,6 +187,16 @@ router.patch('/bulk', requireRole('member'), async (req, res) => {
       await client.query(
         `UPDATE documents SET tags = array_append(tags, $1) WHERE id = ANY($2) AND NOT ($1 = ANY(tags))`,
         [value, ids]
+      )
+    } else if (action === 'component') {
+      if (typeof value !== 'string') {
+        await client.query('ROLLBACK')
+        return res.status(400).json({ error: 'value must be a string (empty string clears the component)' })
+      }
+      // Overwrite, not append — a document belongs to exactly one component.
+      await client.query(
+        `UPDATE documents SET component = $1 WHERE id = ANY($2)`,
+        [value.trim() || null, ids]
       )
     } else if (action === 'delete') {
       await client.query(
@@ -195,12 +214,36 @@ router.patch('/bulk', requireRole('member'), async (req, res) => {
   }
 })
 
+// ── GET /api/documents/components  (distinct values for autocomplete) ─────
+// Must be registered before GET /:id so "components" isn't swallowed as an id.
+
+router.get('/components', async (req, res) => {
+  const projectId = req.query.projectId as string | undefined
+  try {
+    const { rows } = await pool.query<{ component: string }>(
+      projectId
+        ? 'SELECT DISTINCT component FROM documents WHERE component IS NOT NULL AND project_id = $1 ORDER BY component'
+        : 'SELECT DISTINCT component FROM documents WHERE component IS NOT NULL ORDER BY component',
+      projectId ? [projectId] : []
+    )
+    res.json({ data: rows.map(r => r.component) })
+  } catch (err) {
+    serverError(res, err)
+  }
+})
+
 // ── GET /api/documents/:id ────────────────────────────────────────────────
 
 router.get('/:id', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT d.*, p.name AS project_name, p.color AS project_color
+      `SELECT d.*, p.name AS project_name, p.color AS project_color,
+         length(d.content) AS content_length,
+         (SELECT COUNT(*)::int FROM document_chunks dc WHERE dc.document_id = d.id AND dc.chunk_index >= 0) AS chunk_count,
+         (SELECT id    FROM documents WHERE source_document_id = d.id ORDER BY created_at DESC LIMIT 1) AS linked_explanation_id,
+         (SELECT title FROM documents WHERE source_document_id = d.id ORDER BY created_at DESC LIMIT 1) AS linked_explanation_title,
+         (d.explanation IS NOT NULL AND d.explanation_hash IS NOT NULL AND d.explanation_hash <> d.content_hash) AS explanation_stale,
+         (d.diagram IS NOT NULL AND d.diagram_hash IS NOT NULL AND d.diagram_hash <> d.content_hash) AS diagram_stale
        FROM documents d
        LEFT JOIN projects p ON p.id = d.project_id
        WHERE d.id = $1`,
@@ -213,6 +256,33 @@ router.get('/:id', async (req, res) => {
   }
 })
 
+// ── GET /api/documents/:id/chunks/:chunkIndex  (citation click-through) ───
+// Returns the cited chunk plus its immediate neighbors, for showing a
+// citation "in context" instead of just a flat excerpt.
+
+router.get('/:id/chunks/:chunkIndex', async (req, res) => {
+  const chunkIndex = Number(req.params.chunkIndex)
+  if (!Number.isInteger(chunkIndex) || chunkIndex < 0) {
+    return res.status(400).json({ error: 'chunkIndex must be a non-negative integer' })
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT chunk_index AS "chunkIndex", content
+         FROM document_chunks
+        WHERE document_id = $1 AND chunk_index BETWEEN $2 AND $3
+        ORDER BY chunk_index`,
+      [req.params.id, Math.max(chunkIndex - 1, 0), chunkIndex + 1]
+    )
+    if (!rows.some(r => r.chunkIndex === chunkIndex)) {
+      return res.status(404).json({ error: 'Chunk not found' })
+    }
+    res.json({ data: { chunkIndex, chunks: rows } })
+  } catch (err) {
+    serverError(res, err)
+  }
+})
+
 // ── POST /api/documents  (file upload) ────────────────────────────────────
 
 router.post('/', requireRole('member'), upload.single('file'), async (req, res) => {
@@ -220,6 +290,7 @@ router.post('/', requireRole('member'), upload.single('file'), async (req, res) 
 
   const projectId = req.body.projectId || null
   const tagsRaw   = req.body.tags      || '[]'
+  const component = (req.body.component as string | undefined)?.trim() || null
   let   tags: string[] = []
 
   try { tags = JSON.parse(tagsRaw) } catch { tags = [] }
@@ -229,7 +300,7 @@ router.post('/', requireRole('member'), upload.single('file'), async (req, res) 
 
   try {
     // Parse
-    const { text, fileType, title } = await parseFile(tempPath, req.file.originalname)
+    const { text, fileType, title, language } = await parseFile(tempPath, req.file.originalname)
     if (!text) return res.status(422).json({ error: 'Could not extract text from this file' })
 
     const hash = sha256(text)
@@ -248,14 +319,15 @@ router.post('/', requireRole('member'), upload.single('file'), async (req, res) 
 
     // Insert document
     const { rows } = await pool.query(
-      `INSERT INTO documents (project_id, title, file_type, content, tags, source, content_hash)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [projectId ?? null, title, fileType, text, tags, req.file.originalname, hash]
+      `INSERT INTO documents (project_id, title, file_type, content, tags, component, source, content_hash, language)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      [projectId ?? null, title, fileType, text, tags, component, req.file.originalname, hash, language ?? null]
     )
     docId = rows[0].id
 
     // Embed — chunks stored progressively
-    const chunkCount = await embedDocument(docId!, text)
+    const chunkCount = await embedDocument(docId!, text, { title, language })
+    await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [docId])
 
     const { rows: doc } = await pool.query('SELECT * FROM documents WHERE id = $1', [docId])
 
@@ -269,19 +341,73 @@ router.post('/', requireRole('member'), upload.single('file'), async (req, res) 
   }
 })
 
+// ── POST /api/documents/:id/update-content ────────────────────────────────
+// Replaces an existing document's content in place (e.g. re-syncing a code
+// file that changed elsewhere), instead of the upload route's create-new
+// behavior. Title/tags/component/project are left untouched — only content,
+// file_type, language and content_hash move. Deliberately does NOT touch
+// explanation/explanation_hash, so a stale explanation stays visible
+// (flagged via explanation_stale, see GET /:id and GET /) until the user
+// explicitly regenerates it — this route is the only way an existing
+// document's content_hash can actually change today, which is what makes
+// that staleness flag meaningful.
+
+router.post('/:id/update-content', requireRole('member'), upload.single('file'), async (req, res) => {
+  const id = req.params.id as string
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+
+  const tempPath = req.file.path
+
+  try {
+    const { rows: existingRows } = await pool.query('SELECT id FROM documents WHERE id = $1', [id])
+    if (!existingRows.length) return res.status(404).json({ error: 'Document not found' })
+
+    const { text, fileType, language } = await parseFile(tempPath, req.file.originalname)
+    if (!text) return res.status(422).json({ error: 'Could not extract text from this file' })
+
+    const hash = sha256(text)
+
+    await pool.query(
+      `UPDATE documents
+       SET content = $2, content_hash = $3, file_type = $4, language = $5, source = $6, embedding_status = 'processing'
+       WHERE id = $1`,
+      [id, text, hash, fileType, language ?? null, req.file.originalname]
+    )
+
+    const { rows: doc } = await pool.query('SELECT title FROM documents WHERE id = $1', [id])
+    const chunkCount = await embedDocument(id, text, { title: doc[0].title, language })
+    await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [id])
+
+    const { rows: final } = await pool.query(
+      `SELECT *,
+         (explanation IS NOT NULL AND explanation_hash IS NOT NULL AND explanation_hash <> content_hash) AS explanation_stale,
+         (diagram IS NOT NULL AND diagram_hash IS NOT NULL AND diagram_hash <> content_hash) AS diagram_stale
+       FROM documents WHERE id = $1`,
+      [id]
+    )
+    res.json({ data: { ...final[0], chunk_count: chunkCount } })
+  } catch (err) {
+    await pool.query(`UPDATE documents SET embedding_status = 'failed' WHERE id = $1`, [id]).catch(() => {})
+    serverError(res, err)
+  } finally {
+    await fs.unlink(tempPath).catch(() => {})
+  }
+})
+
 // ── POST /api/documents/url ───────────────────────────────────────────────
 
 const UrlBody = z.object({
   url:       z.string().url(),
   projectId: z.string().optional(),
   tags:      z.array(z.string()).default([]),
+  component: z.string().optional(),
 })
 
 router.post('/url', requireRole('member'), async (req, res) => {
   const parsed = UrlBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
-  const { url, projectId = null, tags } = parsed.data
+  const { url, projectId = null, tags, component } = parsed.data
 
   if (await isPrivateUrl(url)) {
     return res.status(422).json({ error: 'URL resolves to a private or restricted address' })
@@ -304,13 +430,15 @@ router.post('/url', requireRole('member'), async (req, res) => {
     }
 
     const { rows } = await pool.query(
-      `INSERT INTO documents (project_id, title, file_type, content, tags, source, content_hash)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [projectId ?? null, title, fileType, text, tags, url, hash]
+      `INSERT INTO documents (project_id, title, file_type, content, tags, component, source, content_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      [projectId ?? null, title, fileType, text, tags, component?.trim() || null, url, hash]
     )
     docId = rows[0].id
 
-    const chunkCount = await embedDocument(docId!, text)
+    const chunkCount = await embedDocument(docId!, text, { title })
+    await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [docId])
+
     const { rows: doc } = await pool.query('SELECT * FROM documents WHERE id = $1', [docId])
 
     res.status(201).json({ data: { ...doc[0], chunk_count: chunkCount } })
@@ -325,11 +453,12 @@ router.post('/url', requireRole('member'), async (req, res) => {
 const PatchBody = z.object({
   title:     z.string().min(1).max(200).optional(),
   tags:      z.array(z.string()).optional(),
+  component: z.string().nullable().optional(),
   projectId: z.string().nullable().optional(),
 })
 
 const DOC_COL_MAP: Record<string, string> = { projectId: 'project_id' }
-const DOC_UPDATABLE_COLS = new Set(['title', 'tags', 'project_id'])
+const DOC_UPDATABLE_COLS = new Set(['title', 'tags', 'component', 'project_id'])
 
 router.patch('/:id', async (req, res) => {
   const parsed = PatchBody.safeParse(req.body)
@@ -368,6 +497,7 @@ router.delete('/:id', requireRole('member'), async (req, res) => {
       [req.params.id]
     )
     if (!rows.length) return res.status(404).json({ error: 'Document not found' })
+    await deleteLinksFor('document', req.params.id as string)
     res.json({ data: { deleted: rows[0] } })
   } catch (err) {
     serverError(res, err)
@@ -379,18 +509,162 @@ router.delete('/:id', requireRole('member'), async (req, res) => {
 router.post('/:id/reembed', requireRole('member'), async (req, res) => {
   const id = req.params.id as string
   try {
-    const { rows } = await pool.query('SELECT id, content FROM documents WHERE id = $1', [id])
+    const { rows } = await pool.query('SELECT id, content, title, language FROM documents WHERE id = $1', [id])
     if (!rows.length) return res.status(404).json({ error: 'Document not found' })
 
     await pool.query(`UPDATE documents SET embedding_status = 'processing' WHERE id = $1`, [id])
 
-    embedDocument(id, rows[0].content)
+    embedDocument(id, rows[0].content, { title: rows[0].title, language: rows[0].language })
       .then(() => pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [id]))
       .catch(() => pool.query(`UPDATE documents SET embedding_status = 'failed' WHERE id = $1`, [id]))
 
     res.json({ data: { id, embedding_status: 'processing' } })
   } catch (err) {
     await pool.query(`UPDATE documents SET embedding_status = 'failed' WHERE id = $1`, [id]).catch(() => {})
+    serverError(res, err)
+  }
+})
+
+// ── POST /api/documents/:id/explain ──────────────────────────────────────
+// AI explanation for a tracked code file — same pattern as commands.explain.
+
+const EXPLAIN_SOURCE_CHARS = 12000  // enough for most single files without an oversized prompt
+
+router.post('/:id/explain', requireRole('member'), async (req, res) => {
+  const id = req.params.id as string
+  try {
+    const { rows } = await pool.query(
+      'SELECT title, content, file_type, language, content_hash FROM documents WHERE id = $1',
+      [id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Document not found' })
+
+    const doc = rows[0] as { title: string; content: string; file_type: string; language: string | null; content_hash: string | null }
+    if (doc.file_type !== 'code') {
+      return res.status(400).json({ error: 'Explain is only available for tracked code files' })
+    }
+
+    const lang = doc.language ?? 'code'
+    const truncated = doc.content.length > EXPLAIN_SOURCE_CHARS
+    const source = doc.content.slice(0, EXPLAIN_SOURCE_CHARS)
+
+    const explanation = await aiChat(
+      `Explain what this ${lang} file ("${doc.title}") does:\n\n\`\`\`${lang}\n${source}\n\`\`\`${truncated ? '\n\n(File was truncated for length — explain based on what is shown.)' : ''}`,
+      'You are a technical assistant that explains source code clearly and concisely for a developer knowledge base. Use Markdown for formatting. Cover: what the file is responsible for, its main functions/entry points, and any notable dependencies or side effects (I/O, network, database). Keep it under 300 words.'
+    )
+    // Stamp the content_hash this explanation was generated against, so a
+    // later content change (see update-content route) can be detected as
+    // explanation_stale without a separate "last explained at" timestamp.
+    await pool.query('UPDATE documents SET explanation = $2, explanation_hash = $3 WHERE id = $1', [id, explanation, doc.content_hash])
+    res.json({ data: { explanation } })
+  } catch (err) {
+    serverError(res, err)
+  }
+})
+
+// ── POST /api/documents/:id/diagram ───────────────────────────────────────
+// AI-generated Mermaid diagram of a tracked code file's structure — same
+// shape as /explain (code-only, content_hash-stamped for staleness), but
+// asks for a Mermaid definition instead of prose, rendered client-side.
+
+const DIAGRAM_SOURCE_CHARS = 12000
+
+// Models routinely wrap the diagram in a ```mermaid fence despite being told
+// not to — strip it defensively rather than fail the render on that alone.
+function stripMermaidFence(raw: string): string {
+  const fenced = raw.trim().match(/^```(?:mermaid)?\s*\n([\s\S]*?)\n?```$/)
+  return (fenced ? fenced[1] : raw).trim()
+}
+
+router.post('/:id/diagram', requireRole('member'), async (req, res) => {
+  const id = req.params.id as string
+  try {
+    const { rows } = await pool.query(
+      'SELECT title, content, file_type, language, content_hash FROM documents WHERE id = $1',
+      [id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Document not found' })
+
+    const doc = rows[0] as { title: string; content: string; file_type: string; language: string | null; content_hash: string | null }
+    if (doc.file_type !== 'code') {
+      return res.status(400).json({ error: 'Diagram is only available for tracked code files' })
+    }
+
+    const lang = doc.language ?? 'code'
+    const truncated = doc.content.length > DIAGRAM_SOURCE_CHARS
+    const source = doc.content.slice(0, DIAGRAM_SOURCE_CHARS)
+
+    const raw = await aiChat(
+      `Generate a Mermaid diagram of this ${lang} file ("${doc.title}")'s structure — its main functions/classes/methods and how they call or depend on each other:\n\n\`\`\`${lang}\n${source}\n\`\`\`${truncated ? '\n\n(File was truncated for length — diagram based on what is shown.)' : ''}`,
+      'You are a technical assistant that generates Mermaid diagrams for a developer knowledge base. Respond with ONLY a valid Mermaid diagram definition — start directly with `flowchart TD` (or `classDiagram`/`sequenceDiagram` if clearly a better fit for this file). No prose, no markdown code fences, no explanation before or after. Keep node labels short. If the file has no meaningful internal structure to diagram (e.g. pure config/data), respond with exactly: flowchart TD\\n  A["No meaningful structure to diagram"]'
+    )
+    const diagram = stripMermaidFence(raw)
+
+    await pool.query('UPDATE documents SET diagram = $2, diagram_hash = $3 WHERE id = $1', [id, diagram, doc.content_hash])
+    res.json({ data: { diagram } })
+  } catch (err) {
+    serverError(res, err)
+  }
+})
+
+// ── POST /api/documents/:id/save-explanation ─────────────────────────────
+// Turns a code file's AI explanation into its own searchable document,
+// linked back via source_document_id. Idempotent — re-running it after a
+// re-explain updates the same linked doc instead of piling up duplicates.
+
+router.post('/:id/save-explanation', requireRole('member'), async (req, res) => {
+  const id = req.params.id as string
+  try {
+    const { rows } = await pool.query(
+      'SELECT title, explanation, project_id, component, tags, file_type FROM documents WHERE id = $1',
+      [id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Document not found' })
+
+    const src = rows[0] as { title: string; explanation: string | null; project_id: string | null; component: string | null; tags: string[]; file_type: string }
+    if (src.file_type !== 'code') {
+      return res.status(400).json({ error: 'Only available for tracked code files' })
+    }
+    if (!src.explanation) {
+      return res.status(400).json({ error: 'No explanation yet — generate one first' })
+    }
+
+    const title   = `${src.title} — Explained`
+    const content = src.explanation
+    const hash    = sha256(content)
+    const tags    = Array.from(new Set([...(src.tags ?? []), 'code-explanation']))
+
+    const { rows: existing } = await pool.query(
+      'SELECT id FROM documents WHERE source_document_id = $1',
+      [id]
+    )
+
+    let docId: string
+    let created: boolean
+
+    if (existing.length) {
+      docId   = existing[0].id
+      created = false
+      await pool.query(
+        'UPDATE documents SET title = $2, content = $3, content_hash = $4 WHERE id = $1',
+        [docId, title, content, hash]
+      )
+    } else {
+      created = true
+      const { rows: inserted } = await pool.query(
+        `INSERT INTO documents (project_id, title, file_type, content, tags, component, source, content_hash, source_document_id)
+         VALUES ($1, $2, 'md', $3, $4, $5, $6, $7, $8) RETURNING id`,
+        [src.project_id, title, content, tags, src.component, `Generated from "${src.title}"`, hash, id]
+      )
+      docId = inserted[0].id
+    }
+
+    const chunkCount = await embedDocument(docId, content, { title })
+    await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [docId])
+
+    const { rows: doc } = await pool.query('SELECT * FROM documents WHERE id = $1', [docId])
+    res.status(created ? 201 : 200).json({ data: { ...doc[0], chunk_count: chunkCount, created } })
+  } catch (err) {
     serverError(res, err)
   }
 })
@@ -413,6 +687,37 @@ router.post('/suggest-tags', requireRole('member'), async (req, res) => {
     res.json({ data: { tags } })
   } catch (err) {
     serverError(res, err)
+  }
+})
+
+// ── POST /api/documents/suggest-tags-from-file ────────────────────────────
+// Parses the uploaded file for real content and suggests tags from it —
+// a dry run that never creates a document row (no dedup check, no embed).
+
+router.post('/suggest-tags-from-file', requireRole('member'), upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+  const tempPath = req.file.path
+
+  try {
+    const { text, title } = await parseFile(tempPath, req.file.originalname)
+    if (!text) return res.status(422).json({ error: 'Could not extract text from this file' })
+
+    const raw = await aiChat(
+      `Suggest up to 5 short, lowercase tags for this document based on its actual content.
+Title: "${title}"
+Content excerpt:
+"""${text.slice(0, 2000)}"""
+
+Return ONLY a JSON array of strings, e.g. ["docker","postgres","setup"]. No explanation.`,
+      'You are a tagging assistant. Return only a valid JSON array of short lowercase tags.'
+    )
+    const match = raw.match(/\[[\s\S]*\]/)
+    const tags: string[] = match ? (JSON.parse(match[0]) as string[]).slice(0, 5) : []
+    res.json({ data: { tags } })
+  } catch (err) {
+    serverError(res, err)
+  } finally {
+    await fs.unlink(tempPath).catch(() => {})
   }
 })
 

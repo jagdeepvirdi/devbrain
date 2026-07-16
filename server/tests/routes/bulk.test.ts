@@ -66,6 +66,44 @@ describe('Bulk Operations Route Handlers', () => {
     expect(res.json).toHaveBeenCalledWith({ data: { success: true } })
   })
 
+  it('PATCH /documents/bulk — sets component (overwrite, not append)', async () => {
+    const req = {
+      user: { id: 'u1', role: 'admin' },
+      body: { ids: ['d1', 'd2'], action: 'component', value: 'SAP' },
+    }
+    const res = { json: vi.fn(), status: vi.fn().mockReturnThis() }
+
+    const routeStack = documentsRouter.stack.find(s => s.route?.path === '/bulk') as any
+    const handler = routeStack.route.stack[routeStack.route.stack.length - 1].handle
+    await handler(req as any, res as any, () => {})
+
+    expect(mockClient.query).toHaveBeenCalledWith('BEGIN')
+    expect(mockClient.query).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE documents SET component = $1'),
+      ['SAP', ['d1', 'd2']]
+    )
+    expect(mockClient.query).toHaveBeenCalledWith('COMMIT')
+    expect(res.json).toHaveBeenCalledWith({ data: { success: true } })
+  })
+
+  it('PATCH /documents/bulk — component action with empty value clears the component', async () => {
+    const req = {
+      user: { id: 'u1', role: 'admin' },
+      body: { ids: ['d1'], action: 'component', value: '' },
+    }
+    const res = { json: vi.fn(), status: vi.fn().mockReturnThis() }
+
+    const routeStack = documentsRouter.stack.find(s => s.route?.path === '/bulk') as any
+    const handler = routeStack.route.stack[routeStack.route.stack.length - 1].handle
+    await handler(req as any, res as any, () => {})
+
+    expect(mockClient.query).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE documents SET component = $1'),
+      [null, ['d1']]
+    )
+    expect(res.json).toHaveBeenCalledWith({ data: { success: true } })
+  })
+
   it('PATCH /commands/bulk — updates favorite status', async () => {
     const req = {
       user: { id: 'u1', role: 'admin' },

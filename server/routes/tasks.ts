@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { z }      from 'zod'
 import { pool }   from '../db/pool.js'
 import { requireRole } from '../middleware/auth.js'
+import { deleteLinksFor } from '../services/links.js'
 
 const router = Router()
 
@@ -71,6 +72,26 @@ router.get('/', async (req, res) => {
       values
     )
     res.json({ data: rows })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── GET /api/tasks/:id ────────────────────────────────────────────────────
+// Fetches a single task regardless of the caller's current project filter —
+// used for deep-linking (?open=<id>) from a cross-project entity link.
+
+router.get('/:id', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT t.*, p.name AS project_name, p.color AS project_color
+       FROM tasks t
+       LEFT JOIN projects p ON p.id = t.project_id
+       WHERE t.id = $1`,
+      [req.params.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Task not found' })
+    res.json({ data: rows[0] })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
   }
@@ -186,6 +207,7 @@ router.delete('/:id', requireRole('member'), async (req, res) => {
       [req.params.id]
     )
     if (!rows.length) return res.status(404).json({ error: 'Task not found' })
+    await deleteLinksFor('task', req.params.id as string)
     res.json({ data: { deleted: rows[0] } })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
