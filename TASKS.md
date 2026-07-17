@@ -240,6 +240,28 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
       underlying entities correctly emptied the graph back out, zero console errors throughout.
       UX reference only (not code): `foambubble/foam` (17k★, TypeScript, VS Code Zettelkasten extension)
       and `logseq/logseq` (44k★, AGPL-3.0 — reference for UX ideas only, never copy code from it).
+- [x] **Duplicate code file detection** (shipped 2026-07-17, user-requested) — new **Find duplicates**
+      button on the Codes page opens a modal that scans code files (scoped to the selected project, or
+      all projects if none selected) for near-duplicates — "same file, renamed, with a few edited
+      lines," not just byte-identical copies. Two-phase per user's chosen design: phase 1 shortlists
+      candidate pairs cheaply via the per-document summary embeddings every code file already gets on
+      embed (`document_chunks` `chunk_index = -1` sentinel row) — a pgvector cosine self-join, zero
+      extra AI calls; phase 2 scores each shortlisted pair with a new deterministic line-similarity
+      ratio (`server/services/duplicateDetector.ts` — Sørensen–Dice coefficient over normalized line
+      multisets, order-insensitive but multiset-aware) and keeps pairs ≥ 0.5. New
+      **`POST /api/documents/find-duplicates`**. Files that failed summarization (no summary embedding)
+      skip phase 1 and are compared directly against every other file in scope, so a missing embedding
+      can never silently hide a duplicate — verified by a dedicated test. Modal shows each pair with a
+      similarity % and color-coded band (near-identical / likely duplicate / similar), lets you open
+      either file (closes the modal, same `?open=<id>` convention as the rest of Codes) or remove one
+      directly. 11 unit tests for the Dice-similarity function + 7 route tests; full suite 247/247,
+      server + client typecheck clean. Verified live in a real headless browser end-to-end: uploaded a
+      near-duplicate pair (one changed line out of 8) plus an unrelated control file, ran the scan,
+      confirmed the exact expected 88% score (7/8 shared lines) on the true pair only — the unrelated
+      file correctly excluded — clicked a result to confirm it opens the right document, clicked Remove
+      and confirmed via direct DB query the file was actually deleted, zero console errors from the
+      feature itself (one pre-existing unrelated 401 on `/api/projects` during the login race, nothing
+      to do with this endpoint).
 
 ### Considered, not recommended
 

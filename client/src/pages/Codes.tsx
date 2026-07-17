@@ -416,6 +416,104 @@ function ComponentOverviewModal({ projectId, onClose }: { projectId: string | un
   )
 }
 
+// ── Duplicates modal ────────────────────────────────────────────────────────
+
+type DuplicatePair = { docA: { id: string; title: string }; docB: { id: string; title: string }; score: number }
+
+function scoreBand(score: number): { label: string; color: string } {
+  if (score >= 0.9) return { label: 'near-identical', color: '#EF4444' }
+  if (score >= 0.7) return { label: 'likely duplicate', color: '#F59E0B' }
+  return { label: 'similar', color: 'var(--fg-4)' }
+}
+
+function DuplicatesModal({
+  projectId, onClose, onOpenDoc, onDeleted,
+}: {
+  projectId: string | undefined
+  onClose: () => void
+  onOpenDoc: (id: string) => void
+  onDeleted: () => void
+}) {
+  const { toast } = useToast()
+  const [loading, setLoading] = useState(true)
+  const [pairs,   setPairs]   = useState<DuplicatePair[]>([])
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    documentsApi.findDuplicates(projectId ?? null)
+      .then(setPairs)
+      .catch(err => toast((err as Error).message, 'error'))
+      .finally(() => setLoading(false))
+  }, [projectId, toast])
+
+  useEffect(() => { load() }, [load])
+
+  async function handleDelete(id: string, title: string) {
+    if (deletingId) return
+    setDeletingId(id)
+    try {
+      await documentsApi.remove(id)
+      setPairs(prev => prev.filter(p => p.docA.id !== id && p.docB.id !== id))
+      toast(`"${title}" removed`)
+      onDeleted()
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(5,5,10,.65)', backdropFilter: 'blur(4px)', zIndex: 400, display: 'grid', placeItems: 'center' }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-elev)', border: '1px solid var(--line-3)', borderRadius: 10, padding: 18, width: 560, maxHeight: '75vh', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', flex: 1 }}>Possible duplicate files</span>
+          <button onClick={onClose} style={{ color: 'var(--fg-3)', fontSize: 13, padding: '2px 6px', borderRadius: 'var(--radius)' }}>✕</button>
+        </div>
+
+        <div style={{ fontSize: 12, color: 'var(--fg-4)' }}>
+          Shortlisted by embedding similarity, confirmed by a line-level similarity score — no exact
+          match required, so a renamed file with a few edited lines still shows up.
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {loading ? (
+            <div style={{ fontSize: 12, color: 'var(--fg-4)' }}>Scanning for duplicates…</div>
+          ) : pairs.length === 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--fg-4)' }}>No likely duplicates found{projectId ? ' in this project' : ''}.</div>
+          ) : (
+            pairs.map(p => {
+              const band = scoreBand(p.score)
+              return (
+                <div key={`${p.docA.id}|${p.docB.id}`} style={{ border: '1px solid var(--line-2)', borderRadius: 7, padding: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: band.color }}>{Math.round(p.score * 100)}% · {band.label}</span>
+                  </div>
+                  {[p.docA, p.docB].map(doc => (
+                    <div key={doc.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <button onClick={() => { onOpenDoc(doc.id); onClose() }} style={{ flex: 1, textAlign: 'left', fontSize: 12.5, color: 'var(--fg)', padding: '3px 0' }}>
+                        {doc.title}
+                      </button>
+                      <button
+                        onClick={() => handleDelete(doc.id, doc.title)}
+                        disabled={deletingId === doc.id}
+                        style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 4, border: '1px solid #EF444455', background: 'none', color: '#EF4444', cursor: deletingId === doc.id ? 'wait' : 'default', opacity: deletingId === doc.id ? 0.6 : 1 }}
+                      >
+                        {deletingId === doc.id ? 'Removing…' : 'Remove'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Codes page ────────────────────────────────────────────────────────────
 
 export function CodesPage() {
@@ -433,6 +531,7 @@ export function CodesPage() {
   const [selected,   setSelected]   = useState<string | null>(() => searchParams.get('open'))
   const [deleting,   setDeleting]   = useState<DocMeta | null>(null)
   const [showOverviewModal, setShowOverviewModal] = useState(false)
+  const [showDuplicatesModal, setShowDuplicatesModal] = useState(false)
 
   const load = useCallback(async (offset: number, append: boolean) => {
     if (!append) setLoading(true); else setLoadingMore(true)
@@ -487,8 +586,15 @@ export function CodesPage() {
           {selectedId ? 'filtered by project' : 'all projects'}
         </span>
         <button
+          onClick={() => setShowDuplicatesModal(true)}
+          style={{ marginLeft: 'auto', fontSize: 11.5, padding: '5px 11px', borderRadius: 5, border: '1px solid var(--line-2)', background: 'var(--bg-elev-2)', color: 'var(--fg-3)', cursor: 'default', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          <span style={{ fontSize: 10 }}>⧉</span>
+          Find duplicates
+        </button>
+        <button
           onClick={() => setShowOverviewModal(true)}
-          style={{ marginLeft: 'auto', fontSize: 11.5, padding: '5px 11px', borderRadius: 5, border: '1px solid var(--accent-line)', background: 'var(--accent-dim)', color: 'var(--accent-2)', cursor: 'default', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          style={{ fontSize: 11.5, padding: '5px 11px', borderRadius: 5, border: '1px solid var(--accent-line)', background: 'var(--accent-dim)', color: 'var(--accent-2)', cursor: 'default', display: 'inline-flex', alignItems: 'center', gap: 6 }}
         >
           <span style={{ fontSize: 10 }}>◇</span>
           Component overview
@@ -497,6 +603,15 @@ export function CodesPage() {
 
       {showOverviewModal && (
         <ComponentOverviewModal projectId={selectedId ?? undefined} onClose={() => setShowOverviewModal(false)} />
+      )}
+
+      {showDuplicatesModal && (
+        <DuplicatesModal
+          projectId={selectedId ?? undefined}
+          onClose={() => setShowDuplicatesModal(false)}
+          onOpenDoc={id => { setSelected(id); setSearchParams({ open: id }, { replace: true }) }}
+          onDeleted={() => load(0, false)}
+        />
       )}
 
       <div style={{ paddingTop: 14 }}>

@@ -588,6 +588,12 @@ export const documentsApi = {
       body: JSON.stringify({ component, projectId }),
     }),
 
+  findDuplicates: (projectId: string | null) =>
+    request<{ docA: { id: string; title: string }; docB: { id: string; title: string }; score: number }[]>(
+      '/documents/find-duplicates',
+      { method: 'POST', body: JSON.stringify({ projectId }) }
+    ),
+
   suggestTags: (title: string, hint?: string) =>
     request<{ tags: string[] }>('/documents/suggest-tags', { method: 'POST', body: JSON.stringify({ title, hint }) }),
 

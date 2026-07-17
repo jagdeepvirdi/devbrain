@@ -16,6 +16,7 @@ import { requireRole } from '../middleware/auth.js'
 import { embedDocument, embedDocumentsBatch } from '../services/embedder.js'
 import { deleteLinksFor } from '../services/links.js'
 import { extractSymbolOutline } from '../services/codeChunker.js'
+import { lineSimilarity } from '../services/duplicateDetector.js'
 
 const router = Router()
 
@@ -755,6 +756,87 @@ router.post('/component-overview', requireRole('member'), async (req, res) => {
 
     const { rows: doc } = await pool.query('SELECT * FROM documents WHERE id = $1', [docId])
     res.status(created ? 201 : 200).json({ data: { ...doc[0], chunk_count: chunkCount, created, fileCount: files.length } })
+  } catch (err) {
+    serverError(res, err)
+  }
+})
+
+// ── POST /api/documents/find-duplicates ───────────────────────────────────
+// Two-phase duplicate detection across code files (see services/duplicateDetector.ts
+// for the precise-scoring half): phase 1 shortlists candidate pairs cheaply using the
+// per-document summary embeddings every code file already gets on embed — a pgvector
+// cosine self-join, no extra AI calls — then phase 2 scores each shortlisted pair with
+// a deterministic line-similarity ratio and keeps the ones above CONFIRM_MIN_SCORE.
+// Files that failed summarization (no summary embedding — see embedder.ts, non-fatal)
+// skip phase 1 entirely and are compared directly against every other file in scope,
+// so a missing embedding can never silently hide a duplicate.
+
+const DUPLICATE_SHORTLIST_COSINE = 0.7  // phase 1: loose, recall-oriented — phase 2 does the real filtering
+const DUPLICATE_CONFIRM_MIN_SCORE = 0.5 // phase 2: floor for even showing a pair to the user
+const DUPLICATE_MAX_RESULTS = 50
+
+const FindDuplicatesBody = z.object({
+  projectId: z.string().nullable(),
+})
+
+router.post('/find-duplicates', requireRole('member'), async (req, res) => {
+  const parsed = FindDuplicatesBody.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
+  const { projectId } = parsed.data
+
+  try {
+    const { rows: docs } = await pool.query<{ id: string; title: string; content: string }>(
+      `SELECT id, title, content FROM documents WHERE file_type = 'code' ${projectId ? 'AND project_id = $1' : ''}`,
+      projectId ? [projectId] : []
+    )
+    if (docs.length < 2) return res.json({ data: [] })
+
+    const ids = docs.map(d => d.id)
+    const contentById = new Map(docs.map(d => [d.id, { title: d.title, content: d.content }]))
+
+    const { rows: embeddedRows } = await pool.query<{ document_id: string }>(
+      `SELECT document_id FROM document_chunks WHERE chunk_index = -1 AND document_id = ANY($1)`,
+      [ids]
+    )
+    const embeddedIds = embeddedRows.map(r => r.document_id)
+    const embeddedSet = new Set(embeddedIds)
+    const noEmbeddingIds = ids.filter(id => !embeddedSet.has(id))
+
+    const candidatePairs = new Map<string, [string, string]>()
+    const addPair = (a: string, b: string) => {
+      if (a === b) return
+      const [x, y] = a < b ? [a, b] : [b, a]
+      candidatePairs.set(`${x}|${y}`, [x, y])
+    }
+
+    if (embeddedIds.length >= 2) {
+      const { rows: shortlist } = await pool.query<{ doc_a: string; doc_b: string }>(
+        `SELECT a.document_id AS doc_a, b.document_id AS doc_b
+         FROM document_chunks a
+         JOIN document_chunks b ON a.document_id < b.document_id AND b.chunk_index = -1
+         WHERE a.chunk_index = -1
+           AND a.document_id = ANY($1) AND b.document_id = ANY($1)
+           AND (1 - (a.embedding <=> b.embedding)) >= $2`,
+        [embeddedIds, DUPLICATE_SHORTLIST_COSINE]
+      )
+      for (const p of shortlist) addPair(p.doc_a, p.doc_b)
+    }
+    for (const noEmbId of noEmbeddingIds) {
+      for (const otherId of ids) addPair(noEmbId, otherId)
+    }
+
+    const results: { docA: { id: string; title: string }; docB: { id: string; title: string }; score: number }[] = []
+    for (const [idA, idB] of candidatePairs.values()) {
+      const a = contentById.get(idA)!
+      const b = contentById.get(idB)!
+      const score = lineSimilarity(a.content, b.content)
+      if (score >= DUPLICATE_CONFIRM_MIN_SCORE) {
+        results.push({ docA: { id: idA, title: a.title }, docB: { id: idB, title: b.title }, score })
+      }
+    }
+    results.sort((x, y) => y.score - x.score)
+
+    res.json({ data: results.slice(0, DUPLICATE_MAX_RESULTS) })
   } catch (err) {
     serverError(res, err)
   }
