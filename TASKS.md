@@ -61,8 +61,43 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
 
 # V2 Roadmap
 
-> Phases ordered by priority: fix existing gaps first, build the safety net, protect data, then grow features.
-> Fix → Test → Backup → Visibility → AI → Git → Integrations → Multi-user.
+> Re-scoped 2026-07-17: audited the original "Fix → Test → Backup → Visibility → AI → Git →
+> Integrations → Multi-user" pipeline against what's actually shipped. Most of it landed already
+> (RBAC, LDAP/AD auto-provisioning, GitHub/Linear/Jira import, local git browsing + commit linking,
+> Apprise external notifications, scheduled backup + zip/JSON restore, CI with server tests + client
+> typecheck + Playwright e2e). What follows are the specific gaps found — not a full category rebuild.
+
+## CI Coverage Gating
+
+- [ ] Enforce a coverage threshold in `.github/workflows/*.yml`'s server job — `test:coverage`
+      (`vitest run --coverage`) already exists but isn't run or gated in CI, so test-depth regressions
+      pass silently. Pick a realistic baseline from a fresh coverage run rather than an arbitrary
+      round number.
+
+## Backup Retention & Offsite Destination
+
+- [ ] Prune local backup files (older than N days, or keep-last-N) in `server/services/backup.ts` —
+      `runBackup()` writes a new dated zip on every scheduled run forever with no cleanup, so
+      `backupPath` grows unbounded.
+- [ ] Optional remote backup destination (S3-compatible bucket, or an rsync/SFTP target) alongside the
+      existing local-path-only scheduler — local-only means a disk failure loses DevBrain and its
+      backups together.
+
+## Trend & Visibility Dashboards
+
+- [ ] Time-series view for issue throughput (opened/resolved per week) per project — `GET
+      /api/dashboard/stats` only returns current-snapshot counts today, no history.
+- [ ] Embedding health over time (pending/failed document trend, not just current counts) — would have
+      made the 2026-07-15 GPU-thrashing regression (see Known Issues) visible sooner than a live
+      incident did.
+
+## Two-Way Integration Sync (GitHub / Linear / Jira)
+
+- [ ] Webhook-based live sync as an alternative to the current manual `POST /api/integrations/:id/sync`
+      pull-only trigger — investigate per-provider webhook setup (GitHub App vs. PAT scopes, Linear
+      webhooks, Jira webhooks) before committing to one approach; biggest unknown of the four items here.
+- [ ] Push-back: create/update the external issue from DevBrain, not just import — needs a design
+      decision on conflict resolution once sync is bidirectional (simultaneous edits on both sides).
 
 ---
 
