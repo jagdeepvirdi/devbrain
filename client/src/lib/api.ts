@@ -582,6 +582,12 @@ export const documentsApi = {
   saveExplanation: (id: string) =>
     request<DocMeta & { created: boolean }>(`/documents/${id}/save-explanation`, { method: 'POST' }),
 
+  componentOverview: (component: string, projectId: string | null) =>
+    request<DocMeta & { created: boolean; fileCount: number }>('/documents/component-overview', {
+      method: 'POST',
+      body: JSON.stringify({ component, projectId }),
+    }),
+
   suggestTags: (title: string, hint?: string) =>
     request<{ tags: string[] }>('/documents/suggest-tags', { method: 'POST', body: JSON.stringify({ title, hint }) }),
 

@@ -97,6 +97,7 @@ app.post('/api/commands/:id/explain',     mutationLimiter)
 app.post('/api/documents/:id/explain',    mutationLimiter)
 app.post('/api/documents/:id/diagram',    mutationLimiter)
 app.post('/api/documents/:id/save-explanation', mutationLimiter)
+app.post('/api/documents/component-overview', mutationLimiter)
 
 // ── Routes ────────────────────────────────────────────────────────────────
 

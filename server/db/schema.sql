@@ -101,6 +101,11 @@ CREATE TABLE IF NOT EXISTS documents (
   -- Set when this doc was generated FROM another doc (e.g. "Save as document" on a
   -- code file's explanation) — points at the source, not the other way round.
   source_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+  -- Set when this doc is the generated overview for a whole `component` group of
+  -- code files (POST /documents/component-overview) — no single source_document_id
+  -- since it's built from many files, so this + project_id is the idempotency key
+  -- instead (regenerating updates the same row rather than piling up duplicates).
+  source_component TEXT,
   source           TEXT        NOT NULL DEFAULT '',
   content_hash     TEXT,
   -- 'pending' | 'processing' | 'done' | 'failed'

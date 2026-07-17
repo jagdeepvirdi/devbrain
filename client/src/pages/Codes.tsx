@@ -342,6 +342,80 @@ function CodePreviewPanel({ docId, onClose, onReembedSuccess, onNavigate }: { do
   )
 }
 
+// ── Component overview modal ────────────────────────────────────────────
+
+function ComponentOverviewModal({ projectId, onClose }: { projectId: string | undefined; onClose: () => void }) {
+  const { toast } = useToast()
+  const [components, setComponents] = useState<string[]>([])
+  const [loading,     setLoading]     = useState(true)
+  const [selected,    setSelected]    = useState('')
+  const [generating,  setGenerating]  = useState(false)
+
+  useEffect(() => {
+    documentsApi.components(projectId).then(list => {
+      setComponents(list)
+      setSelected(list[0] ?? '')
+    }).catch(() => setComponents([])).finally(() => setLoading(false))
+  }, [projectId])
+
+  async function handleGenerate() {
+    if (!selected || generating) return
+    setGenerating(true)
+    try {
+      const result = await documentsApi.componentOverview(selected, projectId ?? null)
+      toast(
+        `${result.created ? 'Generated' : 'Updated'} "${result.title}" from ${result.fileCount} file${result.fileCount !== 1 ? 's' : ''}`,
+        'success'
+      )
+      onClose()
+    } catch (err) {
+      toast((err as Error).message, 'error')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const inp: React.CSSProperties = { width: '100%', background: 'var(--bg)', border: '1px solid var(--line-2)', borderRadius: 5, padding: '6px 9px', color: 'var(--fg)', fontSize: 12.5, boxSizing: 'border-box', outline: 'none' }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(5,5,10,.65)', backdropFilter: 'blur(4px)', zIndex: 400, display: 'grid', placeItems: 'center' }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-elev)', border: '1px solid var(--line-3)', borderRadius: 10, padding: 18, width: 380, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', flex: 1 }}>Generate component overview</span>
+          <button onClick={onClose} style={{ color: 'var(--fg-3)', fontSize: 13, padding: '2px 6px', borderRadius: 'var(--radius)' }}>✕</button>
+        </div>
+
+        <div style={{ fontSize: 12, color: 'var(--fg-4)' }}>
+          Combines the signature outlines of every code file tagged with one component into a single AI-generated architecture overview, saved to Documents.
+        </div>
+
+        {loading ? (
+          <div style={{ fontSize: 12, color: 'var(--fg-4)' }}>Loading components…</div>
+        ) : components.length === 0 ? (
+          <div style={{ fontSize: 12, color: 'var(--fg-4)' }}>No components found. Tag a code file with a component first (Upload → Component field).</div>
+        ) : (
+          <select value={selected} onChange={e => setSelected(e.target.value)} style={{ ...inp, height: 30 }}>
+            {components.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
+
+        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={{ fontSize: 12, padding: '5px 12px', borderRadius: 5, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)', cursor: 'default' }}>
+            Cancel
+          </button>
+          <button
+            onClick={handleGenerate}
+            disabled={!selected || generating}
+            style={{ fontSize: 12, padding: '5px 14px', borderRadius: 5, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'white', cursor: 'default', opacity: (!selected || generating) ? 0.6 : 1 }}
+          >
+            {generating ? 'Generating…' : 'Generate'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Codes page ────────────────────────────────────────────────────────────
 
 export function CodesPage() {
@@ -358,6 +432,7 @@ export function CodesPage() {
   const [search,     setSearch]     = useState('')
   const [selected,   setSelected]   = useState<string | null>(() => searchParams.get('open'))
   const [deleting,   setDeleting]   = useState<DocMeta | null>(null)
+  const [showOverviewModal, setShowOverviewModal] = useState(false)
 
   const load = useCallback(async (offset: number, append: boolean) => {
     if (!append) setLoading(true); else setLoadingMore(true)
@@ -411,7 +486,18 @@ export function CodesPage() {
         <span style={{ fontSize: 11.5, color: 'var(--fg-4)', marginLeft: 4 }}>
           {selectedId ? 'filtered by project' : 'all projects'}
         </span>
+        <button
+          onClick={() => setShowOverviewModal(true)}
+          style={{ marginLeft: 'auto', fontSize: 11.5, padding: '5px 11px', borderRadius: 5, border: '1px solid var(--accent-line)', background: 'var(--accent-dim)', color: 'var(--accent-2)', cursor: 'default', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          <span style={{ fontSize: 10 }}>◇</span>
+          Component overview
+        </button>
       </div>
+
+      {showOverviewModal && (
+        <ComponentOverviewModal projectId={selectedId ?? undefined} onClose={() => setShowOverviewModal(false)} />
+      )}
 
       <div style={{ paddingTop: 14 }}>
         <CodeUploadStrip projectId={selectedId ?? undefined} onDone={() => load(0, false)} />

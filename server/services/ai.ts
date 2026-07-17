@@ -80,10 +80,15 @@ export async function aiChat(prompt: string, system: string): Promise<string> {
   }
 
   // Default: Ollama (local, free)
+  // 120s, not 30s — non-streaming generation time scales with prompt size
+  // (e.g. component-overview combines several files' outlines into one
+  // prompt) and this is a 7B model on a 6GB laptop GPU; 30s was tight even
+  // for single-file prompts and was observed timing out in practice on a
+  // multi-file one. Matches the streaming path's existing 120s below.
   const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(120_000),
     body: JSON.stringify({
       model:    CHAT_MODEL,
       stream:   false,

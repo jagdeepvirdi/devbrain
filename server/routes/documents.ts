@@ -15,6 +15,7 @@ import { serverError }        from '../lib/errors.js'
 import { requireRole } from '../middleware/auth.js'
 import { embedDocument } from '../services/embedder.js'
 import { deleteLinksFor } from '../services/links.js'
+import { extractSymbolOutline } from '../services/codeChunker.js'
 
 const router = Router()
 
@@ -664,6 +665,93 @@ router.post('/:id/save-explanation', requireRole('member'), async (req, res) => 
 
     const { rows: doc } = await pool.query('SELECT * FROM documents WHERE id = $1', [docId])
     res.status(created ? 201 : 200).json({ data: { ...doc[0], chunk_count: chunkCount, created } })
+  } catch (err) {
+    serverError(res, err)
+  }
+})
+
+// ── POST /api/documents/component-overview ────────────────────────────────
+// Generates one combined architecture overview from every code file tagged
+// with a given `component`, instead of one file at a time. Uses a compact
+// per-file signature outline (via tree-sitter's extractSymbolOutline) rather
+// than dumping full file text into the prompt — "rank symbols, don't dump
+// everything", the idea behind Aider's repo map — falling back to a short
+// truncated excerpt for files whose language has no grammar available.
+// Idempotent per (project_id, component): regenerating updates the same
+// overview doc (source_component) instead of creating a duplicate.
+
+const OVERVIEW_SNIPPET_CHARS = 800  // fallback per-file excerpt when no AST outline is available
+const OVERVIEW_MAX_FILES     = 30   // sane cap so a huge component doesn't blow the prompt
+
+const ComponentOverviewBody = z.object({
+  component: z.string().min(1).max(120),
+  projectId: z.string().nullable(),
+})
+
+router.post('/component-overview', requireRole('member'), async (req, res) => {
+  const parsed = ComponentOverviewBody.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
+  const { component, projectId } = parsed.data
+  const projectCond = projectId ? 'project_id = $2' : 'project_id IS NULL'
+
+  try {
+    const { rows: files } = await pool.query(
+      `SELECT id, title, language, content FROM documents
+       WHERE file_type = 'code' AND component = $1 AND ${projectCond}
+       ORDER BY title
+       LIMIT $${projectId ? 3 : 2}`,
+      projectId ? [component, projectId, OVERVIEW_MAX_FILES] : [component, OVERVIEW_MAX_FILES]
+    )
+    if (!files.length) {
+      return res.status(404).json({ error: `No code files found for component "${component}"` })
+    }
+
+    const fileBlocks = await Promise.all(files.map(async (f: { title: string; language: string | null; content: string }) => {
+      const outline = await extractSymbolOutline(f.content, f.language)
+      const body = outline
+        ? outline.map(line => `  ${line}`).join('\n')
+        : f.content.slice(0, OVERVIEW_SNIPPET_CHARS)
+      return `### ${f.title}${f.language ? ` (${f.language})` : ''}\n${body}`
+    }))
+
+    const overview = await aiChat(
+      `Generate an architecture overview for the "${component}" component, based on the signature outlines of its ${files.length} file(s):\n\n${fileBlocks.join('\n\n')}`,
+      'You are a technical assistant that writes component/module-level architecture overviews for a developer knowledge base, given per-file signature outlines (not full source). Use Markdown. Cover: what this component is responsible for as a whole, how its files relate to or depend on each other, the main entry points, and any notable patterns. Do not invent details not implied by the outlines. Keep it under 400 words.'
+    )
+
+    const title = `${component} — Component Overview`
+    const hash  = sha256(overview)
+
+    const { rows: existing } = await pool.query(
+      `SELECT id FROM documents WHERE source_component = $1 AND ${projectCond}`,
+      projectId ? [component, projectId] : [component]
+    )
+
+    let docId: string
+    let created: boolean
+
+    if (existing.length) {
+      docId   = existing[0].id
+      created = false
+      await pool.query(
+        'UPDATE documents SET title = $2, content = $3, content_hash = $4 WHERE id = $1',
+        [docId, title, overview, hash]
+      )
+    } else {
+      created = true
+      const { rows: inserted } = await pool.query(
+        `INSERT INTO documents (project_id, title, file_type, content, tags, component, source, content_hash, source_component)
+         VALUES ($1, $2, 'md', $3, $4, $5, $6, $7, $8) RETURNING id`,
+        [projectId ?? null, title, overview, ['component-overview'], component, `Generated from ${files.length} file(s) in "${component}"`, hash, component]
+      )
+      docId = inserted[0].id
+    }
+
+    const chunkCount = await embedDocument(docId, overview, { title })
+    await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [docId])
+
+    const { rows: doc } = await pool.query('SELECT * FROM documents WHERE id = $1', [docId])
+    res.status(created ? 201 : 200).json({ data: { ...doc[0], chunk_count: chunkCount, created, fileCount: files.length } })
   } catch (err) {
     serverError(res, err)
   }

@@ -132,13 +132,21 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
 
 ### Good to Have
 
-- [ ] **Multi-file / component-level overview doc** — generate one combined architecture doc from several
-      code files at once (e.g. everything tagged with one `component`, like "SAP"), instead of one file
-      at a time. Design reference: Aider's `repomap.py` (`Aider-AI/aider`, 47k★, Apache-2.0) — ranks the
-      most important symbols across a whole repo before feeding them to the model, rather than dumping
-      every file's full text. Not vendoring Aider itself (full CLI pair-programming tool, far beyond
-      scope) — just the "rank symbols, don't dump everything" design pattern, once tree-sitter parsing
-      (Must Have above) is in place to produce those symbols.
+- [x] **Multi-file / component-level overview doc** (shipped 2026-07-17) — new **Component overview**
+      button on the Codes page opens a modal to pick a tagged `component` and generate one combined
+      architecture doc from every code file in it, instead of one file at a time. New
+      **`POST /api/documents/component-overview`** builds the prompt from each file's compact signature
+      outline (`extractSymbolOutline`, reusing the tree-sitter chunker from the Must Have above) rather
+      than dumping full file text — "rank symbols, don't dump everything", the design idea borrowed from
+      Aider's `repomap.py` (`Aider-AI/aider`, 47k★, Apache-2.0; not vendored, just the pattern). Falls back
+      to a truncated excerpt for languages without a grammar. Idempotent per `(project_id, component)` via
+      new `documents.source_component` column (migration: `add_source_component.ts`) — regenerating
+      updates the same doc instead of creating duplicates, mirroring how `source_document_id` already
+      works for single-file "Save as document". Capped at 30 files per component to bound prompt size.
+      **Gotcha hit during implementation**: combining several files' outlines into one prompt pushed
+      `aiChat()`'s non-streaming request past the existing 30s timeout on this 7B model / 6GB laptop GPU —
+      bumped to 120s (`server/services/ai.ts`) to match the streaming path's existing timeout. New tests
+      in `documents_component_overview.test.ts`; full suite 219/219, server + client typecheck clean.
 - [x] **Links Graph View** (shipped 2026-07-16) — new **Graph** nav item (`/graph`), a force-directed
       visualization of the whole `entity_links` graph, as a companion to the chip-list view. New
       `GET /api/links/graph` returns every link plus a resolved descriptor for every distinct node

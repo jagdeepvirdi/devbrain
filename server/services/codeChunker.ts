@@ -162,4 +162,49 @@ export async function chunkCodeByAst(text: string, language: string | null | und
   }
 }
 
+// Recursively collects one line per declaration-like node (its signature —
+// the first source line of the node, not the full body), so a whole file's
+// shape can be summarized in a handful of lines instead of dumping its full
+// text. This is the "rank symbols, don't dump everything" idea behind
+// Aider's repo map, reused here for the component-overview feature.
+function collectSignatures(node: SyntaxNode, source: string, out: string[], cap: number): void {
+  const children = node.namedChildren.filter((c): c is SyntaxNode => c !== null)
+  for (const child of children) {
+    if (out.length >= cap) return
+    if (isBoundaryNode(child)) {
+      const raw = source.slice(child.startIndex, child.endIndex)
+      const firstLine = raw.split('\n')[0].trim()
+      if (firstLine) out.push(firstLine.length > 160 ? firstLine.slice(0, 160) + '…' : firstLine)
+    }
+    collectSignatures(child, source, out, cap)
+  }
+}
+
+/**
+ * Extracts a compact "signature outline" for a source file — one line per
+ * top-level (and nested) function/class/method declaration, in source
+ * order — instead of the full file text. Same null-on-unsupported/
+ * parse-error contract as chunkCodeByAst(), for the same reason: callers
+ * fall back to a plain truncated snippet when this returns null.
+ */
+export async function extractSymbolOutline(text: string, language: string | null | undefined, cap = 40): Promise<string[] | null> {
+  if (!language) return null
+  const wasmFile = LANGUAGE_WASM[language]
+  if (!wasmFile) return null
+
+  try {
+    const lang = await loadLanguage(wasmFile)
+    const parser = new Parser()
+    parser.setLanguage(lang)
+    const tree = parser.parse(text)
+    if (!tree || tree.rootNode.hasError) return null
+
+    const out: string[] = []
+    collectSignatures(tree.rootNode, text, out, cap)
+    return out.length > 0 ? out : null
+  } catch {
+    return null
+  }
+}
+
 export const AST_CHUNKABLE_LANGUAGES = Object.keys(LANGUAGE_WASM)
