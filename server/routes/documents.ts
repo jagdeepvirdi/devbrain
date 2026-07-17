@@ -330,15 +330,25 @@ router.post('/', requireRole('member'), upload.single('file'), async (req, res) 
     )
     docId = rows[0].id
 
-    // Embed — chunks stored progressively
-    const chunkCount = await embedDocument(docId!, text, { title, language })
-    await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [docId])
+    // Embed — chunks stored progressively. A failure here (e.g. Ollama unreachable)
+    // shouldn't destroy the uploaded document — mark it failed and let the user retry
+    // from the Documents/Codes list, same as every other embed-triggering route
+    // (bulk re-embed, update-content, single re-embed) already does.
+    let chunkCount = 0
+    try {
+      chunkCount = await embedDocument(docId!, text, { title, language })
+      await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [docId])
+    } catch (embedErr) {
+      console.error('Document embed failed:', embedErr)
+      await pool.query(`UPDATE documents SET embedding_status = 'failed' WHERE id = $1`, [docId])
+    }
 
     const { rows: doc } = await pool.query('SELECT * FROM documents WHERE id = $1', [docId])
 
     res.status(201).json({ data: { ...doc[0], chunk_count: chunkCount } })
   } catch (err) {
-    // Roll back document row if embedding failed mid-way
+    // Roll back document row only if something failed before we could mark an
+    // embedding outcome (parse/insert error) — embed failures are handled above.
     if (docId) await pool.query('DELETE FROM documents WHERE id = $1', [docId]).catch(() => {})
     serverError(res, err)
   } finally {
@@ -441,8 +451,15 @@ router.post('/url', requireRole('member'), async (req, res) => {
     )
     docId = rows[0].id
 
-    const chunkCount = await embedDocument(docId!, text, { title })
-    await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [docId])
+    // Same non-destructive embed-failure handling as the file upload route above.
+    let chunkCount = 0
+    try {
+      chunkCount = await embedDocument(docId!, text, { title })
+      await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [docId])
+    } catch (embedErr) {
+      console.error('Document embed failed:', embedErr)
+      await pool.query(`UPDATE documents SET embedding_status = 'failed' WHERE id = $1`, [docId])
+    }
 
     const { rows: doc } = await pool.query('SELECT * FROM documents WHERE id = $1', [docId])
 

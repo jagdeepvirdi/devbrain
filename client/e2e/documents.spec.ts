@@ -33,7 +33,19 @@ test.describe('Document upload', () => {
     const fileInput = page.locator('input[type="file"]').first()
     await fileInput.setInputFiles(tmpMdPath)
 
-    // Wait for the document to appear in the list
+    // A single selected file is staged (not uploaded yet) so Auto-tag can analyze its
+    // real content — confirm the upload explicitly before it reaches the document list.
+    // Wait for the actual POST /api/documents response, not just the click: right after
+    // clicking, the drop-zone's "Embedding..." status text and the staged-file banner (both
+    // of which also render the filename) can be visible at the same time as a transient
+    // in-flight render, which makes a plain getByText(DOC_TITLE) match 2 elements.
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes('/api/documents') && res.request().method() === 'POST', { timeout: 60_000 }),
+      page.getByRole('button', { name: 'Upload' }).click(),
+    ])
+
+    // Once uploaded, the drop-zone's staged-file banner is gone, so the document list row
+    // is the only remaining match.
     await expect(page.getByText(DOC_TITLE)).toBeVisible({ timeout: 15_000 })
   })
 

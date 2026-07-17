@@ -59,6 +59,42 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
 
 ---
 
+### CI E2E failure: document upload destroyed the document on embed failure (fixed 2026-07-17)
+
+**Root cause**: CI's `e2e` job (`.github/workflows/ci.yml`) has no Ollama service — `OLLAMA_URL` points
+at `localhost:11434`, nothing listens there. `POST /api/documents` and `POST /api/documents/url`
+(`server/routes/documents.ts`) awaited `embedDocument()` synchronously and, on any failure, **deleted
+the just-inserted document row** and returned a 500 — unlike every other embed-triggering route in the
+same file (bulk re-embed, `update-content`, single re-embed), which mark `embedding_status = 'failed'`
+and keep the document, matching the UI's existing "failed — click to retry" badge
+(`EMBED_DOT.failed` in `client/src/pages/Documents.tsx`). So in CI, uploading a document during
+`e2e/documents.spec.ts` always failed outright, which the test surfaced as a Playwright strict-mode
+violation (`getByText('E2E Test Document')` resolved to 2 elements) rather than an obvious "upload
+failed" — the drop-zone's staged-file banner never clears on failure, so its filename text and the
+reverted "Ready to upload…" status text both matched the assertion.
+
+- [x] `routes/documents.ts` — both routes now catch embed failures locally, log via `console.error`,
+      mark `embedding_status = 'failed'`, and still return 201 with the document (matching the
+      already-established graceful pattern elsewhere in this file). The outer catch (which still
+      deletes + 500s) now only fires for genuine parse/insert failures, not embed failures.
+      `tests/routes/documents_embedding_status.test.ts` had a test asserting the *old* rollback
+      behavior — rewritten to assert the document survives + gets marked `failed`, plus a new
+      equivalent test added for the URL-import route's failure path (previously uncovered).
+- [x] `e2e/documents.spec.ts` — a single selected file is staged (not uploaded) so Auto-tag can inspect
+      its real content first (existing, unrelated behavior) — the test now explicitly clicks "Upload"
+      and waits for the real `POST /api/documents` response before asserting the list, instead of
+      asserting right after `setInputFiles()`.
+      Verified locally end-to-end (Ollama *is* actually running natively on this machine, not
+      containerized — `docker ps` just doesn't show it): all 3 tests in the file pass; confirmed via
+      direct DB query that the uploaded documents reached `embedding_status: 'done'`. Server suite
+      248/248 (247 + 1 new test), both `tsc --noEmit` clean.
+      **Not done**: `routes/documents.ts`'s `save-explanation` and `component-overview` routes don't
+      delete on embed failure either, but they also don't mark `embedding_status = 'failed'` — a row
+      stays silently `pending` forever with no retry affordance. Lower severity (not what broke CI,
+      no test currently depends on it) — left as a follow-up rather than expanding this fix's scope.
+
+---
+
 # V2 Roadmap
 
 > Re-scoped 2026-07-17: audited the original "Fix → Test → Backup → Visibility → AI → Git →

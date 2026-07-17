@@ -68,12 +68,13 @@ describe('POST /api/documents — embedding_status is finalized on upload', () =
     expect(res.status).toHaveBeenCalledWith(201)
   })
 
-  it('rolls back the document row on embed failure and never marks it done', async () => {
+  it('keeps the document row on embed failure, marks it failed, and still returns 201', async () => {
     mockParseFile.mockResolvedValue({ text: 'hello world', fileType: 'txt', title: 'notes' })
     mockQuery
-      .mockResolvedValueOnce({ rows: [] } as any)                 // dedup check
-      .mockResolvedValueOnce({ rows: [{ id: 'doc-2' }] } as any)  // insert
-      .mockResolvedValueOnce({ rows: [] } as any)                 // delete rollback
+      .mockResolvedValueOnce({ rows: [] } as any)                                     // dedup check
+      .mockResolvedValueOnce({ rows: [{ id: 'doc-2' }] } as any)                      // insert
+      .mockResolvedValueOnce({ rows: [] } as any)                                     // embedding_status = failed
+      .mockResolvedValueOnce({ rows: [{ id: 'doc-2', embedding_status: 'failed' }] } as any) // final select
     mockEmbed.mockRejectedValue(new Error('ollama down'))
 
     const req: any = { body: {}, file: { path: '/tmp/fake', originalname: 'notes.txt' } }
@@ -81,12 +82,12 @@ describe('POST /api/documents — embedding_status is finalized on upload', () =
 
     await getHandler('/')(req, res, () => {})
 
-    expect(mockQuery).toHaveBeenCalledWith('DELETE FROM documents WHERE id = $1', ['doc-2'])
-    expect(mockQuery).not.toHaveBeenCalledWith(
-      expect.stringContaining("embedding_status = 'done'"),
-      expect.anything()
+    expect(mockQuery).not.toHaveBeenCalledWith('DELETE FROM documents WHERE id = $1', ['doc-2'])
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.stringContaining("embedding_status = 'failed'"),
+      ['doc-2']
     )
-    expect(res.status).toHaveBeenCalledWith(500)
+    expect(res.status).toHaveBeenCalledWith(201)
   })
 })
 
@@ -112,6 +113,28 @@ describe('POST /api/documents/url — embedding_status is finalized on import', 
     expect(mockQuery).toHaveBeenCalledWith(
       expect.stringContaining("UPDATE documents SET embedding_status = 'done'"),
       ['doc-3']
+    )
+    expect(res.status).toHaveBeenCalledWith(201)
+  })
+
+  it('keeps the document row on embed failure, marks it failed, and still returns 201', async () => {
+    mockParseUrl.mockResolvedValue({ text: 'page content', fileType: 'url', title: 'example.com' })
+    mockQuery
+      .mockResolvedValueOnce({ rows: [] } as any)                                       // dedup check
+      .mockResolvedValueOnce({ rows: [{ id: 'doc-4' }] } as any)                        // insert
+      .mockResolvedValueOnce({ rows: [] } as any)                                       // embedding_status = failed
+      .mockResolvedValueOnce({ rows: [{ id: 'doc-4', embedding_status: 'failed' }] } as any) // final select
+    mockEmbed.mockRejectedValue(new Error('ollama down'))
+
+    const req: any = { body: { url: 'https://example.com', tags: [] } }
+    const res = fakeRes()
+
+    await getHandler('/url')(req, res, () => {})
+
+    expect(mockQuery).not.toHaveBeenCalledWith('DELETE FROM documents WHERE id = $1', ['doc-4'])
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.stringContaining("embedding_status = 'failed'"),
+      ['doc-4']
     )
     expect(res.status).toHaveBeenCalledWith(201)
   })
