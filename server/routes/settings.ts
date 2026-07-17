@@ -55,11 +55,11 @@ router.put('/ldap', requireRole('admin'), async (req, res) => {
     const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'ldap_settings'`)
     const existing = (rows[0]?.value ?? {}) as LdapConfig & { bindPasswordEnc?: string }
     
+    const { bindPassword, ...rest } = parsed.data
     const value = {
-      ...parsed.data,
-      bindPasswordEnc: parsed.data.bindPassword ? encrypt(parsed.data.bindPassword) : existing.bindPasswordEnc
+      ...rest,
+      bindPasswordEnc: bindPassword ? encrypt(bindPassword) : existing.bindPasswordEnc
     }
-    delete (value as any).bindPassword
 
     await pool.query(
       `INSERT INTO app_settings (key, value) VALUES ('ldap_settings', $1)
@@ -75,7 +75,7 @@ router.put('/ldap', requireRole('admin'), async (req, res) => {
 // ── POST /api/settings/ldap/test ──────────────────────────────────────────
 
 router.post('/ldap/test', requireRole('admin'), async (req, res) => {
-  const { username, password, ...config } = req.body as any
+  const { username, password, ...config } = req.body as Partial<LdapConfig> & { username?: string; password?: string }
   if (!username || !password) return res.status(400).json({ error: 'Test username and password required' })
 
   try {

@@ -64,8 +64,9 @@ export async function ldapAuth(username: string, password: string, config: LdapC
 
         res.on('searchEntry', (entry) => {
           userDn = entry.objectName as string
-          const mailAttr = (entry as any).attributes.find((a: any) => a.type === 'mail')
-          email = mailAttr ? (mailAttr.values[0] ?? null) : null
+          const mailAttr = entry.attributes.find(a => a.type === 'mail')
+          const mailValues = mailAttr ? mailAttr.values : undefined
+          email = mailValues ? (Array.isArray(mailValues) ? mailValues[0] : mailValues) ?? null : null
         })
 
         res.on('error', (err) => { 

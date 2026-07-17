@@ -13,6 +13,9 @@ export interface AuthUser {
 }
 
 declare global {
+  // Express's own type augmentation pattern requires an ambient namespace here — there's no
+  // ES2015-module equivalent for merging into a global namespace.
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request { user?: AuthUser }
   }

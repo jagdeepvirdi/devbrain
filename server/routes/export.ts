@@ -1,7 +1,6 @@
 import { Router } from 'express'
 import { createRequire } from 'module'
 const require = createRequire(import.meta.url)
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const archiver = require('archiver') as typeof import('archiver')
 import { pool } from '../db/pool.js'
 import { addProjectToArchive, buildZipToStream } from '../services/exporter.js'

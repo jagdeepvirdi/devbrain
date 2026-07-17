@@ -101,6 +101,119 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
 
 ---
 
+## v1.x Backlog — Lint Cleanup (found via full code review 2026-07-17)
+
+> Full codebase review 2026-07-17 — `tsc --noEmit` clean and full test suite green (247 server + 3
+> client tests) on both sides, but `npm run lint` currently fails on both. One real bug found and
+> already fixed: `AiTask.tsx`'s `useExample()` helper was renamed to `applyExample()` — the `use*`
+> name made ESLint's `react-hooks/rules-of-hooks` treat it as a hook call inside a `.map().onClick`
+> callback. Everything below is style/type-safety cleanup only — nothing is a runtime bug. Grouped so
+> each bullet can be picked up independently.
+
+### react-hooks / React Compiler ruleset (resolved 2026-07-17)
+
+- [x] **Downgraded to warnings in `client/eslint.config.js`** — confirmed the app doesn't actually
+      build with React Compiler (no `babel-plugin-react-compiler` anywhere in `client/package.json` or
+      `vite.config.ts`), so `react-hooks/set-state-in-effect`, `react-hooks/refs`, `react-hooks/purity`,
+      and `react-hooks/preserve-manual-memoization` (all pulled in as `error` via
+      `reactHooks.configs.recommended.rules` on the `eslint-plugin-react-hooks@7.x` bump) had zero
+      runtime effect today — they only matter if/when React Compiler is adopted. Rewriting the ~20
+      affected files' fetch-on-mount effects to satisfy them now would've been a wide, risky diff for
+      no behavioral gain. Set all four to `'warn'` instead of `'error'` so they stay visible without
+      failing `npm run lint`; revisit as errors (or do the React Query migration considered and
+      deferred) if React Compiler is actually adopted later. `react-hooks/rules-of-hooks` stays an
+      error — that one's a real bug class (see `AiTask.tsx`'s `useExample` → `applyExample` rename,
+      fixed the same day). Verified: `npm run lint` error count dropped from 69 to the unrelated
+      `no-explicit-any` backlog item; typecheck and full test suite (3/3) still clean.
+
+### Type safety — `@typescript-eslint/no-explicit-any` (resolved 2026-07-17)
+
+- [x] **Server** — replaced every `any` with a real type: `getArrayParam(query: any, ...)` in
+      `routes/documents.ts` and `routes/issues.ts` → `Record<string, unknown>`; the ad-hoc `values:
+      any[]` SQL param arrays in `routes/issues.ts` and `routes/templates.ts` → `Array<string | number>`
+      / `string[]` / `Array<string | null>`; `routes/settings.ts`'s LDAP body casts → destructure
+      `bindPassword` out instead of `delete (value as any).bindPassword`, and typed the test-route body
+      as `Partial<LdapConfig> & { username?: string; password?: string }`; `services/ldap.ts`'s
+      `(entry as any).attributes` → removed entirely, `@types/ldapjs`'s `SearchEntry.attributes` was
+      already typed, the cast was unnecessary; `services/integrations.ts` — full rewrite with real
+      `SyncIntegration`/`GithubIssue`/`JiraSearchResponse`/`LinearResponse` interfaces replacing all 9
+      `any` sites. One incidental type error surfaced and fixed: `routes/templates.ts`'s `:id` route
+      param is typed `string | string[]` by Express (`ParamsDictionary`) — added `req.params as { id:
+      string }`. Verified: server `no-explicit-any` count 0, `tsc --noEmit` clean, 247/247 tests pass.
+- [x] **Client** — `lib/api.ts`: `filter_json`/`config`/`body`/`details` fields went from `any` to
+      `Record<string, unknown>` / `unknown`; added a proper `TemplateBody` type (`{ title?, description?,
+      content?, tags?, steps? }`) instead of a blanket `Record<string, unknown>` for `Template.body`,
+      since three unrelated call sites (`Settings.tsx`, `NewIssueModal.tsx`, `Runbooks.tsx`) read
+      `.title`/`.steps`/etc. off it and a fully-generic type would've broken all three — this was the
+      one place a naive any→Record swap would have cascaded into ~15 new type errors, caught by
+      re-running `tsc` after each file. `lib/api.test.ts`'s 3 mocked-fetch `as any` → `as unknown as
+      Response`. Component-level casts replaced with real unions already available in scope:
+      `IssuesList.tsx` → `Issue['status']`, `MembersTab.tsx` → `'admin'|'member'|'viewer'`,
+      `NotificationsPanel.tsx`'s `onNavigate` → narrowed to the two routes it actually calls
+      (`'issues'|'projects'`), `GlobalSearch.tsx`'s `history` state → the already-exported
+      `SearchHistoryEntry[]`, `Runbooks.tsx`'s `tempSteps` → a concrete draft-step shape (needed an
+      `s.instruction || ''` fallback in the submit mapper once the field became optional),
+      `Settings.tsx` (5 sites) → `Integration['provider']`, the template `type` union, and
+      `Record<string, unknown>` for the dynamic template-body-builder, plus gave `newIntegration.config`
+      its own `{ baseUrl?, email? }` shape instead of `Record<string, unknown>` (reading `.baseUrl`/
+      `.email` off an index-signature type doesn't narrow the same way). Verified: client
+      `no-explicit-any` count 0, `tsc --noEmit` clean, 3/3 tests pass.
+
+### Silent-catch cleanup (resolved 2026-07-17)
+
+- [x] **`server/routes/antigravity-projects.ts:96` and `claude-projects.ts:96`** — the SSE task-watch
+      endpoints' catch couldn't put the error in the response body (SSE headers already flushed
+      earlier in the same try block, unlike every other route in these files which returns
+      `res.status(500).json({ error: (err as Error).message })`), so the error had nowhere to go — added
+      `console.error(...)` so it's at least visible server-side, and guarded the fallback response with
+      `if (!res.headersSent)` since calling `res.status(500).end()` after SSE headers are already sent
+      would itself throw (`ERR_HTTP_HEADERS_SENT`) — a real latent bug sitting right next to the lint
+      issue, fixed in passing since it was a one-line guard on the exact line being touched.
+- [x] **`server/services/notifier.ts:67`** — `JSON.parse(stdout)` failures from the Python Apprise
+      subprocess were swallowed into a generic `Invalid JSON output: ...` result with no server log;
+      added `console.error('Failed to parse apprise_client.py output:', err)` alongside the existing
+      resolve, so a malformed-output bug in the Python side is actually visible in server logs instead
+      of just failing silently in the notification-status table.
+- [x] **`client/src/components/FilterBar.tsx:151,164`** — save/delete filter preset catches showed a
+      hardcoded generic toast (`'Failed to save filter preset'` / `'Failed to delete preset'`) instead
+      of the real server error, inconsistent with the rest of the client (60 other catch blocks across
+      11 files use `toast((err as Error).message, 'error')` to surface the actual `request()`-thrown
+      message). Switched both to match that convention.
+- [x] **`client/src/components/NotificationsPanel.tsx:67`** — the 30s background-poll catch is
+      intentionally silent (comment: "ignore errors on background fetch") — a toast here would fire
+      every 30s while offline, which is worse than silence. Removed the unused `err` binding entirely
+      (`catch {`) rather than logging, since this one really is meant to be silent.
+      Verified: `no-unused-vars` gone from both lint runs, `tsc --noEmit` clean on both sides, server
+      247/247 and client 3/3 tests still passing.
+
+### Small mechanical fixes (resolved 2026-07-17)
+
+- [x] `prefer-const`: `server/routes/documents.ts:303` (`tempPath`) and
+      `server/services/tasks-watcher.ts:133` (`debounceTimers`) — both only ever mutated via methods
+      (`.set`/`.delete`) or read, never reassigned; switched `let` → `const`.
+- [x] `no-namespace`: `server/middleware/auth.ts:16` — this is a false positive, not a real issue:
+      `declare global { namespace Express { interface Request { user?: AuthUser } } }` is the standard,
+      required TypeScript pattern for augmenting Express's `Request` type — there's no ES2015-module
+      equivalent for ambient global namespace merging. Added a targeted
+      `eslint-disable-next-line @typescript-eslint/no-namespace` with a one-line comment explaining why,
+      instead of restructuring code that can't actually be restructured.
+- [x] Unused eslint-disable directives: `server/routes/export.ts:4`, `server/services/backup.ts:5` —
+      both wrapped a `require('archiver')` call via a local `createRequire()`-produced `require`, not
+      the global Node `require` the `@typescript-eslint/no-require-imports` rule actually targets — the
+      rule doesn't fire on it (confirmed by the "unused directive" warning), so the disable comments
+      were dead weight. Removed both.
+- [x] `no-unused-expressions`: `client/src/components/projects/SessionsTab.tsx:258` — confirmed a false
+      positive (logic was already correct, mutating the `Set` in place), rewrote
+      `next.has(id) ? next.delete(id) : next.add(id)` as an explicit `if/else` for clarity, which also
+      satisfies the rule naturally without a suppression comment.
+      Verified: server lint now **0 errors / 57 warnings** (all remaining are the pre-existing
+      `no-non-null-assertion` warnings, untouched — a separate style question, not part of this pass),
+      client lint **0 errors / 53 warnings** (all remaining are the React Compiler-readiness rules
+      already downgraded to warn earlier in this cleanup). `tsc --noEmit` clean and full test suite
+      green (247/247 server, 3/3 client) on both sides.
+
+---
+
 ## v1.x Backlog — External Notification Senders (shipped 2026-07-17)
 
 > Integrations in other personal projects that push notifications to DevBrain's `/api/notify` endpoint (built in Phase 28.5, now archived). Not blocking any release.

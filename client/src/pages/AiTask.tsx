@@ -62,7 +62,7 @@ export function AiTaskPage() {
     }
   }
 
-  function useExample(ex: string) {
+  function applyExample(ex: string) {
     setTask(ex)
     setResult(null)
     setError(null)
@@ -128,7 +128,7 @@ export function AiTaskPage() {
           <div style={{ marginTop: '6px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '11px', color: 'var(--fg-4)', alignSelf: 'center' }}>Examples:</span>
             {EXAMPLE_TASKS.map(ex => (
-              <button key={ex} onClick={() => useExample(ex)}
+              <button key={ex} onClick={() => applyExample(ex)}
                 style={{ fontSize: '11px', color: 'var(--accent-2)', background: 'var(--accent-dim)', border: '1px solid var(--accent-line)', borderRadius: '4px', padding: '2px 8px', cursor: 'default', textAlign: 'left' }}>
                 {ex.length > 55 ? ex.slice(0, 55) + '…' : ex}
               </button>

@@ -396,7 +396,7 @@ function NewRunbookModal({ onClose, onCreate }: {
   const [tagsRaw,   setTagsRaw]   = useState('')
   const [templates, setTemplates] = useState<Template[]>([])
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('')
-  const [tempSteps, setTempSteps] = useState<any[]>([])
+  const [tempSteps, setTempSteps] = useState<{ instruction?: string; command?: string; note?: string }[]>([])
   const [saving,    setSaving]    = useState(false)
   const [error,     setError]     = useState('')
 
@@ -415,7 +415,7 @@ function NewRunbookModal({ onClose, onCreate }: {
     const t = templates.find(x => x.id === templateId)
     if (t && t.body) {
       if (Array.isArray(t.body.steps)) {
-        setTempSteps(t.body.steps)
+        setTempSteps(t.body.steps as { instruction?: string; command?: string; note?: string }[])
       } else {
         setTempSteps([])
       }
@@ -431,7 +431,7 @@ function NewRunbookModal({ onClose, onCreate }: {
       const steps: RunbookStep[] = tempSteps.map((s, i) => ({
         id: globalThis.crypto.randomUUID(),
         order: i,
-        instruction: s.instruction,
+        instruction: s.instruction || '',
         command: s.command || undefined,
         note: s.note || undefined,
       }))

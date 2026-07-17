@@ -65,6 +65,7 @@ export async function sendAppriseNotification(params: {
         const parsed = JSON.parse(stdout.trim())
         resolve(parsed)
       } catch (err) {
+        console.error('Failed to parse apprise_client.py output:', err)
         resolve({ sent: false, error: `Invalid JSON output: ${stdout.trim()}` })
       }
     })

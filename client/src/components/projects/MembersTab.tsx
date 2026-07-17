@@ -91,7 +91,7 @@ export default function MembersTab({ projectId, isAdmin }: MembersTabProps) {
             </select>
             <select 
               value={selectedRole} 
-              onChange={e => setSelectedRole(e.target.value as any)}
+              onChange={e => setSelectedRole(e.target.value as 'admin' | 'member' | 'viewer')}
               style={{ fontSize: 12.5, background: 'var(--bg)', border: '1px solid var(--line-2)', borderRadius: 5, padding: '4px 8px', color: 'var(--fg)' }}
             >
               <option value="viewer">Viewer</option>

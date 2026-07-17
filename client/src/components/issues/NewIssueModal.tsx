@@ -76,7 +76,7 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
       if (t.body.description) setDesc(t.body.description)
       if (Array.isArray(t.body.tags)) setTags(t.body.tags)
       if (Array.isArray(t.body.steps)) {
-        setTempSteps(t.body.steps)
+        setTempSteps(t.body.steps as string[])
       } else {
         setTempSteps([])
       }

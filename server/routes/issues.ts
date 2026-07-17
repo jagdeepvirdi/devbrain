@@ -101,7 +101,7 @@ function parseArrayParam(val: unknown): string[] {
   return [String(val).trim()]
 }
 
-const getArrayParam = (query: any, key: string): string[] => {
+const getArrayParam = (query: Record<string, unknown>, key: string): string[] => {
   const val = query[key] !== undefined ? query[key] : query[`${key}[]`]
   return parseArrayParam(val)
 };
@@ -245,7 +245,7 @@ router.get('/triage', async (req, res) => {
     const thresholdDays = Number(rules.stale_threshold_days ?? 14)
 
     const conditions = ["i.status IN ('open', 'investigating')"]
-    const values: any[] = [thresholdDays]
+    const values: Array<string | number> = [thresholdDays]
 
     if (projectId === 'global') {
       conditions.push('i.project_id IS NULL')

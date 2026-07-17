@@ -27,7 +27,7 @@ router.get('/', async (req, res) => {
 
   try {
     const conditions: string[] = []
-    const values: any[] = []
+    const values: string[] = []
 
     if (projectId === 'global' || !projectId) {
       conditions.push('(t.project_id IS NULL OR t.is_builtin = true)')
@@ -82,7 +82,7 @@ router.post('/', requireRole('member'), async (req, res) => {
 
 // ── PUT /api/templates/:id ────────────────────────────────────────────────
 router.put('/:id', requireRole('member'), async (req, res) => {
-  const { id } = req.params
+  const { id } = req.params as { id: string }
 
   try {
     const parsed = TemplateUpdateSchema.parse(req.body)
@@ -98,7 +98,7 @@ router.put('/:id', requireRole('member'), async (req, res) => {
 
     // Build update dynamic clause
     const setFields: string[] = []
-    const values: any[] = [id]
+    const values: Array<string | null> = [id]
 
     if (parsed.project_id !== undefined) {
       values.push(parsed.project_id ?? null)

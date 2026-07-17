@@ -356,7 +356,7 @@ export function IssuesList({ onOpen, onNew }: { onOpen: (id: string) => void; on
             <select
               onChange={e => {
                 if (e.target.value) {
-                  handleBulkStatus(e.target.value as any)
+                  handleBulkStatus(e.target.value as Issue['status'])
                   e.target.value = ''
                 }
               }}

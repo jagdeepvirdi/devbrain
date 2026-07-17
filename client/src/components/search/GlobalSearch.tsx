@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { searchApi, commandsApi } from '../../lib/api'
-import type { SearchResult, SearchResults, SearchSuggestion } from '../../lib/api'
+import type { SearchResult, SearchResults, SearchSuggestion, SearchHistoryEntry } from '../../lib/api'
 import { useProjectStore } from '../../store/projectStore'
 import { useRecentlyViewed } from '../../hooks/useRecentlyViewed'
 
@@ -49,7 +49,7 @@ export function GlobalSearch({ onNavigate, open, onClose }: Props) {
   const [scopeProject, setScopeProject] = useState<string | null>(null)
   const [limit,        setLimit]        = useState(10)
   const [suggestions,  setSuggestions]  = useState<SearchSuggestion[]>([])
-  const [history,      setHistory]      = useState<any[]>([])
+  const [history,      setHistory]      = useState<SearchHistoryEntry[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef  = useRef<HTMLDivElement>(null)
 

@@ -17,6 +17,13 @@ export default tseslint.config(
     settings: { react: { version: 'detect' } },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      // React Compiler readiness rules — not actionable today since this app doesn't build with
+      // React Compiler (no babel-plugin-react-compiler). Downgraded to warnings so they stay visible
+      // without failing `npm run lint`; revisit as errors if/when React Compiler is adopted.
+      'react-hooks/set-state-in-effect':          'warn',
+      'react-hooks/refs':                         'warn',
+      'react-hooks/purity':                       'warn',
+      'react-hooks/preserve-manual-memoization':  'warn',
       '@typescript-eslint/no-explicit-any':  'error',
       '@typescript-eslint/no-unused-vars':   ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       'react/jsx-key':                       'error',

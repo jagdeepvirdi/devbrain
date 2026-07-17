@@ -1,14 +1,58 @@
 import { pool } from '../db/pool.js'
 
-export async function syncGitHub(integration: any, token: string | null) {
+interface SyncIntegration {
+  project_id: string
+  external_project_id: string
+  config?: { baseUrl?: string; email?: string }
+}
+
+interface GithubIssue {
+  id: number
+  title: string
+  body: string | null
+  state: string
+  labels: { name: string }[]
+  pull_request?: unknown
+}
+
+interface JiraSearchResponse {
+  issues: {
+    id: string
+    key: string
+    fields: {
+      summary: string
+      description?: { content?: { content?: { text?: string }[] }[] }
+      priority?: { name?: string }
+      status: { name: string }
+    }
+  }[]
+}
+
+interface LinearResponse {
+  errors?: { message: string }[]
+  data: {
+    issues: {
+      nodes: {
+        id: string
+        title: string
+        description: string | null
+        priority: number
+        state: { name: string }
+        labels: { nodes: { name: string }[] }
+      }[]
+    }
+  }
+}
+
+export async function syncGitHub(integration: SyncIntegration, token: string | null) {
   const [owner, repo] = integration.external_project_id.split('/')
-  const headers: any = { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'devbrain' }
+  const headers: Record<string, string> = { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'devbrain' }
   if (token) headers['Authorization'] = `token ${token}`
 
   const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues?state=all&per_page=100`, { headers })
   if (!res.ok) throw new Error(`GitHub API error: ${res.status}`)
 
-  const issues = await res.json() as any[]
+  const issues = await res.json() as GithubIssue[]
   let created = 0, skipped = 0
 
   for (const gh of issues) {
@@ -29,7 +73,7 @@ export async function syncGitHub(integration: any, token: string | null) {
         gh.body || '',
         gh.state === 'closed' ? 'resolved' : 'open',
         'medium',
-        ['github', ...gh.labels.map((l: any) => l.name)],
+        ['github', ...gh.labels.map(l => l.name)],
         'github',
         `github:${gh.id}`
       ]
@@ -39,17 +83,17 @@ export async function syncGitHub(integration: any, token: string | null) {
   return { created, skipped, total: issues.length }
 }
 
-export async function syncJira(integration: any, token: string | null) {
-  const { baseUrl, email } = integration.config
+export async function syncJira(integration: SyncIntegration, token: string | null) {
+  const { baseUrl, email } = integration.config ?? {}
   const auth = Buffer.from(`${email}:${token}`).toString('base64')
   const jql = encodeURIComponent(`project = "${integration.external_project_id}" ORDER BY created DESC`)
-  
+
   const res = await fetch(`${baseUrl}/rest/api/3/search?jql=${jql}&maxResults=100&fields=summary,description,priority,status`, {
     headers: { 'Authorization': `Basic ${auth}`, 'Accept': 'application/json' }
   })
   if (!res.ok) throw new Error(`Jira API error: ${res.status}`)
 
-  const data = await res.json() as any
+  const data = await res.json() as JiraSearchResponse
   let created = 0, skipped = 0
 
   for (const ji of data.issues) {
@@ -93,7 +137,7 @@ function mapJiraStatus(s: string): string {
   return 'open'
 }
 
-export async function syncLinear(integration: any, token: string | null) {
+export async function syncLinear(integration: SyncIntegration, token: string | null) {
   const teamKey = integration.external_project_id
   const query = `
     query($teamKey: String!, $first: Int!) {
@@ -109,9 +153,9 @@ export async function syncLinear(integration: any, token: string | null) {
   })
   if (!res.ok) throw new Error(`Linear API error: ${res.status}`)
 
-  const d = await res.json() as any
+  const d = await res.json() as LinearResponse
   if (d.errors?.length) throw new Error(d.errors[0].message)
-  
+
   const issues = d.data.issues.nodes
   let created = 0, skipped = 0
 
@@ -131,7 +175,7 @@ export async function syncLinear(integration: any, token: string | null) {
         li.description || '',
         mapLinearStatus(li.state.name),
         mapLinearPriority(li.priority),
-        ['linear', ...li.labels.nodes.map((l: any) => l.name)],
+        ['linear', ...li.labels.nodes.map(l => l.name)],
         'linear',
         `linear:${li.id}`
       ]

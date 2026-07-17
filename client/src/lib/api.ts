@@ -966,7 +966,7 @@ export type SavedFilter = {
   user_id:     string
   name:        string
   entity_type: string
-  filter_json: any
+  filter_json: Record<string, unknown>
   created_at:  string
 }
 
@@ -991,7 +991,7 @@ export const searchApi = {
   },
   getFilters: () =>
     request<SavedFilter[]>('/search/filters'),
-  saveFilter: (name: string, entityType: string, filterJson: any) =>
+  saveFilter: (name: string, entityType: string, filterJson: Record<string, unknown>) =>
     request<SavedFilter>('/search/filters', {
       method: 'POST',
       body: JSON.stringify({ name, entity_type: entityType, filter_json: filterJson }),
@@ -1250,7 +1250,7 @@ export type Integration = {
   external_project_id: string
   has_token:           boolean
   last_synced_at:      string | null
-  config:              Record<string, any>
+  config:              Record<string, unknown>
 }
 
 export type IntegrationsConfig = {
@@ -1264,7 +1264,7 @@ export type LinearIssuePreview = { id: string; title: string; state: string }
 export const integrationsApi = {
   list: () => request<Integration[]>('/integrations/config'),
 
-  create: (body: { provider: string; project_id: string; external_project_id: string; token?: string; config?: any }) =>
+  create: (body: { provider: string; project_id: string; external_project_id: string; token?: string; config?: Record<string, unknown> }) =>
     request<Integration>('/integrations', { method: 'POST', body: JSON.stringify(body) }),
 
   remove: (id: string) =>
@@ -1346,7 +1346,7 @@ export const settingsApi = {
   saveLdapSettings: (body: Partial<LdapSettings> & { bindPassword?: string }) =>
     request<{ ok: boolean }>('/settings/ldap', { method: 'PUT', body: JSON.stringify(body) }),
   testLdap: (body: Partial<LdapSettings> & { bindPassword?: string; username: string; password: string }) =>
-    request<{ ok: boolean; user: object }>('/settings/ldap/test', { method: 'POST', body: JSON.stringify(body) }),
+    request<{ ok: boolean; user: { dn: string; username: string; email: string | null } }>('/settings/ldap/test', { method: 'POST', body: JSON.stringify(body) }),
 
   getClaudeSettings: () =>
     request<{ scan_root: string | null }>('/settings/claude'),
@@ -1561,12 +1561,12 @@ export const notifyApi = {
   },
 
   testNotification: () =>
-    request<{ success: boolean; details: any }>('/notify/test', {
+    request<{ success: boolean; details: unknown }>('/notify/test', {
       method: 'POST',
     }),
 
   retryNotification: (id: string) =>
-    request<{ success: boolean; details: any }>(`/notify/retry/${id}`, {
+    request<{ success: boolean; details: unknown }>(`/notify/retry/${id}`, {
       method: 'POST',
     }),
 }
@@ -1575,13 +1575,21 @@ export const notifyApi = {
 
 export type TemplateType = 'issue' | 'runbook' | 'document'
 
+export type TemplateBody = {
+  title?:       string
+  description?: string
+  content?:     string
+  tags?:        string[]
+  steps?:       string[] | { instruction: string; command?: string }[]
+}
+
 export type Template = {
   id:            string
   project_id:    string | null
   type:          TemplateType
   name:          string
   description:   string
-  body:          any
+  body:          TemplateBody
   is_builtin:    boolean
   created_at:    string
   project_name:  string | null

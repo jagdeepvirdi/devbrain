@@ -23,7 +23,7 @@ describe('API Wrapper', () => {
     vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve({ data: { user, devMode: false } })
-    } as any)
+    } as unknown as Response)
 
     await authApi.login('test', 'pass')
 
@@ -31,7 +31,7 @@ describe('API Wrapper', () => {
   })
 
   it('logout — clears localStorage', () => {
-    vi.mocked(fetch).mockResolvedValueOnce({ ok: true } as any)
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: true } as unknown as Response)
     authApi.logout()
     expect(localStorage.removeItem).toHaveBeenCalledWith('devbrain_user')
   })
@@ -41,7 +41,7 @@ describe('API Wrapper', () => {
       ok: false,
       status: 401,
       json: () => Promise.resolve({ error: 'Unauthorized' })
-    } as any)
+    } as unknown as Response)
 
     await expect(authApi.me()).resolves.toEqual({ authed: false, devMode: false })
   })

@@ -512,7 +512,7 @@ function IntegrationsSection({ projects }: { projects: Project[] }) {
     project_id: '',
     external_project_id: '',
     token: '',
-    config: {} as any
+    config: {} as { baseUrl?: string; email?: string }
   })
 
   useEffect(() => {
@@ -610,7 +610,7 @@ function IntegrationsSection({ projects }: { projects: Project[] }) {
               <div style={{ fontSize: 11, color: 'var(--fg-4)', marginBottom: 4 }}>Provider</div>
               <select 
                 value={newIntegration.provider} 
-                onChange={e => setNewIntegration(p => ({ ...p, provider: e.target.value as any }))}
+                onChange={e => setNewIntegration(p => ({ ...p, provider: e.target.value as Integration['provider'] }))}
                 style={{ ...inp, height: 30 }}
               >
                 <option value="github">GitHub</option>
@@ -739,7 +739,7 @@ function LdapConfigurationSection() {
     setTesting(true)
     try {
       const res = await settingsApi.testLdap({ ...form, ...testCreds })
-      toast(`Success! Authenticated as ${(res.user as any).dn}`, 'success')
+      toast(`Success! Authenticated as ${res.user.dn}`, 'success')
     } catch (err) {
       toast((err as Error).message, 'error')
     } finally {
@@ -2095,12 +2095,12 @@ function TemplatesSection({ projects }: TemplatesSectionProps) {
       setIssueTitle(t.body?.title || '')
       setIssueDescription(t.body?.description || '')
       setIssueTagsRaw(Array.isArray(t.body?.tags) ? t.body.tags.join(', ') : '')
-      setIssueSteps(Array.isArray(t.body?.steps) ? t.body.steps : [])
+      setIssueSteps(Array.isArray(t.body?.steps) ? t.body.steps as string[] : [])
     } else if (t.type === 'document') {
       setDocTitle(t.body?.title || '')
       setDocContent(t.body?.content || '')
     } else if (t.type === 'runbook') {
-      setRbSteps(Array.isArray(t.body?.steps) ? t.body.steps : [])
+      setRbSteps(Array.isArray(t.body?.steps) ? t.body.steps as { instruction: string; command?: string }[] : [])
     }
     setEditorOpen(true)
   }
@@ -2116,12 +2116,12 @@ function TemplatesSection({ projects }: TemplatesSectionProps) {
       setIssueTitle(t.body?.title || '')
       setIssueDescription(t.body?.description || '')
       setIssueTagsRaw(Array.isArray(t.body?.tags) ? t.body.tags.join(', ') : '')
-      setIssueSteps(Array.isArray(t.body?.steps) ? t.body.steps : [])
+      setIssueSteps(Array.isArray(t.body?.steps) ? t.body.steps as string[] : [])
     } else if (t.type === 'document') {
       setDocTitle(t.body?.title || '')
       setDocContent(t.body?.content || '')
     } else if (t.type === 'runbook') {
-      setRbSteps(Array.isArray(t.body?.steps) ? t.body.steps : [])
+      setRbSteps(Array.isArray(t.body?.steps) ? t.body.steps as { instruction: string; command?: string }[] : [])
     }
     setEditorOpen(true)
   }
@@ -2144,7 +2144,7 @@ function TemplatesSection({ projects }: TemplatesSectionProps) {
       return
     }
     
-    let body: any = {}
+    let body: Record<string, unknown> = {}
     if (type === 'issue') {
       const tags = issueTagsRaw.split(',').map(t => t.trim()).filter(Boolean)
       body = {
@@ -2226,7 +2226,7 @@ function TemplatesSection({ projects }: TemplatesSectionProps) {
           <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '.07em', display: 'block', marginBottom: 5 }}>Type</label>
           <select
             value={type}
-            onChange={e => setType(e.target.value as any)}
+            onChange={e => setType(e.target.value as 'issue' | 'runbook' | 'document')}
             disabled={!!editingTemplate}
             style={formInp}
           >

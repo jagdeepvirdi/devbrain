@@ -56,7 +56,7 @@ function parseArrayParam(val: unknown): string[] {
   return [String(val).trim()]
 }
 
-const getArrayParam = (query: any, key: string): string[] => {
+const getArrayParam = (query: Record<string, unknown>, key: string): string[] => {
   const val = query[key] !== undefined ? query[key] : query[`${key}[]`]
   return parseArrayParam(val)
 };
@@ -300,7 +300,7 @@ router.post('/', requireRole('member'), upload.single('file'), async (req, res) 
 
   try { tags = JSON.parse(tagsRaw) } catch { tags = [] }
 
-  let tempPath = req.file.path
+  const tempPath = req.file.path
   let docId: string | null = null
 
   try {

@@ -7,7 +7,7 @@ interface NotificationsPanelProps {
   open: boolean
   onClose: () => void
   onUnreadCountChange: (count: number) => void
-  onNavigate: (route: any) => void
+  onNavigate: (route: 'issues' | 'projects') => void
 }
 
 export function NotificationsPanel({ open, onClose, onUnreadCountChange, onNavigate }: NotificationsPanelProps) {
@@ -64,7 +64,7 @@ export function NotificationsPanel({ open, onClose, onUnreadCountChange, onNavig
             })
           }
         }
-      } catch (err) {
+      } catch {
         // ignore errors on background fetch
       }
     }, 30000) // Poll every 30s

@@ -143,13 +143,13 @@ export function FilterBar({ entityType, filters, onChange }: FilterBarProps) {
     }
     setIsSavingPreset(true)
     try {
-      await searchApi.saveFilter(newPresetName.trim(), entityType, filters)
+      await searchApi.saveFilter(newPresetName.trim(), entityType, { ...filters })
       toast('Filter preset saved successfully', 'success')
       setNewPresetName('')
       setShowSaveModal(false)
       loadPresets()
     } catch (err) {
-      toast('Failed to save filter preset', 'error')
+      toast((err as Error).message || 'Failed to save filter preset', 'error')
     } finally {
       setIsSavingPreset(false)
     }
@@ -162,7 +162,7 @@ export function FilterBar({ entityType, filters, onChange }: FilterBarProps) {
       toast('Filter preset deleted', 'success')
       loadPresets()
     } catch (err) {
-      toast('Failed to delete preset', 'error')
+      toast((err as Error).message || 'Failed to delete preset', 'error')
     }
   }
 

@@ -94,7 +94,8 @@ router.get('/:id/tasks/watch', async (req, res) => {
     const unsubscribe = subscribe(req.params.id, res)
     req.on('close', () => { clearTimeout(idleTimer); unsubscribe() })
   } catch (err) {
-    res.status(500).end()
+    console.error('Claude Code task-watch error:', err)
+    if (!res.headersSent) res.status(500).end()
   }
 })
 

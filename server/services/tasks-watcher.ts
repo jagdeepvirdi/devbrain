@@ -130,7 +130,7 @@ function broadcast(projectId: string, tree: TaskTree) {
 
 // ── Watcher lifecycle ─────────────────────────────────────────────────────────
 
-let debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 function startWatch(projectId: string, fsPath: string) {
   const tasksFile = path.join(fsPath, 'TASKS.md')
