@@ -18,12 +18,18 @@ vi.mock('../../services/ai.js', () => ({
   aiChat: vi.fn(),
 }))
 
+vi.mock('../../services/codeChunker.js', () => ({
+  extractSymbolOutline: vi.fn(),
+}))
+
 import documentsRouter from '../../routes/documents.js'
 import { pool } from '../../db/pool.js'
 import { aiChat } from '../../services/ai.js'
+import { extractSymbolOutline } from '../../services/codeChunker.js'
 
-const mockQuery  = vi.mocked(pool.query)
-const mockAiChat = vi.mocked(aiChat)
+const mockQuery   = vi.mocked(pool.query)
+const mockAiChat  = vi.mocked(aiChat)
+const mockOutline = vi.mocked(extractSymbolOutline)
 
 function getHandler(routePath: string, method: 'get' | 'post' | 'patch' | 'delete') {
   const layer = (documentsRouter as any).stack.find(
@@ -37,7 +43,10 @@ function fakeRes() {
 }
 
 describe('POST /api/documents/:id/explain', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockOutline.mockResolvedValue(null)
+  })
 
   it('404s when the document does not exist', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] } as any)
@@ -104,5 +113,44 @@ describe('POST /api/documents/:id/explain', () => {
     await getHandler('/:id/explain', 'post')(req, res, () => {})
 
     expect(mockAiChat.mock.calls[0][0]).toContain('```code')
+  })
+
+  it('includes the static-analysis symbol outline in the prompt when available', async () => {
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [{ title: 'sync.py', content: 'def run(): pass', file_type: 'code', language: 'python', content_hash: 'hash-py' }],
+      } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+
+    mockOutline.mockResolvedValue(['def run()'])
+    mockAiChat.mockResolvedValue('Runs a sync job.')
+
+    const req: any = { params: { id: 'doc-4' } }
+    const res = fakeRes()
+
+    await getHandler('/:id/explain', 'post')(req, res, () => {})
+
+    expect(mockOutline).toHaveBeenCalledWith('def run(): pass', 'python')
+    expect(mockAiChat.mock.calls[0][0]).toContain('Symbol outline')
+    expect(mockAiChat.mock.calls[0][0]).toContain('def run()')
+  })
+
+  it('asks for parameters, data sources, and output in the system prompt', async () => {
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [{ title: 'migrate.sh', content: 'echo hi', file_type: 'code', language: 'bash', content_hash: 'hash-sh' }],
+      } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+
+    mockAiChat.mockResolvedValue('Runs a migration.')
+
+    const req: any = { params: { id: 'doc-5' } }
+    const res = fakeRes()
+
+    await getHandler('/:id/explain', 'post')(req, res, () => {})
+
+    const systemPrompt = mockAiChat.mock.calls[0][1]
+    expect(systemPrompt).toContain('Parameters & Inputs')
+    expect(systemPrompt).toContain('Output')
   })
 })

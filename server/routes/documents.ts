@@ -570,9 +570,37 @@ router.post('/:id/explain', requireRole('member'), async (req, res) => {
     const truncated = doc.content.length > EXPLAIN_SOURCE_CHARS
     const source = doc.content.slice(0, EXPLAIN_SOURCE_CHARS)
 
+    // Static-analysis signature outline (same tree-sitter pass component-overview uses) —
+    // gives the model an accurate map of every function/class even when the raw source
+    // above is truncated, so longer files don't lose coverage of what's past the cutoff.
+    const outline = await extractSymbolOutline(doc.content, doc.language)
+    const outlineBlock = outline
+      ? `Symbol outline (functions/classes found via static analysis, covers the whole file even if the source below is truncated):\n${outline.map(l => `  ${l}`).join('\n')}\n\n`
+      : ''
+
     const explanation = await aiChat(
-      `Explain what this ${lang} file ("${doc.title}") does:\n\n\`\`\`${lang}\n${source}\n\`\`\`${truncated ? '\n\n(File was truncated for length — explain based on what is shown.)' : ''}`,
-      'You are a technical assistant that explains source code clearly and concisely for a developer knowledge base. Use Markdown for formatting. Cover: what the file is responsible for, its main functions/entry points, and any notable dependencies or side effects (I/O, network, database). Keep it under 300 words.'
+      `Explain what this ${lang} file ("${doc.title}") does:\n\n${outlineBlock}Source:\n\`\`\`${lang}\n${source}\n\`\`\`${truncated ? '\n\n(Source was truncated for length — use the symbol outline above, if present, to cover parts past the cutoff.)' : ''}`,
+      `You are a technical assistant that explains source code clearly and in detail for a developer knowledge base. Use Markdown with these headings, omitting any that don't apply to this file:
+
+## Overview
+What this file is responsible for, in 2-3 sentences.
+
+## Parameters & Inputs
+If this is a script, CLI tool, or entry point: what arguments, flags, environment variables, or config it expects to run. Either way, state what data it reads or extracts, and where from — a file path, a database table/query, an API endpoint, stdin, or another module.
+
+## Output
+What it produces, in what format, and where it goes — stdout, a file it writes, a database write, an API response, or a return value.
+
+## Key Functions & Classes
+One line each: purpose, parameters, return value.
+
+## Dependencies & Side Effects
+Notable external dependencies, I/O, network calls, database access.
+
+## Notable Patterns / Gotchas
+Anything a future reader would want to know that isn't obvious from the code alone.
+
+Be specific rather than generic — name the actual parameters, files, tables, and formats involved. Aim for 400-600 words.`
     )
     // Stamp the content_hash this explanation was generated against, so a
     // later content change (see update-content route) can be detected as
