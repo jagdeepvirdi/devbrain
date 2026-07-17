@@ -1,5 +1,4 @@
 import sys
-import os
 import json
 import apprise
 
@@ -13,13 +12,7 @@ def main():
         body = payload.get('body', '')
         level = payload.get('level', 'info') # info, success, warning, error
         apprise_urls = payload.get('apprise_urls', [])
-        
-        # Construct default Telegram URL if no URLs provided and ENV variables exist
-        telegram_token = os.environ.get('TELEGRAM_BOT_TOKEN')
-        telegram_chat_id = os.environ.get('TELEGRAM_CHAT_ID')
-        if not apprise_urls and telegram_token and telegram_chat_id:
-            apprise_urls = [f"tgram://{telegram_token}/{telegram_chat_id}"]
-            
+
         if not apprise_urls:
             print(json.dumps({"sent": False, "error": "No Apprise URLs configured or provided"}))
             sys.exit(0)

@@ -237,14 +237,10 @@ Embeddings always remain on local Ollama (`nomic-embed-text`) regardless of the 
 
 ## Optional: Apprise Notifications
 
-To enable Telegram (or any other channel) notifications:
-
-```env
-TELEGRAM_BOT_TOKEN=your-bot-token
-TELEGRAM_CHAT_ID=your-chat-id
-```
-
-Or configure channels via Settings > Notification Hub. See `server/scripts/requirements.txt` for Python dependencies (`pip install apprise apscheduler`).
+Configure channels via **Settings → Notification Hub** — paste any Apprise URL (Telegram, Slack,
+Discord, Pushover, email, 80+ others) or use the built-in Telegram bot-token/chat-id quick form. No
+`.env` setup required. See `server/scripts/requirements.txt` for Python dependencies (`pip install
+apprise apscheduler`).
 
 ## AI Assistant Integrations
 

@@ -1750,7 +1750,7 @@ function NotificationHubSection({ projects }: NotificationHubSectionProps) {
       <div>
         <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg)', marginBottom: 8 }}>Configured Apprise Channels</div>
         {channels.length === 0 ? (
-          <div style={{ fontSize: 12, color: 'var(--fg-4)', padding: '8px 0', borderBottom: '1px solid var(--line)' }}>No external channels configured. Defaults to .env settings.</div>
+          <div style={{ fontSize: 12, color: 'var(--fg-4)', padding: '8px 0', borderBottom: '1px solid var(--line)' }}>No external channels configured. Add one below to enable external delivery.</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
             {channels.map(c => (
