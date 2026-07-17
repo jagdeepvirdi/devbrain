@@ -66,14 +66,37 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
 
 ---
 
-## v1.x Backlog — External Notification Senders
+## v1.x Backlog — External Notification Senders (shipped 2026-07-17)
 
 > Integrations in other personal projects that push notifications to DevBrain's `/api/notify` endpoint (built in Phase 28.5, now archived). Not blocking any release.
 
-- [ ] Apprise URL config fully replaces `.env` vars — zero env setup needed
-- [ ] FlowForge pipeline completion → POST to `/api/notify`
-- [ ] Memex re-index completion → POST to `/api/notify`
-- [ ] PlayCru Firebase deploy success → POST to `/api/notify`
+- [x] **Apprise URL config fully replaces `.env` vars** — removed the `TELEGRAM_BOT_TOKEN`/
+      `TELEGRAM_CHAT_ID` env-var fallback from `server/services/notifier.ts` and
+      `server/scripts/apprise_client.py`; it was leftover from before Settings → Notification Hub's
+      Apprise channel CRUD (+ built-in Telegram quick-form) existed, and only added a silent,
+      undocumented-in-UI code path. Apprise channel config in the DB is now the one way to set up
+      external delivery — zero `.env` setup needed. Updated README and the Settings empty-state copy
+      to match.
+- [x] **FlowForge pipeline completion → POST to `/api/notify`** — new `FLOWFORGE_DEVBRAIN_NOTIFY_URL`
+      env var (off by default) in `flowforge/engine/runner.py`; `_notify_devbrain()` fires once per run
+      (success or failure) right after `audit.log_pipeline_run`, alongside the existing
+      `on_failure_webhook_url` (which is per-pipeline-configured and failure-only, not a global
+      completion hook). 5 new tests in `tests/test_runner.py`; full FlowForge suite 1981 passed / 2
+      skipped.
+- [x] **Memex re-index completion → POST to `/api/notify`** — new `DEVBRAIN_NOTIFY_URL` env var (off by
+      default) in `server/src/services/itemService.ts`; `notifyDevBrain()` fires from
+      `reprocessBulkItems()`'s background completion block with succeeded/failed counts
+      (`success`/`warning` level). New `itemService.test.ts` (4 tests, since none existed for this
+      service before); full Memex suite 240/240, typecheck clean.
+- [x] **PlayCru Firebase deploy success → POST to `/api/notify`** — deploys here are entirely
+      manual/local (no CI pipeline runs `firebase deploy`), so a new local wrapper script,
+      `scripts/deploy-and-notify.ps1`, in both `playcru/` (functions + firestore rules/indexes) and
+      `playcru-web/` (hosting) runs the real `firebase deploy`, then POSTs success or failure to
+      DevBrain if `DEVBRAIN_NOTIFY_URL` is set — a no-op passthrough otherwise. Verified end-to-end
+      (success, failure, and no-URL-configured paths) against a stubbed `firebase` CLI and a local
+      HTTP listener, without ever invoking a real deploy. **Note:** `playcru-web/` has no git repo at
+      all (checked — no `.git` anywhere under `PlayCru/` except inside `playcru/`), so that script sits
+      on disk uncommitted; only the `playcru/` copy + its `CLAUDE.md` doc note are committed.
 
 ---
 
