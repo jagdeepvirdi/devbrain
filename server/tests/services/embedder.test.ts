@@ -35,7 +35,7 @@ vi.mock('../../services/reranker.js', () => ({
   rerank: vi.fn((_query: string, items: unknown[], _getText: unknown, topN: number) => items.slice(0, topN)),
 }))
 
-const { embedDocument, searchChunks } = await import('../../services/embedder.js')
+const { embedDocument, embedDocumentsBatch, searchChunks } = await import('../../services/embedder.js')
 const { pool }               = await import('../../db/pool.js')
 const { aiEmbed, aiChat }    = await import('../../services/ai.js')
 const { rerank }             = await import('../../services/reranker.js')
@@ -178,6 +178,105 @@ describe('embedDocument', () => {
     const count = await embedDocument('doc-10', 'hello world')
 
     expect(count).toBe(1) // just the one real chunk for this short text
+  })
+})
+
+describe('embedDocumentsBatch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockPool.query.mockResolvedValue({ rows: [], rowCount: 1 })
+    mockAiEmbed.mockResolvedValue([0.1, 0.2, 0.3])
+    mockAiChat.mockRejectedValue(new Error('not mocked'))
+  })
+
+  it('returns an empty array and makes no calls for an empty batch', async () => {
+    const results = await embedDocumentsBatch([])
+    expect(results).toEqual([])
+    expect(mockPool.query).not.toHaveBeenCalled()
+  })
+
+  it('deletes existing chunks for every doc in the batch with one query', async () => {
+    await embedDocumentsBatch([
+      { id: 'doc-1', content: 'hello' },
+      { id: 'doc-2', content: 'world' },
+    ])
+
+    const deleteCall = mockPool.query.mock.calls[0] as [string, unknown[]]
+    expect(deleteCall[0]).toContain('DELETE FROM document_chunks')
+    expect(deleteCall[1]).toEqual([['doc-1', 'doc-2']])
+  })
+
+  it('runs every document\'s summary (chat) call before any chunk (embed) call — the whole point of batching', async () => {
+    mockAiChat.mockResolvedValue('a summary')
+    const order: string[] = []
+    mockAiChat.mockImplementation(async () => { order.push('chat'); return 'a summary' })
+    mockAiEmbed.mockImplementation(async () => { order.push('embed'); return [0.1, 0.2, 0.3] })
+
+    await embedDocumentsBatch([
+      { id: 'doc-1', content: 'first document text' },
+      { id: 'doc-2', content: 'second document text' },
+      { id: 'doc-3', content: 'third document text' },
+    ])
+
+    const firstEmbedIndex = order.indexOf('embed')
+    const lastChatIndex   = order.lastIndexOf('chat')
+    expect(order.filter(o => o === 'chat')).toHaveLength(3) // one summary per doc
+    expect(lastChatIndex).toBeLessThan(firstEmbedIndex) // all chats before any embed
+  })
+
+  it('returns a chunk count per document', async () => {
+    const results = await embedDocumentsBatch([
+      { id: 'doc-1', content: 'hello world' },
+      { id: 'doc-2', content: 'goodbye world' },
+    ])
+
+    expect(results).toEqual([
+      { id: 'doc-1', chunkCount: 1 },
+      { id: 'doc-2', chunkCount: 1 },
+    ])
+  })
+
+  it('reports title-header chunk text, keyed correctly per document', async () => {
+    await embedDocumentsBatch([
+      { id: 'doc-1', content: 'hello', title: 'Doc One' },
+      { id: 'doc-2', content: 'world' },
+    ])
+
+    const insertCalls = mockPool.query.mock.calls.filter(
+      (c: unknown[]) => (c[0] as string).includes('INSERT INTO document_chunks')
+    )
+    const doc1Chunk = insertCalls.find(c => (c[1] as unknown[])[0] === 'doc-1')!
+    const doc2Chunk = insertCalls.find(c => (c[1] as unknown[])[0] === 'doc-2')!
+    expect((doc1Chunk[1] as unknown[])[1]).toBe('[Doc One]\n\nhello')
+    expect((doc2Chunk[1] as unknown[])[1]).toBe('world')
+  })
+
+  it('isolates one document\'s embed failure — reports its error without aborting the rest of the batch', async () => {
+    mockAiEmbed.mockImplementation(async (text: string) => {
+      if (text === 'bad content') throw new Error('ollama unavailable')
+      return [0.1, 0.2, 0.3]
+    })
+
+    const results = await embedDocumentsBatch([
+      { id: 'doc-1', content: 'bad content' },
+      { id: 'doc-2', content: 'good content' },
+    ])
+
+    expect(results).toEqual([
+      { id: 'doc-1', chunkCount: 0, error: 'ollama unavailable' },
+      { id: 'doc-2', chunkCount: 1 },
+    ])
+  }, 10_000) // embedWithRetry's 3 attempts with backoff delays push past the default 5s timeout
+
+  it('fires onProgress per document with the document id', async () => {
+    const onProgress = vi.fn()
+    await embedDocumentsBatch(
+      [{ id: 'doc-1', content: 'hello world' }, { id: 'doc-2', content: 'goodbye world' }],
+      onProgress
+    )
+
+    expect(onProgress).toHaveBeenCalledWith('doc-1', 1, 1)
+    expect(onProgress).toHaveBeenCalledWith('doc-2', 1, 1)
   })
 })
 

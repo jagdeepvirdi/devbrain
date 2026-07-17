@@ -38,28 +38,36 @@ try {
 } catch { /* no .env — rely on environment */ }
 
 async function run(): Promise<void> {
-  const { pool }          = await import('../pool.js')
-  const { embedDocument } = await import('../../services/embedder.js')
+  const { pool }               = await import('../pool.js')
+  const { embedDocumentsBatch } = await import('../../services/embedder.js')
 
   const { rows } = await pool.query<{ id: string; title: string; content: string; language: string | null }>(
     'SELECT id, title, content, language FROM documents ORDER BY created_at'
   )
 
-  console.log(`Re-chunking ${rows.length} document(s) with the new token-based, title-aware chunker...\n`)
+  console.log(`Re-chunking ${rows.length} document(s) with the new token-based, title-aware chunker...`)
+  console.log('Running as one phase-separated batch (all summaries, then all chunk embeddings) — see')
+  console.log('TASKS.md Known Issues: this exact one-doc-at-a-time loop previously degraded Ollama into')
+  console.log('a thrashing state by swapping models ~2x per document across many documents.\n')
+
+  const results = await embedDocumentsBatch(
+    rows.map(r => ({ id: r.id, content: r.content, title: r.title, language: r.language }))
+  )
 
   let done = 0
   let failed = 0
 
-  for (const doc of rows) {
-    try {
-      const count = await embedDocument(doc.id, doc.content, { title: doc.title, language: doc.language })
-      await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [doc.id])
-      done++
-      console.log(`  [${done + failed}/${rows.length}] "${doc.title}" — ${count} chunks`)
-    } catch (err) {
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i]
+    const doc    = rows[i]
+    if (result.error) {
       failed++
-      console.error(`  [!!] "${doc.title}" failed:`, (err as Error).message)
+      console.error(`  [!!] "${doc.title}" failed: ${result.error}`)
       await pool.query(`UPDATE documents SET embedding_status = 'failed' WHERE id = $1`, [doc.id]).catch(() => {})
+    } else {
+      done++
+      console.log(`  [${i + 1}/${rows.length}] "${doc.title}" — ${result.chunkCount} chunks`)
+      await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [doc.id])
     }
   }
 

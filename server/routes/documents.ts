@@ -13,7 +13,7 @@ import { aiChat }    from '../services/ai.js'
 import { buildSetClause }   from '../lib/db.js'
 import { serverError }        from '../lib/errors.js'
 import { requireRole } from '../middleware/auth.js'
-import { embedDocument } from '../services/embedder.js'
+import { embedDocument, embedDocumentsBatch } from '../services/embedder.js'
 import { deleteLinksFor } from '../services/links.js'
 import { extractSymbolOutline } from '../services/codeChunker.js'
 
@@ -174,12 +174,15 @@ router.patch('/bulk', requireRole('member'), async (req, res) => {
     if (action === 're-embed') {
       const { rows } = await client.query('SELECT id, content, title, language FROM documents WHERE id = ANY($1)', [ids])
       await client.query(`UPDATE documents SET embedding_status = 'processing' WHERE id = ANY($1)`, [ids])
-      // Trigger embeddings asynchronously
-      for (const row of rows) {
-        embedDocument(row.id, row.content, { title: row.title, language: row.language })
-          .then(() => pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [row.id]))
-          .catch(() => pool.query(`UPDATE documents SET embedding_status = 'failed' WHERE id = $1`, [row.id]))
-      }
+      // Trigger embeddings asynchronously, as one phase-separated batch job
+      // (all summaries, then all chunk embeddings) rather than one embedDocument()
+      // call per doc — firing those concurrently/interleaved is the exact GPU
+      // model-swap thrashing pattern documented in TASKS.md Known Issues.
+      embedDocumentsBatch(rows.map(r => ({ id: r.id, content: r.content, title: r.title, language: r.language })))
+        .then(results => Promise.all(results.map(r =>
+          pool.query(`UPDATE documents SET embedding_status = $2 WHERE id = $1`, [r.id, r.error ? 'failed' : 'done'])
+        )))
+        .catch(() => pool.query(`UPDATE documents SET embedding_status = 'failed' WHERE id = ANY($1)`, [ids]))
     } else if (action === 'tag') {
       if (!value || typeof value !== 'string') {
         await client.query('ROLLBACK')

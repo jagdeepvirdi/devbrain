@@ -158,6 +158,85 @@ export async function embedDocument(
   return chunks.length
 }
 
+export type BatchDoc    = { id: string; content: string; title?: string; language?: string | null }
+export type BatchResult = { id: string; chunkCount: number; error?: string }
+
+/**
+ * Same per-document work as embedDocument(), but phase-separated across the
+ * whole batch: every document's summary (aiChat → mistral) is generated
+ * before any document's chunks are embedded (aiEmbed → nomic-embed-text),
+ * instead of alternating chat → embed → chat → embed once per document.
+ *
+ * Why: the 2026-07-15 incident (see TASKS.md Known Issues) showed that even
+ * a purely *sequential* one-doc-at-a-time loop calling embedDocument()
+ * repeatedly degraded Ollama into a hung/thrashing state on the 6GB laptop
+ * GPU — because each call swaps mistral in for the summary, then nomic-embed-
+ * text back in for the chunks, so N documents means ~2N swaps in quick
+ * succession. Grouping all-chat-then-all-embed cuts that to 2 swaps total
+ * regardless of batch size. Used by bulk re-embed paths (PATCH /documents/bulk,
+ * rechunk_all_documents.ts); single-document call sites keep using
+ * embedDocument() since one document is only 2 swaps either way.
+ *
+ * One document's failure is captured in its BatchResult, not thrown — it
+ * never aborts the rest of the batch.
+ */
+export async function embedDocumentsBatch(
+  docs: BatchDoc[],
+  onProgress?: (docId: string, done: number, total: number) => void
+): Promise<BatchResult[]> {
+  if (docs.length === 0) return []
+
+  await pool.query('DELETE FROM document_chunks WHERE document_id = ANY($1)', [docs.map(d => d.id)])
+
+  // Phase 1 — all summaries (mistral loaded once for the whole batch)
+  const summaries = new Map<string, string | null>()
+  for (const doc of docs) {
+    summaries.set(doc.id, await summarizeDocument(doc.content))
+  }
+
+  // Phase 2 — chunking is CPU-only (tree-sitter / token-window), no model calls
+  const chunkSets = new Map<string, string[]>()
+  for (const doc of docs) {
+    const astChunks = await chunkCodeByAst(doc.content, doc.language)
+    const rawChunks = astChunks ?? chunkText(doc.content)
+    chunkSets.set(doc.id, doc.title ? rawChunks.map(c => `[${doc.title}]\n\n${c}`) : rawChunks)
+  }
+
+  // Phase 3 — all embeddings (nomic-embed-text loaded once for the whole batch)
+  const results: BatchResult[] = []
+  for (const doc of docs) {
+    try {
+      const summary = summaries.get(doc.id)
+      if (summary) {
+        const summaryChunk = doc.title ? `[${doc.title}]\n\n${summary}` : summary
+        const embedding = await embedWithRetry(summaryChunk)
+        await pool.query(
+          `INSERT INTO document_chunks (document_id, content, chunk_index, embedding)
+           VALUES ($1, $2, $3, $4)`,
+          [doc.id, summaryChunk, SUMMARY_CHUNK_INDEX, JSON.stringify(embedding)]
+        )
+      }
+
+      const chunks = chunkSets.get(doc.id) ?? []
+      for (let i = 0; i < chunks.length; i++) {
+        const embedding = await embedWithRetry(chunks[i])
+        await pool.query(
+          `INSERT INTO document_chunks (document_id, content, chunk_index, embedding)
+           VALUES ($1, $2, $3, $4)`,
+          [doc.id, chunks[i], i, JSON.stringify(embedding)]
+        )
+        onProgress?.(doc.id, i + 1, chunks.length)
+      }
+
+      results.push({ id: doc.id, chunkCount: chunks.length })
+    } catch (err) {
+      results.push({ id: doc.id, chunkCount: 0, error: (err as Error).message })
+    }
+  }
+
+  return results
+}
+
 // Reciprocal Rank Fusion constant — standard default from the IR literature,
 // also what SurfSense/most hybrid-search implementations use.
 const RRF_K = 60

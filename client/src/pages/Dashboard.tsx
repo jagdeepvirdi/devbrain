@@ -610,7 +610,10 @@ export function DashboardPage() {
 
   async function handleRetryAllFailed() {
     if (!statsV2) return
-    await Promise.allSettled(statsV2.embeddingHealth.failedIds.map(id => documentsApi.reembed(id)))
+    // One bulk request (phase-separated batch server-side), not N concurrent
+    // /reembed calls — firing embedDocument() per doc concurrently is the GPU
+    // model-swap thrashing pattern documented in TASKS.md Known Issues.
+    await documentsApi.bulk(statsV2.embeddingHealth.failedIds, 're-embed')
     loadAnalytics()
   }
 

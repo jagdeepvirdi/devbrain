@@ -38,7 +38,24 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
   - `TOT_DLD_SAP_Interface_Accrual_v1.0_20150713` (`c0ad5c6b-e515-4e1f-adde-449f526cc786`) — 50 chunks
   - `TOT_DLD_SAP_Interface_EstimateWriteoff_v0.1` (`23313623-82c5-49bd-b076-0c7564fb980d`) — 29 chunks
   - `TOT_DLD_SAP_Interface_v1.0 JS` (`813b44ac-5351-4d8c-8e3a-5e93283afadd`) — 56 chunks
-- [ ] Open design question (still unresolved): should `embedDocument()` stop interleaving chat + embed calls per-document (e.g. batch all summaries first, then all chunk embeddings) to reduce model-swap frequency and prevent this recurring on future bulk re-embeds? Note: the Dashboard "Retry all failed" button and the Documents page bulk re-embed action both fire `embedDocument()` for every selected doc concurrently (unawaited `Promise.allSettled`/loop) — this is the exact pattern that caused the original thrashing and should be avoided until the design question above is resolved.
+- [x] **Design question resolved + shipped (2026-07-17)**: added `embedDocumentsBatch()` to
+      `server/services/embedder.ts` — phase-separated across a whole batch (every document's summary
+      generated via `aiChat`/mistral first, *then* every document's chunks embedded via `aiEmbed`/
+      nomic-embed-text), instead of alternating chat→embed once per document. Cuts total model swaps
+      from ~2×N to 2 regardless of batch size — directly targets the 2026-07-15 incident, where even a
+      *sequential* one-doc-at-a-time loop (`rechunk_all_documents.ts`) thrashed Ollama because each
+      document forced its own swap pair. One document's failure is captured per-item in the returned
+      `BatchResult[]`, never aborts the rest of the batch.
+      Rewired all three call sites that previously fired `embedDocument()` per document: the
+      `PATCH /api/documents/bulk` `re-embed` action (was an unawaited concurrent loop — the exact
+      thrashing pattern flagged below), `rechunk_all_documents.ts` (was sequential-but-interleaved), and
+      the Dashboard "Retry all failed" button (was `Promise.allSettled` over N individual `/reembed`
+      HTTP calls — switched to one `documentsApi.bulk(failedIds, 're-embed')` call so the phase
+      separation happens server-side). Single-document call sites (upload, explain, save-as-document,
+      component-overview, single re-embed) keep using `embedDocument()` unchanged — one document is only
+      2 swaps either way, not the failure mode. 8 new tests for `embedDocumentsBatch` (ordering, chunk
+      counts, per-doc failure isolation, progress callback) + 3 new tests for the rewired bulk route;
+      full suite 229/229, server + client typecheck clean.
 
 ---
 
