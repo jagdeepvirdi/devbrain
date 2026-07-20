@@ -103,12 +103,20 @@ reverted "Ready to upload…" status text both matched the assertion.
 > Apprise external notifications, scheduled backup + zip/JSON restore, CI with server tests + client
 > typecheck + Playwright e2e). What follows are the specific gaps found — not a full category rebuild.
 
-## CI Coverage Gating
+## CI Coverage Gating (resolved 2026-07-20)
 
-- [ ] Enforce a coverage threshold in `.github/workflows/*.yml`'s server job — `test:coverage`
-      (`vitest run --coverage`) already exists but isn't run or gated in CI, so test-depth regressions
-      pass silently. Pick a realistic baseline from a fresh coverage run rather than an arbitrary
-      round number.
+- [x] **Enforced a coverage threshold in `.github/workflows/ci.yml`'s server job** — the "Tests" step
+      now runs `npm run test:coverage` instead of `npm test`, and `server/vitest.config.ts` gained a
+      `coverage.thresholds` block. Baseline picked from a fresh run (34 files / 250 tests): actual was
+      Statements 39.61% / Branches 30.12% / Functions 36.45% / Lines 41.14% — set thresholds a few
+      points below actual (37/28/34/39) so CI gates real regressions without being flaky on incidental
+      noise, rather than picking an arbitrary round number. Coverage is low overall because several
+      services (`backup.ts`, `exporter.ts`, `notifier.ts`, `notifications.ts`, `tasks-watcher.ts`, the
+      Claude/Antigravity discovery services, `session-reader.ts`) have zero tests today — raising the
+      floor is a separate follow-up, not part of this gate. Verified the gate actually fires: temporarily
+      set `statements` to 90%, confirmed `vitest` prints `ERROR: Coverage for statements (39.61%) does
+      not meet global threshold (90%)` and exits non-zero; reverted to 37 and confirmed a clean pass/exit
+      0 at the real baseline.
 
 ## Backup Retention & Offsite Destination
 

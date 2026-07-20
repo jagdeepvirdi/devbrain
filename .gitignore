@@ -29,6 +29,9 @@ server/.cache/
 client/playwright-report/
 client/test-results/
 
+# Coverage reports
+server/coverage/
+
 # OS
 .DS_Store
 Thumbs.db
