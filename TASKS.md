@@ -118,6 +118,93 @@ reverted "Ready to upload…" status text both matched the assertion.
       not meet global threshold (90%)` and exits non-zero; reverted to 37 and confirmed a clean pass/exit
       0 at the real baseline.
 
+## Zero-Coverage Service Tests (found via 2026-07-20 coverage baseline)
+
+> Coverage report from the CI Coverage Gating baseline above showed 9 services at or near 0%
+> (~1370 lines untested). Split into one item per service, ordered by priority: small/high-impact
+> first, hardest-to-test last. Each item should raise `server/vitest.config.ts`'s
+> `coverage.thresholds` floor to match once its service is covered, so the gate keeps tightening
+> instead of just holding steady.
+
+- [ ] **`server/services/backup.ts`** (87 lines, 0%) — smallest file here and directly relevant to
+      the Backup Retention item below; test `runBackup()`'s zip creation and (once retention lands)
+      its pruning logic.
+- [ ] **`server/services/exporter.ts`** (213 lines, 0%) — data export correctness is high-impact and
+      silent-failure-prone; cover each exported format/shape.
+- [ ] **`server/services/notifier.ts`** (105 lines, 0%) — Apprise/external notification dispatch;
+      cover success, subprocess failure, and malformed-JSON-output paths (the last one already got a
+      `console.error` in the Silent-catch cleanup above, but still has no test asserting it).
+- [ ] **`server/services/antigravity-discovery.ts`** (211 lines, 0%) — pure fs/parsing logic
+      (frontmatter + task phases from `TASKS.md`/session files); test against fixture directories.
+- [ ] **`server/services/claude-discovery.ts`** (211 lines, 0%) — same shape as the Antigravity
+      discovery service above; likely shares fixture/test setup with it.
+- [ ] **`server/services/session-reader.ts`** (188 lines, 0%) — session log parsing.
+- [ ] **`server/services/notifications.ts`** (134 lines, 0%) — in-app notification record CRUD.
+- [ ] **`server/services/audit.ts`** (36 lines, 0%) — audit log writer; smallest remaining, quick win
+      whenever picked up.
+- [ ] **`server/services/tasks-watcher.ts`** (185 lines, 3.37%) — `chokidar`-based file watcher with
+      debounce timers; do this last, needs fake timers/fs-event simulation to test well.
+
+## Partially-Covered Service Tests (found via 2026-07-20 coverage baseline)
+
+> Same baseline, the tier above 0% — these have *some* tests but leave large gaps. Deepening these
+> should also raise `coverage.thresholds` once done.
+
+- [ ] **`server/services/links.ts`** (12 stmts, 16.66%/0% branch) — effectively untested despite the
+      nonzero number; smallest file here, quick to bring close to 100%.
+- [ ] **`server/services/ai.ts`** (103 stmts, 37.86%/29.16% branch) — the unified AI client
+      (`services/ai.ts` per CLAUDE.md); low coverage on a file every AI call in the app routes through
+      is disproportionately risky. Cover the Ollama/Claude/Gemini provider-switch branches and the
+      streaming paths specifically, not just one happy path.
+- [ ] **`server/services/integrations.ts`** (79 stmts, 46.83%/29.23% branch) — GitHub/Linear/Jira sync;
+      cover the per-provider response-parsing branches (`GithubIssue`/`JiraSearchResponse`/
+      `LinearResponse`), which is exactly the code that had its `any` types removed in the lint-cleanup
+      pass — real types now, but still branch-thin on error/edge responses.
+- [ ] **`server/services/parser.ts`** (95 stmts, 64.21%/70.37% branch) — already the best-covered file
+      in this list; round out the remaining format-specific branches (PDF/DOCX/XLSX parse-failure
+      fallbacks) rather than a full rewrite.
+
+## Untested Route Handlers (found via 2026-07-20 audit — routes/** not yet in the coverage gate)
+
+> `routes/**` isn't in `vitest.config.ts`'s `coverage.include` at all yet (see the item below), so none
+> of this shows up in the coverage percentage today — found instead by diffing `routes/*.ts` against
+> `tests/routes/*.test.ts` imports. 14 of 25 route files already have a dedicated test file
+> (`documents.ts`, `issues.ts`, `chat.ts`, `git.ts`, `links.ts`, `notifications.ts`, `notify.ts`,
+> `projects.ts`, `search.ts`, `tasks.ts`, `templates.ts`, `api-tokens.ts`, `audit.ts`, `auth.ts`). These
+> 11 have none. Ordered smallest first.
+
+- [ ] **`server/routes/export.ts`** (54 lines) — smallest untested route, quick win.
+- [ ] **`server/routes/aitask.ts`** (95 lines) — the `AiTask.tsx` backend counterpart (see the
+      `useExample`→`applyExample` rename in the lint-cleanup section — that bug lived one layer up from
+      this route, in the component calling it).
+- [ ] **`server/routes/integrations.ts`** (117 lines) — route layer on top of `services/integrations.ts`
+      above; consider pairing with that item since they'll likely share fixtures/mocks.
+- [ ] **`server/routes/runbooks.ts`** (162 lines)
+- [ ] **`server/routes/antigravity-projects.ts`** (165 lines) — pairs naturally with the
+      `antigravity-discovery.ts` service item above (same feature, different layer).
+- [ ] **`server/routes/claude-projects.ts`** (166 lines) — same as above, paired with
+      `claude-discovery.ts`.
+- [ ] **`server/routes/users.ts`** (222 lines) — RBAC/user management; higher-stakes than most on this
+      list (auth-adjacent), worth prioritizing above its line count would otherwise suggest.
+- [ ] **`server/routes/dashboard.ts`** (255 lines)
+- [ ] **`server/routes/commands.ts`** (268 lines)
+- [ ] **`server/routes/releases.ts`** (405 lines)
+- [ ] **`server/routes/settings.ts`** (672 lines, largest untested route) — do this last; also the route
+      behind LDAP config, Apprise channels, and the Antigravity scan-root setting, so high complexity to
+      match its size.
+
+## Bring `routes/**` Into the Coverage Gate
+
+- [ ] Add `routes/**` to `coverage.include` in `server/vitest.config.ts` and re-baseline
+      `coverage.thresholds` from a fresh run. **Sequencing note**: do this *after* picking off at least
+      some of the Untested Route Handlers above (or expect thresholds to need lowering immediately) —
+      routes/** is a much larger surface (25 files, several 200-600+ lines) than `lib/**+services/**`
+      combined, so adding it to `include` before writing those tests would sharply drop the measured
+      percentage even though nothing regressed; it would just make previously-invisible gaps visible.
+      Once included, the CI Coverage Gating item above should be revisited too: the 37/28/34/39%
+      thresholds were calibrated against `lib/**+services/**` only and will no longer reflect reality
+      once the denominator changes.
+
 ## Backup Retention & Offsite Destination
 
 - [ ] Prune local backup files (older than N days, or keep-last-N) in `server/services/backup.ts` —
