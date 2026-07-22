@@ -58,6 +58,11 @@ A private developer knowledge base for organizing work artifacts across all acti
 - **Floating action bar** — bulk tag, status change, re-embed, favorite, or delete.
 - **Triage view** — dedicated Issues tab showing stale and high-priority open items sorted by urgency.
 
+### Backups
+- **Scheduled local backups** — daily or weekly, with automatic pruning to a configurable retention count (default: keep the last 30).
+- **Optional offsite mirror** — every backup can also be pushed to an S3-compatible bucket (AWS S3, MinIO, Backblaze B2, Cloudflare R2) or an SFTP server, with the same retention policy applied remotely. Test the connection before saving; credentials are AES-256-GCM encrypted at rest.
+- **Manual export/import** — full JSON export/import and per-project zip export/import, independent of the scheduler.
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -74,7 +79,8 @@ A private developer knowledge base for organizing work artifacts across all acti
 | Notifications | Apprise (Python) — Telegram, Slack, Discord, and 80+ channels |
 | Code highlighting | Shiki |
 | Auth | bcrypt + JWT (local); LDAP/AD with auto-provisioning |
-| Credentials at rest | AES-256-GCM encryption for OAuth tokens and LDAP bind passwords |
+| Credentials at rest | AES-256-GCM encryption for OAuth tokens, LDAP bind passwords, and offsite backup credentials |
+| Offsite backups (optional) | `@aws-sdk/client-s3` (S3-compatible buckets) or `ssh2-sftp-client` (SFTP) |
 | Infrastructure | Docker Compose (PostgreSQL); Ollama runs natively for direct GPU access |
 
 ## Prerequisites

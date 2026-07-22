@@ -47,14 +47,16 @@ Run all checks before committing:
 powershell -ExecutionPolicy Bypass -File scripts\validate.ps1
 ```
 
-This runs: server typecheck → server lint → server tests → client typecheck → client lint.
+This runs: server typecheck → server lint → server tests with coverage → client typecheck → client lint.
 
 Or run steps individually:
 
 ```bash
-cd server && npm run typecheck && npm run lint && npm test
+cd server && npm run typecheck && npm run lint && npm run test:coverage
 cd client && npm run typecheck && npm run lint
 ```
+
+CI gates on `npm run test:coverage`, not just `npm test` — `server/vitest.config.ts`'s `coverage.thresholds` (covering `lib/**`, `services/**`, and `routes/**`) must pass, so run the coverage variant locally before pushing rather than the plain one.
 
 ## Branch Model
 
@@ -97,6 +99,7 @@ These apply in addition to what ESLint and TypeScript enforce automatically.
 - Test files go in `server/tests/` (server) and `client/src/test/` (client)
 - Use `vi.mock` to isolate the unit under test from DB and network
 - Integration tests that hit a real DB are acceptable; mock the DB only when you have a specific reason
+- Server coverage (`lib/**`, `services/**`, `routes/**`) is gated in CI via `server/vitest.config.ts`'s `coverage.thresholds` — new code should keep coverage at or above the current baseline, not just pass functionally
 
 ## Environment Variables
 

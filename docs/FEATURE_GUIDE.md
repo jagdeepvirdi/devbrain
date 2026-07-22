@@ -635,7 +635,7 @@ Settings uses a **two-column sidebar-nav layout**: a 168px left sidebar with 8 t
 | **General** | AI Backend (active provider, models, Ollama URL) · About (version, stack) |
 | **Account** | Auth mode · Change password · Sign out |
 | **Users & Auth** *(admin)* | User Management · LDAP Configuration |
-| **Data** | Export JSON backup · Import JSON backup (dry run + live) · Scheduled Backup · Export by Project (zip) · Import from Zip · Danger Zone (reset seed) |
+| **Data** | Export JSON backup · Import JSON backup (dry run + live) · Scheduled Backup (local path, schedule, retention count, optional S3/SFTP offsite mirror) · Export by Project (zip) · Import from Zip · Danger Zone (reset seed) |
 | **Notifications** | Notification Rules · Notification Hub (Apprise channels, digest) |
 | **Integrations** | External Issue Sync *(admin)* · Claude Code scan root · Antigravity scan root |
 | **Templates** | Manage built-in and custom templates |
@@ -656,6 +656,8 @@ Settings uses a **two-column sidebar-nav layout**: a 168px left sidebar with 8 t
 1. Settings → **Data** → **Export backup** → click **Download**.
 2. A JSON file is downloaded containing all projects, documents (without raw content and embeddings), issues, commands, releases, and runbooks.
 3. To configure auto-backup: go to **Scheduled Backup** inside the same Data tab, set a path and schedule → Save.
+4. **Keep last** controls how many dated `.zip` files are retained (1–365, default 30) — older backups beyond that count are pruned automatically after every run, both locally and on any configured offsite destination.
+5. **Offsite destination** (optional) — choose **S3-compatible bucket** (works with AWS S3, MinIO, Backblaze B2, Cloudflare R2 — set bucket, region, optional custom endpoint, access key ID, and secret access key) or **SFTP / rsync-style server** (host, port, username, remote path, and a password or private key). Click **Test connection** to verify credentials before saving. Once configured, every local backup is also mirrored offsite; **Last remote backup** and any error message are shown below the form. Leaving a secret field blank on save keeps the previously stored value.
 
 **LDAP test:**
 1. Settings → **Users & Auth** → LDAP Configuration → enter server details.

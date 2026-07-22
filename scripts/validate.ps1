@@ -14,7 +14,7 @@ function Step($label, $cmd, $dir) {
 
 Step "Server: typecheck"    "npm run typecheck" "server"
 Step "Server: lint"         "npm run lint"      "server"
-Step "Server: tests"        "npm test"          "server"
+Step "Server: tests"        "npm run test:coverage" "server"
 Step "Client: typecheck"    "npm run typecheck" "client"
 Step "Client: lint"         "npm run lint"      "client"
 

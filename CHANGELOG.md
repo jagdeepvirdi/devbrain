@@ -6,6 +6,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Scheduled backup retention** — `server/services/backup.ts` now prunes local backup `.zip` files down to a configurable count (default: keep the last 30) after every scheduled or manual run, instead of growing the backup directory unbounded. Configurable via Settings → Data → Scheduled Backup → "Keep last".
+- **Offsite backup destination** — backups can optionally mirror to an S3-compatible bucket (AWS S3, MinIO, Backblaze B2, Cloudflare R2) or an SFTP server, selected via a destination-type dropdown in the same Scheduled Backup section. Remote uploads apply the same retention count as local backups. Credentials (S3 secret key, SFTP password/private key) are AES-256-GCM encrypted at rest; a "Test connection" button verifies reachability before saving. Remote failures are logged and surfaced in the UI without blocking or rolling back the local backup.
+- **`routes/**` brought into the server test coverage gate** — `server/vitest.config.ts`'s `coverage.include` now covers route handlers alongside `lib/**` and `services/**`; CI thresholds re-baselined to the new combined actual (previously calibrated against `lib/**+services/**` only).
+
+### Fixed
+
+- `archiver@8`'s breaking rewrite (factory function → `ZipArchive` class) was silently broken in `services/backup.ts` and both `routes/export.ts` endpoints — `@types/archiver` was still pinned to the old v7 shape, so `tsc` saw nothing wrong but scheduled backups and manual exports threw `archiver is not a function` at runtime. Fixed at all three call sites.
+- `gray-matter`'s YAML parser auto-converts an unquoted ISO timestamp frontmatter value into a JS `Date`, and `String(date)` on that produced a locale/timezone-dependent string instead of an ISO date — garbling the "last updated" badge on Claude Code / Antigravity project tasks and sessions. Fixed via a shared `frontmatterString()` helper (`server/lib/frontmatter.ts`) used across all four affected call sites (`claude-discovery.ts`, `antigravity-discovery.ts`, `session-reader.ts`, `tasks-watcher.ts`).
+
+---
+
 ## [1.2.0] — 2026-06-15
 
 ### Added

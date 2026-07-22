@@ -37,10 +37,8 @@
 ### Testing
 - **Test-Driven Development (TDD)**: New features should include unit tests.
 - **Testing Stack**: Use Vitest for server/client unit tests and Playwright for E2E tests.
-- **Coverage Areas**: 
-  - **Services**: Full coverage for `crypto.ts`, `integrations.ts`, `ai.ts`, and `parser.ts`.
-  - **Routes**: Unit tests for complex route logic (e.g., `git.ts`).
-  - **E2E**: Critical flows including Auth, Project Management, and External Sync.
+- **Coverage Gate**: `server/vitest.config.ts`'s `coverage.include` covers `lib/**`, `services/**`, and `routes/**`; CI (`npm run test:coverage`) fails if `coverage.thresholds` regresses. New code should keep coverage at or above the current baseline, not just pass functionally — see `TASKS.md` for the baseline history.
+- **E2E**: Critical flows including Auth, Project Management, and External Sync.
 
 ## Workflows
 - **Database Migrations**: Add new migrations to `server/db/migrations/` and ensure `schema.sql` is updated to reflect the current source of truth.
