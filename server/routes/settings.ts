@@ -8,7 +8,7 @@ import matter from 'gray-matter'
 import { pool } from '../db/pool.js'
 import { env } from '../lib/env.js'
 import { serverError } from '../lib/errors.js'
-import { triggerBackupNow } from '../services/backup.js'
+import { triggerBackupNow, DEFAULT_BACKUP_RETENTION_COUNT } from '../services/backup.js'
 import { requireRole } from '../middleware/auth.js'
 import { encrypt, decrypt } from '../services/crypto.js'
 import { ldapAuth, type LdapConfig } from '../services/ldap.js'
@@ -393,8 +393,13 @@ router.post('/import', requireRole('admin'), async (req, res) => {
 router.get('/backup-config', async (_req, res) => {
   try {
     const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'backup_settings'`)
-    const cfg = rows[0]?.value ?? { path: null, schedule: 'off', last_backup_at: null }
-    res.json({ data: cfg })
+    const cfg = (rows[0]?.value ?? {}) as Record<string, unknown>
+    res.json({ data: {
+      path:            (cfg.path as string | null) ?? null,
+      schedule:        (cfg.schedule as string) ?? 'off',
+      last_backup_at:  (cfg.last_backup_at as string | null) ?? null,
+      retention_count: (cfg.retention_count as number | null) ?? DEFAULT_BACKUP_RETENTION_COUNT,
+    } })
   } catch (err) {
     serverError(res, err)
   }
@@ -403,8 +408,9 @@ router.get('/backup-config', async (_req, res) => {
 // ── PUT /api/settings/backup-config ─────────────────────────────────────────
 
 const BackupConfigBody = z.object({
-  path:     z.string().nullable(),
-  schedule: z.enum(['daily', 'weekly', 'off']),
+  path:            z.string().nullable(),
+  schedule:        z.enum(['daily', 'weekly', 'off']),
+  retention_count: z.number().int().min(1).max(365).optional(),
 })
 
 router.put('/backup-config', requireRole('admin'), async (req, res) => {
@@ -413,7 +419,12 @@ router.put('/backup-config', requireRole('admin'), async (req, res) => {
   try {
     const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'backup_settings'`)
     const existing = (rows[0]?.value ?? {}) as Record<string, unknown>
-    const updated  = { ...existing, path: parsed.data.path, schedule: parsed.data.schedule }
+    const updated  = {
+      ...existing,
+      path:            parsed.data.path,
+      schedule:        parsed.data.schedule,
+      retention_count: parsed.data.retention_count ?? existing.retention_count ?? DEFAULT_BACKUP_RETENTION_COUNT,
+    }
     await pool.query(
       `INSERT INTO app_settings (key, value)
        VALUES ('backup_settings', $1)
@@ -431,9 +442,9 @@ router.put('/backup-config', requireRole('admin'), async (req, res) => {
 router.post('/backup-now', requireRole('admin'), async (_req, res) => {
   try {
     const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'backup_settings'`)
-    const cfg = rows[0]?.value as { path: string | null } | undefined
+    const cfg = rows[0]?.value as { path: string | null; retention_count?: number | null } | undefined
     if (!cfg?.path) return res.status(400).json({ error: 'No backup path configured' })
-    await triggerBackupNow(cfg.path)
+    await triggerBackupNow(cfg.path, cfg.retention_count ?? DEFAULT_BACKUP_RETENTION_COUNT)
     res.json({ data: { ok: true, path: cfg.path } })
   } catch (err) {
     serverError(res, err)

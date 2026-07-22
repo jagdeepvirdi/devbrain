@@ -1093,6 +1093,20 @@ export type DashboardActivityDay = {
   total:            number
 }
 
+export type IssueThroughputWeek = {
+  week:     string
+  opened:   number
+  resolved: number
+}
+
+export type EmbeddingHealthSnapshot = {
+  captured_at: string
+  pending:     number
+  processing:  number
+  done:        number
+  failed:      number
+}
+
 export const dashboardApi = {
   get: (projectId?: string | null) => {
     const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
@@ -1106,6 +1120,11 @@ export const dashboardApi = {
     const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
     return request<DashboardActivityDay[]>(`/dashboard/activity${qs}`)
   },
+  issueThroughput: (projectId?: string | null) => {
+    const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
+    return request<IssueThroughputWeek[]>(`/dashboard/issue-throughput${qs}`)
+  },
+  embeddingHealthTrend: () => request<EmbeddingHealthSnapshot[]>('/dashboard/embedding-health-trend'),
 }
 
 // ── Chat / RAG ────────────────────────────────────────────────────────────
@@ -1328,6 +1347,7 @@ export type BackupConfig = {
   path:            string | null
   schedule:        'daily' | 'weekly' | 'off'
   last_backup_at:  string | null
+  retention_count: number
 }
 
 export type LdapSettings = {
@@ -1412,7 +1432,7 @@ export const settingsApi = {
   getBackupConfig: () =>
     request<BackupConfig>('/settings/backup-config'),
 
-  saveBackupConfig: (cfg: Pick<BackupConfig, 'path' | 'schedule'>) =>
+  saveBackupConfig: (cfg: Pick<BackupConfig, 'path' | 'schedule' | 'retention_count'>) =>
     request<BackupConfig>('/settings/backup-config', { method: 'PUT', body: JSON.stringify(cfg) }),
 
   backupNow: () =>

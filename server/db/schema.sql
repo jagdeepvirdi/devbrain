@@ -410,7 +410,7 @@ VALUES ('antigravity_scan_root', '{"scan_root": null}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
 INSERT INTO app_settings (key, value)
-VALUES ('backup_settings', '{"path": null, "schedule": "off", "last_backup_at": null}'::jsonb)
+VALUES ('backup_settings', '{"path": null, "schedule": "off", "last_backup_at": null, "retention_count": null}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
 -- Phase 23: AI Enhancements — persistent explanation and summary fields
@@ -577,6 +577,24 @@ CREATE TABLE IF NOT EXISTS api_tokens (
 CREATE INDEX IF NOT EXISTS api_tokens_user_idx ON api_tokens (user_id);
 CREATE INDEX IF NOT EXISTS api_tokens_hash_idx ON api_tokens (token_hash);
 
+-- ── Embedding health snapshots ────────────────────────────────────────────
+-- Periodic (hourly) global count of documents.embedding_status, captured by
+-- services/embeddingHealthSnapshot.ts's scheduler — current status alone
+-- can't show a trend, only right-now. Global rather than per-project: the
+-- GPU-thrashing failure mode this exists to catch (see TASKS.md Known
+-- Issues, 2026-07-15) is a system-wide Ollama problem, not a per-project one.
+-- Pruned to a 30-day rolling window by the same scheduler.
+
+CREATE TABLE IF NOT EXISTS embedding_health_snapshots (
+  id          TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  pending     INTEGER     NOT NULL,
+  processing  INTEGER     NOT NULL,
+  done        INTEGER     NOT NULL,
+  failed      INTEGER     NOT NULL
+);
+CREATE INDEX IF NOT EXISTS embedding_health_snapshots_captured_idx
+  ON embedding_health_snapshots (captured_at);
 
 
 

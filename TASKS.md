@@ -718,9 +718,38 @@ were out of scope here and still have real gaps — see the item below.
 
 ## Backup Retention & Offsite Destination
 
-- [ ] Prune local backup files (older than N days, or keep-last-N) in `server/services/backup.ts` —
-      `runBackup()` writes a new dated zip on every scheduled run forever with no cleanup, so
-      `backupPath` grows unbounded.
+- [x] **Prune local backup files** (resolved 2026-07-22) — went with keep-last-N rather than
+      age-in-days: `runBackup()`'s dated filenames (`devbrain-backup-YYYY-MM-DD.zip`) already sort
+      chronologically as plain strings, so no date-parsing is needed to find the oldest ones, and a
+      count is easier to reason about across mixed daily/weekly schedules than an absolute age. New
+      exported `pruneOldBackups(backupPath, keepLastN)` in `server/services/backup.ts`: lists the
+      directory, filters to the dated-backup filename pattern (ignoring anything else a user might have
+      dropped in that folder), sorts, and unlinks everything beyond the newest `keepLastN` — a
+      `keepLastN <= 0` is treated as "no limit" rather than "delete everything," and a single file's
+      `unlink` failure is caught and logged per-file rather than aborting the rest of the prune or the
+      backup that triggered it. Wired into `runBackup()` itself (called after a successful zip write),
+      so it fires from both `maybeRunBackup()` (scheduled) and `triggerBackupNow()` (manual "Backup now").
+      Retention count is user-configurable, not hardcoded: new `retention_count` field on the existing
+      `backup_settings` `app_settings` row (default `DEFAULT_BACKUP_RETENTION_COUNT = 30`, exported from
+      `backup.ts` so `routes/settings.ts` doesn't duplicate the magic number), validated `1–365` via zod
+      on `PUT /api/settings/backup-config`, merged the same way `path`/`schedule` already are so an
+      omitted field preserves whatever was last stored rather than resetting to the default. `GET
+      /api/settings/backup-config` always resolves a concrete number (never `null`) so the client never
+      has to know about the default itself. Client: `BackupConfig.retention_count: number`, a "Keep
+      last" number input (1–365, clamped client-side too) next to the existing Schedule dropdown in
+      `Settings.tsx`'s `ScheduledBackupSection`, included in both the Save and Backup-now save-then-run
+      flows. 12 new tests: 6 for `pruneOldBackups` itself (over-limit deletion, already-within-limit
+      no-op, non-matching filenames left alone, zero/negative treated as unlimited, a missing directory
+      resolving without throwing, a mid-prune `unlink` failure logged via `console.error` without
+      aborting the rest) plus one `triggerBackupNow` integration test proving real pre-existing dated
+      fixture files get pruned down to the requested count end-to-end, all in
+      `tests/services/backup.test.ts`; 6 new/updated tests in `tests/routes/settings.test.ts` covering the
+      default-when-unset, default-when-the-stored-row-predates-the-field, explicit-value-stored,
+      omitted-value-preserves-existing, and out-of-range-400 branches on `backup-config`, plus
+      `backup-now` passing the configured (or defaulted) count through to `triggerBackupNow`. Full server
+      suite 1130/1130 (up from 1118), coverage still comfortably above the routes/** gate's 96/93/94/97%
+      thresholds (98.46/95.82/96.32/99.51% actual), `tsc --noEmit` and lint clean on both sides (0 errors,
+      only pre-existing `no-non-null-assertion` warnings).
 - [ ] Optional remote backup destination (S3-compatible bucket, or an rsync/SFTP target) alongside the
       existing local-path-only scheduler — local-only means a disk failure loses DevBrain and its
       backups together.

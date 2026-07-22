@@ -1330,12 +1330,13 @@ function ScheduledBackupSection() {
   const [running, setRunning] = useState(false)
   const [path,    setPath]    = useState('')
   const [schedule, setSchedule] = useState<BackupConfig['schedule']>('off')
+  const [retentionCount, setRetentionCount] = useState(30)
 
   const inp: React.CSSProperties = { background: 'var(--bg)', border: '1px solid var(--line-2)', borderRadius: 5, padding: '6px 8px', color: 'var(--fg)', fontSize: 12.5, outline: 'none' }
 
   useEffect(() => {
     settingsApi.getBackupConfig()
-      .then(c => { setCfg(c); setPath(c.path ?? ''); setSchedule(c.schedule) })
+      .then(c => { setCfg(c); setPath(c.path ?? ''); setSchedule(c.schedule); setRetentionCount(c.retention_count) })
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [])
@@ -1344,7 +1345,7 @@ function ScheduledBackupSection() {
     e.preventDefault()
     setSaving(true)
     try {
-      const updated = await settingsApi.saveBackupConfig({ path: path || null, schedule })
+      const updated = await settingsApi.saveBackupConfig({ path: path || null, schedule, retention_count: retentionCount })
       setCfg(updated)
       toast('Backup settings saved')
     } catch (err) { toast((err as Error).message, 'error') }
@@ -1354,8 +1355,8 @@ function ScheduledBackupSection() {
   async function handleBackupNow() {
     if (!path) return
     // save current form first so backup-now uses latest path
-    if (path !== cfg?.path || schedule !== cfg?.schedule) {
-      try { const updated = await settingsApi.saveBackupConfig({ path: path || null, schedule }); setCfg(updated) } catch { /* ignore */ }
+    if (path !== cfg?.path || schedule !== cfg?.schedule || retentionCount !== cfg?.retention_count) {
+      try { const updated = await settingsApi.saveBackupConfig({ path: path || null, schedule, retention_count: retentionCount }); setCfg(updated) } catch { /* ignore */ }
     }
     setRunning(true)
     try { await settingsApi.backupNow(); toast('Backup written successfully') }
@@ -1384,6 +1385,17 @@ function ScheduledBackupSection() {
             <option value="daily">Daily</option>
             <option value="weekly">Weekly</option>
           </select>
+        </div>
+        <div style={{ width: 110 }}>
+          <div style={{ fontSize: 12, color: 'var(--fg-3)', marginBottom: 4 }}>Keep last</div>
+          <input
+            type="number"
+            min={1}
+            max={365}
+            value={retentionCount}
+            onChange={e => setRetentionCount(Math.max(1, Math.min(365, Number(e.target.value) || 1)))}
+            style={{ ...inp, width: '100%', boxSizing: 'border-box' }}
+          />
         </div>
         <button
           type="submit"
