@@ -121,6 +121,32 @@ describe('POST /api/documents/:id/save-explanation', () => {
     expect(res.status).toHaveBeenCalledWith(200)
     expect(res.json).toHaveBeenCalledWith({ data: expect.objectContaining({ id: 'linked-doc-1', created: false }) })
   })
+
+  it('responds 500 on a failure', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('db down'))
+    const req: any = { params: { id: 'doc-1' } }
+    const res = fakeRes()
+    await getHandler('/:id/save-explanation', 'post')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(500)
+  })
+
+  it('falls back to an empty tags array when the source document has none', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ title: 'index.ts', explanation: 'It exports x.', project_id: null, component: null, tags: undefined, file_type: 'code' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [{ id: 'new-doc-1' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [{ id: 'new-doc-1' }] } as any)
+    mockEmbed.mockResolvedValue(1)
+
+    const req: any = { params: { id: 'doc-1' } }
+    const res = fakeRes()
+
+    await getHandler('/:id/save-explanation', 'post')(req, res, () => {})
+
+    const insertCall = mockQuery.mock.calls[2]
+    expect(insertCall[1][3]).toEqual(['code-explanation'])
+  })
 })
 
 describe('GET /api/documents/:id — reports a linked explanation doc, if one exists', () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll, vi } from 'vitest'
+import { describe, it, expect, afterAll, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -26,7 +26,18 @@ vi.mock('word-extractor', () => ({
   },
 }))
 
-const { parseFile } = await import('../../services/parser.js')
+// Mock pdf-parse and mammoth — a real PDF/DOCX needs a real binary fixture,
+// so the native-fallback path (MarkItDown unavailable) is tested with stubs,
+// same reasoning as word-extractor above.
+vi.mock('pdf-parse', () => ({
+  default: vi.fn().mockResolvedValue({ text: 'Extracted PDF text' }),
+}))
+vi.mock('mammoth', () => ({
+  extractRawText: vi.fn().mockResolvedValue({ value: 'Extracted DOCX text' }),
+}))
+
+const { parseFile, parseUrl } = await import('../../services/parser.js')
+const XLSX = await import('xlsx')
 
 // ── Temp file helpers ─────────────────────────────────────────────────────────
 
@@ -186,6 +197,88 @@ describe('parseFile — .html fallback when MarkItDown is unavailable', () => {
   })
 })
 
+// ── PDF via MarkItDown ────────────────────────────────────────────────────────
+
+describe('parseFile — .pdf via MarkItDown', () => {
+  it('maps fileType to pdf', async () => {
+    const p = await writeTmp('doc.pdf', 'binary-junk')
+    const result = await parseFile(p, 'doc.pdf')
+
+    expect(result.fileType).toBe('pdf')
+    expect(result.text).toBe('Mocked Markdown Content')
+  })
+})
+
+// ── PDF native fallback ───────────────────────────────────────────────────────
+
+describe('parseFile — .pdf fallback when MarkItDown is unavailable', () => {
+  it('extracts text via pdf-parse', async () => {
+    const p = await writeTmp('doc-nomd.pdf', 'binary-junk')
+    const result = await parseFile(p, 'doc-nomd.pdf')
+
+    expect(result.fileType).toBe('pdf')
+    expect(result.text).toBe('Extracted PDF text')
+  })
+})
+
+// ── DOCX via MarkItDown ───────────────────────────────────────────────────────
+
+describe('parseFile — .docx via MarkItDown', () => {
+  it('maps fileType to docx', async () => {
+    const p = await writeTmp('doc.docx', 'binary-junk')
+    const result = await parseFile(p, 'doc.docx')
+
+    expect(result.fileType).toBe('docx')
+    expect(result.text).toBe('Mocked Markdown Content')
+  })
+})
+
+// ── DOCX native fallback ──────────────────────────────────────────────────────
+
+describe('parseFile — .docx fallback when MarkItDown is unavailable', () => {
+  it('extracts text via mammoth', async () => {
+    const p = await writeTmp('doc-nomd.docx', 'binary-junk')
+    const result = await parseFile(p, 'doc-nomd.docx')
+
+    expect(result.fileType).toBe('docx')
+    expect(result.text).toBe('Extracted DOCX text')
+  })
+})
+
+// ── XLSX via MarkItDown ───────────────────────────────────────────────────────
+
+describe('parseFile — .xlsx via MarkItDown', () => {
+  it('maps fileType to xlsx', async () => {
+    const p = await writeTmp('sheet.xlsx', 'binary-junk')
+    const result = await parseFile(p, 'sheet.xlsx')
+
+    expect(result.fileType).toBe('xlsx')
+    expect(result.text).toBe('Mocked Markdown Content')
+  })
+})
+
+// ── XLSX native fallback (real workbook, xlsx package unmocked) ──────────────
+
+describe('parseFile — .xlsx fallback when MarkItDown is unavailable', () => {
+  it('converts each sheet to CSV under a "## Sheet: <name>" heading', async () => {
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['a', 'b'], [1, 2]]), 'Sheet1')
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['x'], [9]]), 'Sheet2')
+    const p = path.join(os.tmpdir(), `devbrain-test-${Date.now()}-nomd.xlsx`)
+    XLSX.writeFile(wb, p)
+    tmpFiles.push(p)
+
+    const result = await parseFile(p, 'workbook-nomd.xlsx')
+
+    expect(result.fileType).toBe('xlsx')
+    expect(result.text).toContain('## Sheet: Sheet1')
+    expect(result.text).toContain('a,b')
+    expect(result.text).toContain('1,2')
+    expect(result.text).toContain('## Sheet: Sheet2')
+    expect(result.text).toContain('x')
+  })
+})
+
 // ── Jupyter Notebook (always native) ─────────────────────────────────────────
 
 describe('parseFile — .ipynb', () => {
@@ -224,6 +317,44 @@ describe('parseFile — .ipynb', () => {
 
     expect(result.text).toBe('## Code Cell 1\nx = 1')
   })
+
+  it('renders an error output, and drops an output of an unrecognized type with no text/plain data', async () => {
+    const notebook = {
+      cells: [
+        { cell_type: 'code', source: ['1/0'], outputs: [{ output_type: 'error', ename: 'ZeroDivisionError', evalue: 'division by zero' }] },
+        { cell_type: 'code', source: ['show(plot)'], outputs: [{ output_type: 'display_data', data: { 'image/png': ['...'] } }] },
+      ],
+    }
+    const p = await writeTmp('errors.ipynb', JSON.stringify(notebook))
+    const result = await parseFile(p, 'errors.ipynb')
+
+    expect(result.text).toContain('Output:\nZeroDivisionError: division by zero')
+    // second cell's output has no text/plain, so renderCellOutput falls back
+    // to '' and the whole "Output:" section is omitted for that cell
+    expect(result.text).toBe(
+      '## Code Cell 1\n1/0\n\nOutput:\nZeroDivisionError: division by zero\n\n## Code Cell 2\nshow(plot)'
+    )
+  })
+
+  it('handles a plain-string (non-array) source and a cell with no source at all', async () => {
+    const notebook = {
+      cells: [
+        { cell_type: 'code', source: 'x = 1' },
+        { cell_type: 'markdown' }, // no `source` field
+      ],
+    }
+    const p = await writeTmp('string-source.ipynb', JSON.stringify(notebook))
+    const result = await parseFile(p, 'string-source.ipynb')
+
+    expect(result.text).toBe('## Code Cell 1\nx = 1\n\n## Markdown Cell 2')
+  })
+
+  it('renders nothing when the notebook JSON has no cells field at all', async () => {
+    const p = await writeTmp('no-cells.ipynb', JSON.stringify({}))
+    const result = await parseFile(p, 'no-cells.ipynb')
+
+    expect(result.text).toBe('')
+  })
 })
 
 // ── Legacy DOC ────────────────────────────────────────────────────────────────
@@ -251,6 +382,16 @@ describe('parseFile — .pptx', () => {
   })
 })
 
+// ── PPTX (MarkItDown unavailable) ─────────────────────────────────────────────
+
+describe('parseFile — .pptx when MarkItDown is unavailable', () => {
+  it('throws, since PPTX has no native JS fallback', async () => {
+    const p = await writeTmp('presentation-nomd.pptx', 'binary-junk')
+
+    await expect(parseFile(p, 'presentation-nomd.pptx')).rejects.toThrow(/PPTX requires MarkItDown/)
+  })
+})
+
 // ── Unsupported extension ─────────────────────────────────────────────────────
 
 describe('parseFile — unsupported type', () => {
@@ -274,5 +415,34 @@ describe('parseFile — title extraction', () => {
     const p = await writeTmp('v1.2.3.txt', 'content')
     const { title } = await parseFile(p, 'v1.2.3.txt')
     expect(title).toBe('v1.2.3')
+  })
+})
+
+// ── parseUrl (via Jina) ────────────────────────────────────────────────────────
+
+describe('parseUrl', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('fetches the URL through r.jina.ai, trims the text, and uses the hostname as the title', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve('\n  # Some Page\n\ncontent  \n'),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await parseUrl('https://example.com/article')
+
+    const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://r.jina.ai/https://example.com/article')
+    expect((opts.headers as Record<string, string>).Accept).toBe('text/plain')
+    expect(result).toEqual({ text: '# Some Page\n\ncontent', fileType: 'url', title: 'example.com' })
+  })
+
+  it('throws when the Jina fetch responds non-ok', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 502, statusText: 'Bad Gateway' }))
+
+    await expect(parseUrl('https://example.com')).rejects.toThrow(/Jina fetch failed: 502 Bad Gateway/)
   })
 })

@@ -16,6 +16,7 @@ import { ollamaReady } from './services/ai.js'
 import { initTasksWatcher } from './services/tasks-watcher.js'
 import { startBackupScheduler } from './services/backup.js'
 import { startNotificationScheduler, startDigestScheduler } from './services/notifications.js'
+import { startEmbeddingHealthScheduler } from './services/embeddingHealthSnapshot.js'
 
 const app = express()
 
@@ -213,6 +214,9 @@ async function start() {
 
   // Start daily digest scheduler
   startDigestScheduler()
+
+  // Start embedding health trend scheduler
+  startEmbeddingHealthScheduler()
 
   app.listen(env.PORT, () => {
     console.log(`  server: http://localhost:${env.PORT} ✓`)

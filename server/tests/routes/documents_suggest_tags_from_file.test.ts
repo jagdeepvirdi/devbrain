@@ -90,4 +90,12 @@ describe('POST /api/documents/suggest-tags-from-file', () => {
 
     expect(res.json).toHaveBeenCalledWith({ data: { tags: [] } })
   })
+
+  it('responds 500 on a failure', async () => {
+    mockParseFile.mockRejectedValueOnce(new Error('parse boom'))
+    const req: any = { file: { path: '/tmp/fake', originalname: 'doc.txt' } }
+    const res = fakeRes()
+    await getHandler('/suggest-tags-from-file')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(500)
+  })
 })

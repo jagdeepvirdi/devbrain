@@ -252,4 +252,66 @@ router.get('/activity', async (req, res) => {
   }
 })
 
+// ── Issue throughput (opened/resolved per week, 12-week window) ──────────
+
+router.get('/issue-throughput', async (req, res) => {
+  const pid = (req.query.projectId as string) || null
+  const params = pid ? [pid] : []
+  const pf = pid ? 'AND project_id = $1' : ''
+
+  try {
+    const result = await pool.query(
+      `WITH weeks AS (
+         SELECT generate_series(
+           date_trunc('week', now()) - interval '11 weeks',
+           date_trunc('week', now()),
+           interval '1 week'
+         )::date AS week_start
+       ),
+       opened AS (
+         SELECT date_trunc('week', created_at)::date AS week_start, COUNT(*)::int AS cnt
+         FROM issues WHERE created_at >= now() - interval '12 weeks' ${pf}
+         GROUP BY 1
+       ),
+       resolved AS (
+         SELECT date_trunc('week', resolved_at)::date AS week_start, COUNT(*)::int AS cnt
+         FROM issues
+         WHERE resolved_at IS NOT NULL AND resolved_at >= now() - interval '12 weeks'
+           AND status = 'resolved' ${pf}
+         GROUP BY 1
+       )
+       SELECT
+         to_char(w.week_start, 'YYYY-MM-DD') AS week,
+         COALESCE(o.cnt, 0)                  AS opened,
+         COALESCE(r.cnt, 0)                  AS resolved
+       FROM weeks w
+       LEFT JOIN opened   o ON o.week_start = w.week_start
+       LEFT JOIN resolved r ON r.week_start = w.week_start
+       ORDER BY w.week_start`,
+      params
+    )
+    res.json({ data: result.rows })
+  } catch (err) {
+    console.error('dashboard/issue-throughput error:', err)
+    res.status(500).json({ error: 'Issue throughput failed' })
+  }
+})
+
+// ── Embedding health trend (global, last 30 days of hourly snapshots) ────
+
+router.get('/embedding-health-trend', async (_req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT captured_at, pending, processing, done, failed
+       FROM embedding_health_snapshots
+       WHERE captured_at >= now() - interval '30 days'
+       ORDER BY captured_at ASC`
+    )
+    res.json({ data: result.rows })
+  } catch (err) {
+    console.error('dashboard/embedding-health-trend error:', err)
+    res.status(500).json({ error: 'Embedding health trend failed' })
+  }
+})
+
 export default router

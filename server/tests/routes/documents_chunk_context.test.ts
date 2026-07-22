@@ -111,4 +111,12 @@ describe('GET /api/documents/:id/chunks/:chunkIndex', () => {
 
     expect(res.status).toHaveBeenCalledWith(400)
   })
+
+  it('responds 500 on a query failure', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('db down'))
+    const req: any = { params: { id: 'doc-1', chunkIndex: '3' } }
+    const res = fakeRes()
+    await getHandler('/:id/chunks/:chunkIndex')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(500)
+  })
 })

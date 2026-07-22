@@ -1,7 +1,10 @@
 import { Router } from 'express'
 import { createRequire } from 'module'
+import type { Archiver, ArchiverOptions } from 'archiver'
 const require = createRequire(import.meta.url)
-const archiver = require('archiver') as typeof import('archiver')
+// See server/services/backup.ts for why this isn't `require('archiver')` as
+// the old factory function — archiver@8 replaced it with format classes.
+const { ZipArchive } = require('archiver') as { ZipArchive: new (options?: ArchiverOptions) => Archiver }
 import { pool } from '../db/pool.js'
 import { addProjectToArchive, buildZipToStream } from '../services/exporter.js'
 import { serverError } from '../lib/errors.js'
@@ -23,7 +26,7 @@ router.get('/project/:id', async (req, res) => {
     res.setHeader('Content-Type', 'application/zip')
     res.setHeader('Content-Disposition', `attachment; filename="devbrain-${project.short_name}-${date}.zip"`)
 
-    const archive = archiver('zip', { zlib: { level: 6 } })
+    const archive = new ZipArchive({ zlib: { level: 6 } })
     archive.on('error', err => { console.error('export error', err); res.end() })
     archive.pipe(res)
 
@@ -41,7 +44,7 @@ router.get('/all', async (_req, res) => {
     res.setHeader('Content-Type', 'application/zip')
     res.setHeader('Content-Disposition', `attachment; filename="devbrain-export-${date}.zip"`)
 
-    const archive = archiver('zip', { zlib: { level: 6 } })
+    const archive = new ZipArchive({ zlib: { level: 6 } })
     archive.on('error', err => { console.error('export error', err); res.end() })
     archive.pipe(res)
 

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useProjectStore } from '../store/projectStore'
 import { dashboardApi, commandsApi, gitApi, documentsApi, issuesApi } from '../lib/api'
-import type { DashboardData, DashboardIssue, DashboardCommand, DashboardRelease, DashboardProject, DashboardActivity, DashboardStatsV2, DashboardActivityDay, GitCommit } from '../lib/api'
+import type { DashboardData, DashboardIssue, DashboardCommand, DashboardRelease, DashboardProject, DashboardActivity, DashboardStatsV2, DashboardActivityDay, IssueThroughputWeek, EmbeddingHealthSnapshot, GitCommit } from '../lib/api'
 import { useRecentlyViewed, type RecentlyViewedEntry } from '../hooks/useRecentlyViewed'
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -496,6 +496,96 @@ function EmbeddingHealth({
   )
 }
 
+function IssueThroughputChart({ data }: { data: IssueThroughputWeek[] }) {
+  const max = Math.max(...data.map(d => Math.max(d.opened, d.resolved)), 1)
+  const hasActivity = data.some(d => d.opened > 0 || d.resolved > 0)
+  return (
+    <AnalyticsWidget title="Issue Throughput (12 weeks)">
+      {!hasActivity
+        ? <WidgetEmpty text="No issues opened or resolved in the last 12 weeks" />
+        : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 90 }}>
+              {data.map(d => (
+                <div key={d.week} style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: 2, height: '100%' }}>
+                  <div
+                    title={`Week of ${d.week}: ${d.opened} opened`}
+                    style={{
+                      flex: 1, height: `${(d.opened / max) * 100}%`, minHeight: d.opened > 0 ? 2 : 0,
+                      background: '#FF9D4D', borderRadius: '2px 2px 0 0',
+                    }}
+                  />
+                  <div
+                    title={`Week of ${d.week}: ${d.resolved} resolved`}
+                    style={{
+                      flex: 1, height: `${(d.resolved / max) * 100}%`, minHeight: d.resolved > 0 ? 2 : 0,
+                      background: '#22C55E', borderRadius: '2px 2px 0 0',
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 14, marginTop: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#FF9D4D' }} />
+                <span style={{ fontSize: '11px', color: 'var(--fg-4)' }}>Opened</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#22C55E' }} />
+                <span style={{ fontSize: '11px', color: 'var(--fg-4)' }}>Resolved</span>
+              </div>
+            </div>
+          </>
+        )
+      }
+    </AnalyticsWidget>
+  )
+}
+
+function EmbeddingHealthTrendChart({ data }: { data: EmbeddingHealthSnapshot[] }) {
+  if (data.length < 2) {
+    return (
+      <AnalyticsWidget title="Embedding Health Trend (30d)">
+        <WidgetEmpty text="Not enough history yet — check back after a few hours" />
+      </AnalyticsWidget>
+    )
+  }
+
+  const W = 300, H = 80, PAD = 4
+  const max = Math.max(...data.map(d => Math.max(d.pending, d.failed)), 1)
+  const toPoints = (key: 'pending' | 'failed') =>
+    data.map((d, i) => {
+      const x = (i / (data.length - 1)) * (W - PAD * 2) + PAD
+      const y = H - PAD - (d[key] / max) * (H - PAD * 2)
+      return `${x},${y}`
+    }).join(' ')
+
+  const fmtDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+
+  return (
+    <AnalyticsWidget title="Embedding Health Trend (30d)">
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: H, display: 'block' }} preserveAspectRatio="none">
+        <polyline points={toPoints('pending')} fill="none" stroke="#F59E0B" strokeWidth="1.5" />
+        <polyline points={toPoints('failed')} fill="none" stroke="#EF4444" strokeWidth="1.5" />
+      </svg>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--fg-4)', marginTop: 4 }}>
+        <span>{fmtDate(data[0].captured_at)}</span>
+        <span>{fmtDate(data[data.length - 1].captured_at)}</span>
+      </div>
+      <div style={{ display: 'flex', gap: 14, marginTop: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#F59E0B' }} />
+          <span style={{ fontSize: '11px', color: 'var(--fg-4)' }}>Pending</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#EF4444' }} />
+          <span style={{ fontSize: '11px', color: 'var(--fg-4)' }}>Failed</span>
+        </div>
+      </div>
+    </AnalyticsWidget>
+  )
+}
+
 function StaleIssues({
   issues, onMarkInvestigating,
 }: {
@@ -564,6 +654,8 @@ export function DashboardPage() {
   const [recentItems,  setRecentItems]  = useState<RecentlyViewedEntry[]>([])
   const [statsV2,      setStatsV2]      = useState<DashboardStatsV2 | null>(null)
   const [activityData, setActivityData] = useState<DashboardActivityDay[]>([])
+  const [throughputData,   setThroughputData]   = useState<IssueThroughputWeek[]>([])
+  const [embeddingTrendData, setEmbeddingTrendData] = useState<EmbeddingHealthSnapshot[]>([])
 
   useEffect(() => {
     setLoading(true)
@@ -578,6 +670,8 @@ export function DashboardPage() {
   const loadAnalytics = useCallback(() => {
     dashboardApi.statsV2(project?.id).then(setStatsV2).catch(() => {})
     dashboardApi.activity(project?.id).then(setActivityData).catch(() => {})
+    dashboardApi.issueThroughput(project?.id).then(setThroughputData).catch(() => {})
+    dashboardApi.embeddingHealthTrend().then(setEmbeddingTrendData).catch(() => {})
   }, [project?.id])
 
   useEffect(() => { loadAnalytics() }, [loadAnalytics])
@@ -670,10 +764,12 @@ export function DashboardPage() {
           <OpenIssuesByProject data={statsV2.openByProject} />
           <AvgResolutionTime   data={statsV2.avgResolution} />
           {activityData.length > 0 && <ActivityHeatmap data={activityData} />}
+          {throughputData.length > 0 && <IssueThroughputChart data={throughputData} />}
           <EmbeddingHealth
             data={statsV2.embeddingHealth}
             onRetryAll={handleRetryAllFailed}
           />
+          <EmbeddingHealthTrendChart data={embeddingTrendData} />
           <StaleIssues
             issues={statsV2.staleIssues}
             onMarkInvestigating={handleMarkInvestigating}

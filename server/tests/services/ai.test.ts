@@ -14,6 +14,7 @@ vi.mock('../../lib/env.js', () => ({
 
 // Import after mocks are registered
 const { aiChat, aiEmbed, aiChatStream, ollamaReady } = await import('../../services/ai.js')
+const { env } = await import('../../lib/env.js')
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -128,6 +129,207 @@ describe('aiChatStream — Ollama path', () => {
     await expect(
       aiChatStream([{ role: 'user', content: 'hi' }], () => {})
     ).rejects.toThrow(/Ollama stream error 503/)
+  })
+
+  it('skips a malformed NDJSON line instead of throwing', async () => {
+    const lines = [
+      JSON.stringify({ message: { content: 'Hello' } }),
+      'not-json{',
+      JSON.stringify({ message: { content: ' world' } }),
+    ]
+    const encoder  = new TextEncoder()
+    const chunks   = lines.map(l => encoder.encode(l + '\n'))
+    let   chunkIdx = 0
+    const mockReader = {
+      read: vi.fn().mockImplementation(() => chunkIdx < chunks.length
+        ? Promise.resolve({ done: false, value: chunks[chunkIdx++] })
+        : Promise.resolve({ done: true, value: undefined })),
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, body: { getReader: () => mockReader } }))
+
+    const tokens: string[] = []
+    await aiChatStream([{ role: 'user', content: 'hi' }], chunk => tokens.push(chunk))
+
+    expect(tokens).toEqual(['Hello', ' world'])
+  })
+})
+
+// ── aiChat (Claude path) ───────────────────────────────────────────────────────
+
+describe('aiChat — Claude path', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn())
+    env.AI_PROVIDER = 'claude'
+    env.ANTHROPIC_API_KEY = 'test-key'
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    env.AI_PROVIDER = 'ollama'
+  })
+
+  it('calls the Claude API with the system prompt separated and returns the text', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(makeJsonResponse({ content: [{ text: 'Hello from Claude' }] }))
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await aiChat('hi', 'sys')
+
+    expect(result).toBe('Hello from Claude')
+    const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://api.anthropic.com/v1/messages')
+    expect((opts.headers as Record<string, string>)['x-api-key']).toBe('test-key')
+    const body = JSON.parse(opts.body as string)
+    expect(body.system).toBe('sys')
+    expect(body.messages).toEqual([{ role: 'user', content: 'hi' }])
+  })
+
+  it('throws when Claude returns a non-ok response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse('Bad', false, 401)))
+    await expect(aiChat('hi', 'sys')).rejects.toThrow(/Claude API error 401/)
+  })
+})
+
+// ── aiChat (Gemini path) ───────────────────────────────────────────────────────
+
+describe('aiChat — Gemini path', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn())
+    env.AI_PROVIDER = 'gemini'
+    env.GEMINI_API_KEY = 'gem-key'
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    env.AI_PROVIDER = 'ollama'
+  })
+
+  it('calls the Gemini API and returns the text', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      makeJsonResponse({ candidates: [{ content: { parts: [{ text: 'Hi from Gemini' }] } }] })
+    )
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await aiChat('hi', 'sys')
+
+    expect(result).toBe('Hi from Gemini')
+    const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('gemini-2.0-flash:generateContent?key=gem-key')
+    const body = JSON.parse(opts.body as string)
+    expect(body.system_instruction.parts[0].text).toBe('sys')
+    expect(body.contents).toEqual([{ role: 'user', parts: [{ text: 'hi' }] }])
+  })
+
+  it('throws when Gemini returns a non-ok response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse('err', false, 429)))
+    await expect(aiChat('hi', 'sys')).rejects.toThrow(/Gemini API error 429/)
+  })
+})
+
+// ── aiChatStream (Claude path) ──────────────────────────────────────────────────
+
+describe('aiChatStream — Claude path', () => {
+  beforeEach(() => {
+    env.AI_PROVIDER = 'claude'
+    env.ANTHROPIC_API_KEY = 'test-key'
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    env.AI_PROVIDER = 'ollama'
+  })
+
+  it('parses SSE content_block_delta events, skipping non-matching events and malformed JSON', async () => {
+    const lines = [
+      'event: message_start',
+      `data: ${JSON.stringify({ type: 'content_block_delta', delta: { text: 'Hello' } })}`,
+      `data: ${JSON.stringify({ type: 'content_block_delta', delta: { text: ' world' } })}`,
+      `data: ${JSON.stringify({ type: 'ping' })}`, // no delta.text -> skipped
+      'data: not-json{',                            // malformed -> skipped
+    ]
+    const encoder = new TextEncoder()
+    const chunks  = lines.map(l => encoder.encode(l + '\n'))
+    let   idx     = 0
+    const mockReader = {
+      read: vi.fn().mockImplementation(() => idx < chunks.length
+        ? Promise.resolve({ done: false, value: chunks[idx++] })
+        : Promise.resolve({ done: true, value: undefined })),
+    }
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, body: { getReader: () => mockReader } })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const tokens: string[] = []
+    await aiChatStream([{ role: 'system', content: 'sys' }, { role: 'user', content: 'hi' }], c => tokens.push(c))
+
+    expect(tokens).toEqual(['Hello', ' world'])
+    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(opts.body as string)
+    expect(body.system).toBe('sys')
+    expect(body.messages).toEqual([{ role: 'user', content: 'hi' }])
+  })
+
+  it('throws when the Claude stream response is not ok', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse('bad', false, 500)))
+    await expect(aiChatStream([{ role: 'user', content: 'hi' }], () => {})).rejects.toThrow(/Claude stream error 500/)
+  })
+})
+
+// ── aiChatStream (Gemini path) ──────────────────────────────────────────────────
+
+describe('aiChatStream — Gemini path', () => {
+  beforeEach(() => {
+    env.AI_PROVIDER = 'gemini'
+    env.GEMINI_API_KEY = 'gem-key'
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    env.AI_PROVIDER = 'ollama'
+  })
+
+  it('parses SSE candidate text, skipping a candidate with no text and malformed JSON, with a system message', async () => {
+    const lines = [
+      `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'Hi' }] } }] })}`,
+      `data: ${JSON.stringify({ candidates: [{ content: { parts: [{}] } }] })}`, // no text -> skipped
+      'data: not-json{',
+    ]
+    const encoder = new TextEncoder()
+    const chunks  = lines.map(l => encoder.encode(l + '\n'))
+    let   idx     = 0
+    const mockReader = {
+      read: vi.fn().mockImplementation(() => idx < chunks.length
+        ? Promise.resolve({ done: false, value: chunks[idx++] })
+        : Promise.resolve({ done: true, value: undefined })),
+    }
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, body: { getReader: () => mockReader } })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const tokens: string[] = []
+    await aiChatStream([{ role: 'system', content: 'sys' }, { role: 'user', content: 'hi' }], c => tokens.push(c))
+
+    expect(tokens).toEqual(['Hi'])
+    const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('streamGenerateContent')
+    expect(url).toContain('alt=sse')
+    const body = JSON.parse(opts.body as string)
+    expect(body.system_instruction.parts[0].text).toBe('sys')
+    expect(body.contents).toEqual([{ role: 'user', parts: [{ text: 'hi' }] }])
+  })
+
+  it('omits system_instruction and maps assistant to model when there is no system message', async () => {
+    const mockReader = { read: vi.fn().mockResolvedValue({ done: true, value: undefined }) }
+    const mockFetch  = vi.fn().mockResolvedValue({ ok: true, body: { getReader: () => mockReader } })
+    vi.stubGlobal('fetch', mockFetch)
+
+    await aiChatStream([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'prior' }], () => {})
+
+    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(opts.body as string)
+    expect(body.system_instruction).toBeUndefined()
+    expect(body.contents).toEqual([
+      { role: 'user', parts: [{ text: 'hi' }] },
+      { role: 'model', parts: [{ text: 'prior' }] },
+    ])
+  })
+
+  it('throws when the Gemini stream response is not ok', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse('bad', false, 500)))
+    await expect(aiChatStream([{ role: 'user', content: 'hi' }], () => {})).rejects.toThrow(/Gemini stream error 500/)
   })
 })
 

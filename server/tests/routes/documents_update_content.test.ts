@@ -63,6 +63,51 @@ describe('POST /api/documents/:id/update-content', () => {
     expect(mockParseFile).not.toHaveBeenCalled()
   })
 
+  it('422s when no text could be extracted from the replacement file', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'doc-1' }] } as any) // existence check
+    mockParseFile.mockResolvedValueOnce({ text: '', fileType: 'txt', title: 'empty' } as any)
+    const req: any = { params: { id: 'doc-1' }, file: { path: '/tmp/fake', originalname: 'empty.txt' } }
+    const res = fakeRes()
+
+    await getHandler('/:id/update-content', 'post')(req, res, () => {})
+
+    expect(res.status).toHaveBeenCalledWith(422)
+  })
+
+  it('stores a null language when the replacement file has none', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'doc-1' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [{ title: 'notes.txt' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [{ id: 'doc-1' }] } as any)
+    mockParseFile.mockResolvedValue({ text: 'plain text', fileType: 'txt', title: 'notes' } as any)
+    mockEmbed.mockResolvedValue(1)
+
+    const req: any = { params: { id: 'doc-1' }, file: { path: '/tmp/fake', originalname: 'notes.txt' } }
+    const res = fakeRes()
+
+    await getHandler('/:id/update-content', 'post')(req, res, () => {})
+
+    const updateCall = mockQuery.mock.calls[1]
+    expect(updateCall[1]).toEqual(['doc-1', 'plain text', expect.any(String), 'txt', null, 'notes.txt'])
+  })
+
+  it('swallows a failure in the failed-status cleanup update itself', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'doc-1' }] } as any) // existence check
+      .mockRejectedValueOnce(new Error('boom'))                   // UPDATE content throws
+      .mockRejectedValueOnce(new Error('cleanup also fails'))     // embedding_status = failed cleanup also throws
+    mockParseFile.mockResolvedValue({ text: 'content', fileType: 'code', title: 'index', language: 'python' } as any)
+
+    const req: any = { params: { id: 'doc-1' }, file: { path: '/tmp/fake', originalname: 'index.py' } }
+    const res = fakeRes()
+
+    await getHandler('/:id/update-content', 'post')(req, res, () => {})
+
+    expect(res.status).toHaveBeenCalledWith(500)
+  })
+
   it('replaces content/hash/language in place and re-embeds with the new content', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ id: 'doc-1' }] } as any)                          // existence check

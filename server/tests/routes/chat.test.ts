@@ -74,6 +74,169 @@ describe('POST /api/chat — session lifecycle', () => {
     mockAiChatStream.mockImplementation(async (_msgs, onChunk) => { onChunk('Hi there') })
   })
 
+  it('400s on an invalid body', async () => {
+    const req: any = { user: { id: 'u1', role: 'admin' }, body: { question: '' }, on: vi.fn() }
+    const res = fakeJsonRes()
+
+    await getHandler('/', 'post')(req, res, () => {})
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(mockQuery).not.toHaveBeenCalled()
+  })
+
+  it('responds 500 without opening the SSE stream when session resolution itself fails', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('db down'))
+    const req: any = { user: { id: 'u1', role: 'admin' }, body: { question: 'q' }, on: vi.fn() }
+    const res = fakeJsonRes()
+
+    await getHandler('/', 'post')(req, res, () => {})
+
+    expect(res.status).toHaveBeenCalledWith(500)
+  })
+
+  it('sends an SSE error event and ends the stream when something throws mid-request', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'sess-err' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [{ id: 'm1', role: 'user', content: 'q', citations: null, created_at: 't1' }] } as any)
+    mockAiEmbed.mockRejectedValueOnce(new Error('ollama down'))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const req: any = { user: { id: 'u1', role: 'admin' }, body: { question: 'q', sessionId: 'sess-err' }, on: vi.fn() }
+    const res = fakeSseRes()
+
+    await getHandler('/', 'post')(req, res, () => {})
+
+    const events = parseSseEvents(res._written)
+    const errorEvent = events.find((e: any) => e.type === 'error')
+    expect(errorEvent.message).toBe('ollama down')
+    expect(res.end).toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it('falls back to "Unknown error" when the thrown value has no message', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'sess-err2' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [{ id: 'm1', role: 'user', content: 'q', citations: null, created_at: 't1' }] } as any)
+    mockAiEmbed.mockRejectedValueOnce({})
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const req: any = { user: { id: 'u1', role: 'admin' }, body: { question: 'q', sessionId: 'sess-err2' }, on: vi.fn() }
+    const res = fakeSseRes()
+
+    await getHandler('/', 'post')(req, res, () => {})
+
+    const events = parseSseEvents(res._written)
+    const errorEvent = events.find((e: any) => e.type === 'error')
+    expect(errorEvent.message).toBe('Unknown error')
+    errSpy.mockRestore()
+  })
+
+  it('ends the response after 5 minutes of inactivity', async () => {
+    vi.useFakeTimers()
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'sess-idle' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [{ id: 'm1', role: 'user', content: 'q', citations: null, created_at: 't1' }] } as any)
+    mockSearchChunks.mockResolvedValue([
+      { id: 'c1', chunk: 'text', documentId: 'd1', documentTitle: 'Doc', chunkIndex: 0, score: 0.9 },
+    ])
+    mockAiChatStream.mockImplementation(() => new Promise(() => {})) // never resolves
+
+    const req: any = { user: { id: 'u1', role: 'admin' }, body: { question: 'q', sessionId: 'sess-idle' }, on: vi.fn() }
+    const res = fakeSseRes()
+
+    void getHandler('/', 'post')(req, res, () => {})
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000)
+
+    expect(res._written.some((w: string) => w.includes('"type":"timeout"'))).toBe(true)
+    expect(res.end).toHaveBeenCalled()
+
+    vi.useRealTimers()
+  })
+
+  it('truncates a long chunk excerpt to 300 chars with an ellipsis', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'sess-long' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [{ id: 'm1', role: 'user', content: 'q', citations: null, created_at: 't1' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+    const longChunk = 'x'.repeat(400)
+    mockSearchChunks.mockResolvedValue([
+      { id: 'c1', chunk: longChunk, documentId: 'd1', documentTitle: 'Doc', chunkIndex: 0, score: 0.9 },
+    ])
+
+    const req: any = { user: { id: 'u1', role: 'admin' }, body: { question: 'q', sessionId: 'sess-long' }, on: vi.fn() }
+    const res = fakeSseRes()
+
+    await getHandler('/', 'post')(req, res, () => {})
+
+    const events = parseSseEvents(res._written)
+    const citationsEvent = events.find((e: any) => e.type === 'citations')
+    expect(citationsEvent.citations[0].excerpt).toBe('x'.repeat(300) + '…')
+  })
+
+  it('treats a null citations field and a citation without an id gracefully during backfill', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'sess-bf' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({
+        rows: [
+          { id: 'm3', role: 'user',      content: 'q2', citations: null,    created_at: 't3' },
+          { id: 'm2', role: 'assistant', content: 'a1', citations: null,    created_at: 't2' },
+          { id: 'm1', role: 'assistant', content: 'a0', citations: [{}],    created_at: 't1' },
+          { id: 'm0', role: 'user',      content: 'q1', citations: null,    created_at: 't0' },
+        ],
+      } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+    mockSearchChunks.mockResolvedValue([])
+
+    const req: any = { user: { id: 'u1', role: 'admin' }, body: { question: 'q2', sessionId: 'sess-bf' }, on: vi.fn() }
+    const res = fakeSseRes()
+
+    await getHandler('/', 'post')(req, res, () => {})
+
+    expect(mockSearchChunks).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(),
+      expect.objectContaining({ backfillChunkIds: [] })
+    )
+  })
+
+  it('treats a rewrite failure as "no rewrite" and falls back to the canned response', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'sess-rw' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({
+        rows: [
+          { id: 'm2', role: 'user',      content: 'what about the second one?', citations: null, created_at: 't2' },
+          { id: 'm1', role: 'assistant', content: 'It syncs invoices to SAP.',  citations: [],   created_at: 't1' },
+        ],
+      } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+    mockSearchChunks.mockResolvedValue([])
+    mockAiChat.mockRejectedValueOnce(new Error('ollama down'))
+
+    const req: any = { user: { id: 'u1', role: 'admin' }, body: { question: 'what about the second one?', sessionId: 'sess-rw' }, on: vi.fn() }
+    const res = fakeSseRes()
+
+    await getHandler('/', 'post')(req, res, () => {})
+
+    expect(mockSearchChunks).toHaveBeenCalledTimes(1)
+    const events = parseSseEvents(res._written)
+    const chunkEvent = events.find((e: any) => e.type === 'chunk')
+    expect(chunkEvent.text).toContain("don't see anything")
+  })
+
   it('creates a new session when no sessionId is given, and emits it as the first SSE event', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ id: 'sess-1' }] } as any) // INSERT chat_sessions
@@ -97,6 +260,49 @@ describe('POST /api/chat — session lifecycle', () => {
       expect.stringContaining('INSERT INTO chat_sessions'),
       ['u1', null, null, 'hello']
     )
+  })
+
+  it('truncates a long question to 60 chars for the new session title', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'sess-title' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [{ id: 'm1', role: 'user', content: 'x', citations: null, created_at: 't1' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+    mockSearchChunks.mockResolvedValue([])
+
+    const longQuestion = 'x'.repeat(80)
+    const req: any = { user: { id: 'u1', role: 'admin' }, body: { question: longQuestion }, on: vi.fn() }
+    const res = fakeSseRes()
+
+    await getHandler('/', 'post')(req, res, () => {})
+
+    const insertCall = mockQuery.mock.calls[0]
+    expect((insertCall[1] as unknown[])[3]).toBe('x'.repeat(60) + '…')
+  })
+
+  it('clears the idle timer when the client closes the connection', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'sess-close' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [{ id: 'm1', role: 'user', content: 'q', citations: null, created_at: 't1' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+    mockSearchChunks.mockResolvedValue([])
+
+    let closeHandler: (() => void) | undefined
+    const req: any = {
+      user: { id: 'u1', role: 'admin' }, body: { question: 'q', sessionId: 'sess-close' },
+      on: vi.fn((event: string, cb: () => void) => { if (event === 'close') closeHandler = cb }),
+    }
+    const res = fakeSseRes()
+
+    await getHandler('/', 'post')(req, res, () => {})
+
+    expect(closeHandler).toBeDefined()
+    expect(() => closeHandler!()).not.toThrow()
   })
 
   it('reuses an existing sessionId when it belongs to the requesting user', async () => {
@@ -379,6 +585,49 @@ describe('POST /api/chat — Full Context Mode', () => {
     expect(mockSearchChunks).toHaveBeenCalled()
   })
 
+  it('includes prior conversation turns in the Full Context Mode prompt too', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'sess-fc' }] } as any) // ownership check
+      .mockResolvedValueOnce({ rows: [] } as any)                  // INSERT user message
+      .mockResolvedValueOnce({ rows: [] } as any)                  // UPDATE touch
+      .mockResolvedValueOnce({
+        rows: [
+          { id: 'm2', role: 'user',      content: 'follow up',    citations: null, created_at: 't2' },
+          { id: 'm1', role: 'assistant', content: 'prior answer', citations: [],   created_at: 't1' },
+        ],
+      } as any) // loadHistory
+      .mockResolvedValueOnce({ rows: [{ title: 'Short Doc', content: 'Short content.' }] } as any) // tryFullContextMode
+      .mockResolvedValueOnce({ rows: [] } as any) // INSERT assistant
+      .mockResolvedValueOnce({ rows: [] } as any) // UPDATE touch
+
+    const req: any = { user: { id: 'u1', role: 'admin' }, body: { question: 'follow up', sessionId: 'sess-fc', documentId: 'doc-fc' }, on: vi.fn() }
+    const res = fakeSseRes()
+
+    await getHandler('/', 'post')(req, res, () => {})
+
+    const [messagesArg] = mockAiChatStream.mock.calls[0]
+    expect(messagesArg[1]).toEqual({ role: 'assistant', content: 'prior answer' })
+  })
+
+  it('falls through to normal retrieval when the referenced document does not exist', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'sess-nf' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+      .mockResolvedValueOnce({ rows: [{ id: 'm1', role: 'user', content: 'q', citations: null, created_at: 't1' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any) // tryFullContextMode SELECT — no matching document
+      .mockResolvedValueOnce({ rows: [] } as any) // INSERT assistant (canned)
+      .mockResolvedValueOnce({ rows: [] } as any) // UPDATE touch
+    mockSearchChunks.mockResolvedValue([])
+
+    const req: any = { user: { id: 'u1', role: 'admin' }, body: { question: 'q', sessionId: 'sess-nf', documentId: 'missing-doc' }, on: vi.fn() }
+    const res = fakeSseRes()
+
+    await getHandler('/', 'post')(req, res, () => {})
+
+    expect(mockSearchChunks).toHaveBeenCalled()
+  })
+
   it('does not attempt Full Context Mode when no documentId is given', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ id: 'sess-12' }] } as any)
@@ -429,6 +678,14 @@ describe('GET /api/chat/sessions', () => {
       ['u1', 'proj-1']
     )
   })
+
+  it('responds 500 on a query failure', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('db down'))
+    const req: any = { user: { id: 'u1' }, query: {} }
+    const res = fakeJsonRes()
+    await getHandler('/sessions', 'get')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(500)
+  })
 })
 
 describe('GET /api/chat/sessions/:id/messages', () => {
@@ -456,6 +713,14 @@ describe('GET /api/chat/sessions/:id/messages', () => {
     await getHandler('/sessions/:id/messages', 'get')(req, res, () => {})
 
     expect(res.json).toHaveBeenCalledWith({ data: [{ id: 'm1', role: 'user', content: 'hi' }] })
+  })
+
+  it('responds 500 on a query failure', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('db down'))
+    const req: any = { user: { id: 'u1' }, params: { id: 'sess-1' } }
+    const res = fakeJsonRes()
+    await getHandler('/sessions/:id/messages', 'get')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(500)
   })
 })
 
@@ -486,5 +751,13 @@ describe('DELETE /api/chat/sessions/:id', () => {
     await getHandler('/sessions/:id', 'delete')(req, res, () => {})
 
     expect(res.status).toHaveBeenCalledWith(404)
+  })
+
+  it('responds 500 on a query failure', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('db down'))
+    const req: any = { user: { id: 'u1' }, params: { id: 'sess-1' } }
+    const res = fakeJsonRes()
+    await getHandler('/sessions/:id', 'delete')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(500)
   })
 })

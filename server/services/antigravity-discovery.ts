@@ -1,6 +1,7 @@
 import { promises as fs, type Dirent } from 'node:fs'
 import path from 'node:path'
 import matter from 'gray-matter'
+import { frontmatterString } from '../lib/frontmatter.js'
 
 export interface Phase {
   name: string
@@ -41,7 +42,7 @@ function parseTasksMd(content: string): { name: string | null; lastUpdated: stri
   try {
     const { data, content: body } = matter(content)
     name = data.project ? String(data.project) : null
-    lastUpdated = data.last_updated ? String(data.last_updated) : null
+    lastUpdated = frontmatterString(data.last_updated) ?? null
 
     let current: { name: string; total: number; done: number } | null = null
 

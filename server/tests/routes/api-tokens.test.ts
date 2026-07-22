@@ -97,4 +97,57 @@ describe('API Tokens Route', () => {
 
     expect(res.json).toHaveBeenCalledWith({ data: { deleted: 'tok-2' } })
   })
+
+  it('GET / — responds 500 on a query failure', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('db down'))
+    const req = { user: { id: 'user-1', username: 'alice', role: 'member' } } as any
+    const res = mockRes()
+    await getHandler('get', '/')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(500)
+  })
+
+  it('POST / — rejects dev-mode/legacy sessions (no real user row)', async () => {
+    const req = { user: { id: 'legacy', username: 'legacy', role: 'admin' }, body: { name: 'x' } } as any
+    const res = mockRes()
+    await getHandler('post', '/')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(mockQuery).not.toHaveBeenCalled()
+  })
+
+  it('POST / — computes expires_at from expiresInDays when given', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ id: 'tok-3', name: 'expiring', token_prefix: 'dbrn_abcd', expires_at: expect.any(Date), created_at: '2026-07-22' }],
+    } as any)
+
+    const req = { user: { id: 'user-1', username: 'alice', role: 'member' }, body: { name: 'expiring', expiresInDays: 30 } } as any
+    const res = mockRes()
+    await getHandler('post', '/')(req, res, () => {})
+
+    const insertArgs = mockQuery.mock.calls[0][1] as unknown[]
+    expect(insertArgs[4]).toBeInstanceOf(Date)
+  })
+
+  it('POST / — responds 500 on a query failure', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('db down'))
+    const req = { user: { id: 'user-1', username: 'alice', role: 'member' }, body: { name: 'x' } } as any
+    const res = mockRes()
+    await getHandler('post', '/')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(500)
+  })
+
+  it('DELETE /:id — rejects dev-mode/legacy sessions (no real user row)', async () => {
+    const req = { user: { id: 'dev', username: 'dev', role: 'admin' }, params: { id: 'tok-1' } } as any
+    const res = mockRes()
+    await getHandler('delete', '/:id')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(mockQuery).not.toHaveBeenCalled()
+  })
+
+  it('DELETE /:id — responds 500 on a query failure', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('db down'))
+    const req = { user: { id: 'user-1', username: 'alice', role: 'member' }, params: { id: 'tok-2' } } as any
+    const res = mockRes()
+    await getHandler('delete', '/:id')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(500)
+  })
 })

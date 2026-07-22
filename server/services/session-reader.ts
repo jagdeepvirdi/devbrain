@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { promises as fs } from 'node:fs'
 import matter from 'gray-matter'
+import { frontmatterString } from '../lib/frontmatter.js'
 
 export interface SessionSummary {
   sessionId:     string
@@ -98,7 +99,7 @@ export async function readSessions(fsPath: string): Promise<SessionSummary[]> {
       const folderName  = entry
       const date        = dateFromFolder(folderName)
       const sessionId   = data.session_id ? String(data.session_id) : folderName
-      const started     = data.started    ? String(data.started)    : date
+      const started     = frontmatterString(data.started) ?? date
       const status: SessionSummary['status'] =
         data.status === 'completed' ? 'completed' : 'active'
 
@@ -159,7 +160,7 @@ export async function readSessionDetail(
       if (sid !== sessionId && folderName !== sessionId) continue
 
       const date    = dateFromFolder(folderName)
-      const started = data.started ? String(data.started) : date
+      const started = frontmatterString(data.started) ?? date
       const status: SessionSummary['status'] =
         data.status === 'completed' ? 'completed' : 'active'
 

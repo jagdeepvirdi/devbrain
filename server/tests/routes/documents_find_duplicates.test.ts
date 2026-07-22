@@ -155,4 +155,12 @@ describe('POST /api/documents/find-duplicates', () => {
     const { data } = res.json.mock.calls[0][0]
     expect(data.map((d: any) => d.score)).toEqual([0.75, 0.5, 0.5])
   })
+
+  it('responds 500 on a failure', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('db down'))
+    const req: any = { body: { projectId: null } }
+    const res = fakeRes()
+    await getHandler('/find-duplicates')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(500)
+  })
 })

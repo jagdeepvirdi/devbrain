@@ -31,6 +31,7 @@ client/test-results/
 
 # Coverage reports
 server/coverage/
+client/coverage/
 
 # OS
 .DS_Store

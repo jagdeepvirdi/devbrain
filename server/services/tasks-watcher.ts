@@ -4,6 +4,7 @@ import path from 'node:path'
 import { promises as fs } from 'node:fs'
 import type { Response } from 'express'
 import { pool } from '../db/pool.js'
+import { frontmatterString } from '../lib/frontmatter.js'
 
 export interface TaskItem {
   text: string
@@ -39,7 +40,7 @@ function parseTasksFile(content: string, projectId: string): TaskTree {
 
   try {
     const { data, content: body } = matter(content)
-    lastUpdated = data.last_updated ? String(data.last_updated) : null
+    lastUpdated = frontmatterString(data.last_updated) ?? null
 
     let current: { name: string; items: TaskItem[] } | null = null
 

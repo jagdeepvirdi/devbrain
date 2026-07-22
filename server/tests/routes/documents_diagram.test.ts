@@ -122,4 +122,46 @@ describe('POST /api/documents/:id/diagram', () => {
 
     expect(res.json).toHaveBeenCalledWith({ data: { diagram: 'flowchart TD\n  A --> B' } })
   })
+
+  it('falls back to a generic "code" label when language is unknown', async () => {
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [{ title: 'mystery.xyz', content: 'garbled', file_type: 'code', language: null, content_hash: 'h5' }],
+      } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+
+    mockAiChat.mockResolvedValue('flowchart TD\n  A["?"]')
+
+    const req: any = { params: { id: 'doc-5' } }
+    const res = fakeRes()
+
+    await getHandler('/:id/diagram', 'post')(req, res, () => {})
+
+    expect(mockAiChat.mock.calls[0][0]).toContain('```code')
+  })
+
+  it('notes truncation in the prompt when content exceeds the source-char cap', async () => {
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [{ title: 'big.ts', content: 'x'.repeat(12001), file_type: 'code', language: 'typescript', content_hash: 'h6' }],
+      } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+
+    mockAiChat.mockResolvedValue('flowchart TD\n  A["big"]')
+
+    const req: any = { params: { id: 'doc-6' } }
+    const res = fakeRes()
+
+    await getHandler('/:id/diagram', 'post')(req, res, () => {})
+
+    expect(mockAiChat.mock.calls[0][0]).toContain('File was truncated for length')
+  })
+
+  it('responds 500 on a failure', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('db down'))
+    const req: any = { params: { id: 'doc-1' } }
+    const res = fakeRes()
+    await getHandler('/:id/diagram', 'post')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(500)
+  })
 })

@@ -129,4 +129,38 @@ describe('POST /api/documents/component-overview', () => {
     expect(res.status).toHaveBeenCalledWith(200)
     expect(res.json).toHaveBeenCalledWith({ data: expect.objectContaining({ created: false }) })
   })
+
+  it('creates a new overview with a null projectId and a file with no language', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'doc-1', title: 'a', language: null, content: 'plain text content' }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any) // no existing overview
+      .mockResolvedValueOnce({ rows: [{ id: 'overview-doc' }] } as any) // INSERT
+      .mockResolvedValueOnce({ rows: [] } as any) // embedding_status = done
+      .mockResolvedValueOnce({ rows: [{ id: 'overview-doc' }] } as any) // final select
+
+    mockOutline.mockResolvedValue(null)
+    mockAiChat.mockResolvedValue('Overview text.')
+    mockEmbed.mockResolvedValue(1)
+
+    const req: any = { body: { component: 'Misc', projectId: null } }
+    const res = fakeRes()
+    await getHandler('/component-overview', 'post')(req, res, () => {})
+
+    const prompt = mockAiChat.mock.calls[0][0]
+    expect(prompt).toContain('### a\n') // no "(language)" suffix when language is null
+
+    const existingLookupCall = mockQuery.mock.calls[1]
+    expect(existingLookupCall[1]).toEqual(['Misc'])
+
+    const insertCall = mockQuery.mock.calls[2]
+    expect(insertCall[1]).toEqual([null, 'Misc — Component Overview', 'Overview text.', ['component-overview'], 'Misc', expect.any(String), expect.any(String), 'Misc'])
+  })
+
+  it('responds 500 on a failure', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('db down'))
+    const req: any = { body: { component: 'SAP', projectId: null } }
+    const res = fakeRes()
+    await getHandler('/component-overview', 'post')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(500)
+  })
 })

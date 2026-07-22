@@ -148,6 +148,14 @@ describe('GET /api/documents/components — distinct values for autocomplete', (
     )
     expect(res.json).toHaveBeenCalledWith({ data: ['SAP'] })
   })
+
+  it('responds 500 on a query failure', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('db down'))
+    const req: any = { query: {} }
+    const res = fakeRes()
+    await getHandler('/components', 'get')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(500)
+  })
 })
 
 describe('PATCH /api/documents/:id — component is an updatable field', () => {

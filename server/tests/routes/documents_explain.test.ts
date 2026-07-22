@@ -153,4 +153,26 @@ describe('POST /api/documents/:id/explain', () => {
     expect(systemPrompt).toContain('Parameters & Inputs')
     expect(systemPrompt).toContain('Output')
   })
+
+  it('notes truncation in the prompt when content exceeds the source-char cap', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ title: 'big.ts', content: 'x'.repeat(12001), file_type: 'code', language: 'typescript', content_hash: 'h6' }],
+    } as any)
+    mockAiChat.mockResolvedValue('Explanation of a big file.')
+
+    const req: any = { params: { id: 'doc-6' } }
+    const res = fakeRes()
+
+    await getHandler('/:id/explain', 'post')(req, res, () => {})
+
+    expect(mockAiChat.mock.calls[0][0]).toContain('Source was truncated for length')
+  })
+
+  it('responds 500 on a failure', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('db down'))
+    const req: any = { params: { id: 'doc-1' } }
+    const res = fakeRes()
+    await getHandler('/:id/explain', 'post')(req, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(500)
+  })
 })
