@@ -126,43 +126,225 @@ reverted "Ready to upload…" status text both matched the assertion.
 > `coverage.thresholds` floor to match once its service is covered, so the gate keeps tightening
 > instead of just holding steady.
 
-- [ ] **`server/services/backup.ts`** (87 lines, 0%) — smallest file here and directly relevant to
-      the Backup Retention item below; test `runBackup()`'s zip creation and (once retention lands)
-      its pruning logic.
-- [ ] **`server/services/exporter.ts`** (213 lines, 0%) — data export correctness is high-impact and
-      silent-failure-prone; cover each exported format/shape.
-- [ ] **`server/services/notifier.ts`** (105 lines, 0%) — Apprise/external notification dispatch;
-      cover success, subprocess failure, and malformed-JSON-output paths (the last one already got a
-      `console.error` in the Silent-catch cleanup above, but still has no test asserting it).
-- [ ] **`server/services/antigravity-discovery.ts`** (211 lines, 0%) — pure fs/parsing logic
-      (frontmatter + task phases from `TASKS.md`/session files); test against fixture directories.
-- [ ] **`server/services/claude-discovery.ts`** (211 lines, 0%) — same shape as the Antigravity
-      discovery service above; likely shares fixture/test setup with it.
-- [ ] **`server/services/session-reader.ts`** (188 lines, 0%) — session log parsing.
-- [ ] **`server/services/notifications.ts`** (134 lines, 0%) — in-app notification record CRUD.
-- [ ] **`server/services/audit.ts`** (36 lines, 0%) — audit log writer; smallest remaining, quick win
-      whenever picked up.
-- [ ] **`server/services/tasks-watcher.ts`** (185 lines, 3.37%) — `chokidar`-based file watcher with
-      debounce timers; do this last, needs fake timers/fs-event simulation to test well.
+- [x] **`server/services/backup.ts`** (resolved 2026-07-21) — 9 new tests
+      (`tests/services/backup.test.ts`) covering `triggerBackupNow()` (real temp-dir + real `archiver`
+      zip write, verifies the file lands and `last_backup_at` is recorded, plus the rejection path when
+      the archive build fails) and `startBackupScheduler()`'s internal `maybeRunBackup()` — DB-not-ready,
+      no settings row yet, `schedule: 'off'`, no path configured, still-within-threshold, and both the
+      success and failure branches of an actual scheduled run (bridged fake timers for the 30s startup
+      delay with real timers + `vi.waitFor` for the real fs/archiver I/O underneath, since that isn't
+      timer-driven). 100% line / 100% branch coverage on the file.
+      **Found a live production bug while writing these tests**: `archiver` was pinned `^8.0.0` in
+      `package.json`, and v8 is a breaking rewrite — pure ESM, no more `archiver(format, opts)` factory
+      function, replaced by format-specific classes (`ZipArchive`/`TarArchive`/`JsonArchive`). `@types/archiver`
+      is still on the old `^7.0.0` factory-function shape, so `tsc` saw nothing wrong, but at runtime both
+      `runBackup()` here and **both routes in `server/routes/export.ts`** (`/api/export/project/:id` and
+      `/api/export/all`) threw `archiver is not a function` — scheduled backups and manual exports have
+      been broken since whenever archiver was last bumped. Fixed both files: swapped the
+      `require('archiver') as typeof import('archiver')` cast for
+      `const { ZipArchive } = require('archiver') as { ZipArchive: new (options?: ArchiverOptions) => Archiver }`
+      (kept the existing `createRequire` pattern rather than switching to a native `import`, since
+      `@types/archiver` has no named exports for the real v8 shape) and `archiver('zip', opts)` →
+      `new ZipArchive(opts)` at all three call sites. `tsc --noEmit` clean on both sides, full server
+      suite 259/259, lint clean.
+- [x] **`server/services/exporter.ts`** (resolved 2026-07-21) — 11 new tests
+      (`tests/services/exporter.test.ts`) covering `addProjectToArchive()` (per-item markdown files for
+      documents/issues/commands with frontmatter round-tripped through `gray-matter`, the four collective
+      `*.md` files and their `rows.length > 0` skip-when-empty gates, and `slugify()`'s lowercase/strip/
+      truncate/`'untitled'`-fallback behavior) and `buildZipToStream()` (`'all'` vs. an explicit project-id
+      array, the `WHERE id = ANY($1)` query shape, `archive.finalize()` always called including when zero
+      projects match). Deliberately included DB rows with `null` (not `[]`/`''`) for every optional
+      jsonb/text field — `investigation_steps`, `notes`, `features`/`fixes`/`breaking_changes`, runbook
+      `steps`, document `content` — since those are exactly the `?? []` / `?? ''` / `||` fallback branches
+      that a "populated + empty-array" fixture pair alone doesn't reach. 100% statements/lines/functions,
+      98.57%→100% branches on the file. No production bug found here (unlike the `backup.ts` item above) —
+      `addProjectToArchive`/`buildZipToStream` only build strings and call `archive.append`/`finalize`,
+      never construct an `Archiver` themselves, so they were unaffected by the archiver@8 breakage. Full
+      suite 270/270, `tsc --noEmit` and lint clean.
+- [x] **`server/services/notifier.ts`** (resolved 2026-07-21) — 10 new tests
+      (`tests/services/notifier.test.ts`) covering `sendAppriseNotification()`: no enabled channels (no
+      spawn), the three-way per-project preference branch (no pref row → default-allowed, explicit
+      `enabled: true`, explicit `enabled: false`), a channel whose `decrypt()` throws (skipped, others
+      unaffected, `console.error` asserted), "every channel filtered out" (no spawn), the Python
+      subprocess's non-zero exit with and without `stderr` (fallback message), malformed JSON on stdout
+      (`console.error` + `'Invalid JSON output: ...'` asserted), the `results.sent === false` +
+      `results.error` absent edge case (body left unchanged), and `entity_type`/`entity_id`/`channel`/
+      `delivery_status` INSERT params for both the project-scoped and global cases. `child_process.spawn`
+      mocked with a hand-built `EventEmitter`-based fake child (real stdout/stderr/close events), synced
+      to the async DB-then-spawn flow via `vi.waitFor(() => expect(spawn).toHaveBeenCalled())` before
+      driving it — no fake timers needed since nothing here is timer-driven. 100% coverage on the file.
+      No production bug found. Full suite 280/280 at the time, `tsc --noEmit` and lint clean.
+- [x] **`server/services/antigravity-discovery.ts` + `server/services/claude-discovery.ts`** (resolved
+      2026-07-21) — these two files are near-duplicates (differ only in marker filename —
+      `ANTIGRAVITY.md` vs. `CLAUDE.md` — and one redundant `SKIP_DIRS` entry, `.gemini`, which the
+      dot-prefix skip rule already covers), so they got matching 14-test suites
+      (`tests/services/antigravity-discovery.test.ts`, `tests/services/claude-discovery.test.ts`) against
+      real temp-directory fixture trees (`fs.mkdtemp`, no mocking — pure fs/parsing logic per the backlog
+      note). Covered: full project (marker + `TASKS.md` phases incl. `[~]`/`[!]` markers counting toward
+      `total` but not `done`, `sessions/` date-folder selection ignoring non-date-named siblings),
+      marker-only fallback to dirname with empty phases, qualifying via `TASKS.md`'s `project:`
+      frontmatter field alone vs. not qualifying when that field is absent, qualifying via a bare
+      `sessions/<dir>/SESSION.md` with no marker/`TASKS.md`, a `sessions` entry that's a file not a
+      directory (readdir-fails catch branch), `SKIP_DIRS`/dotfolder skipping, no-recursion-into-an-
+      already-qualifying-folder, the `maxDepth = 3` boundary (found at depth 3, not at depth 4), malformed
+      `TASKS.md` frontmatter falling back gracefully, a nonexistent scan root, an already-aborted signal,
+      and `existingProjects` matching by normalized `short_name` (not just `name`). 100% lines, ~88%
+      branches (the remaining gap is `signal.aborted` mid-scan cancellation checks — real but only
+      reachable via a genuine async race with an in-flight recursive scan, not worth a flaky test to
+      force), ~93% functions on both files.
+      **Found a live production bug while writing these tests**: `parseTasksMd()`'s
+      `lastUpdated = data.last_updated ? String(data.last_updated) : null` — `gray-matter`'s YAML parser
+      auto-converts an unquoted ISO timestamp into a JS `Date` (YAML's implicit core-schema timestamp
+      type), and both integration templates (`integrations/claude-code/src/templates/TASKS.md`,
+      `integrations/antigravity/.../templates/TASKS.md`) ship exactly that unquoted format
+      (`last_updated: 2025-05-17T10:30:00`). `String(date)` on that produces a locale/timezone-dependent
+      string like `"Fri May 17 2025 10:30:00 GMT+0000 (Coordinated Universal Time)"`, not an ISO date —
+      which broke `client/src/components/projects/TasksTab.tsx:93`'s `tree.lastUpdated.slice(0, 10)` date
+      badge (rendered garbled text like "updated Fri May 17" instead of "updated 2025-05-17") for every
+      project set up via the standard template. Fixed in both discovery services: `data.last_updated
+      instanceof Date ? data.last_updated.toISOString() : String(data.last_updated)` — normalizes the
+      Date case to a real ISO string while still passing through an already-quoted string frontmatter
+      value unchanged (both branches covered by new tests). Full suite 308/308, `tsc --noEmit` and lint
+      clean on both sides.
+- [x] **`server/services/session-reader.ts`** (resolved 2026-07-21) — 15 new tests
+      (`tests/services/session-reader.test.ts`) against real temp-directory fixtures (no mocking, same
+      approach as the discovery services above) covering `readSessions()` (missing/empty `sessions/`
+      dir, a fully-populated `SESSION.md` with both `-`/`*` bullet styles and a `## Session Ended` block,
+      minimal frontmatter falling back to folder-derived values + `'active'` default + omitting `ended`,
+      newest-first sort by folder name, a non-directory entry inside `sessions/` being skipped via the
+      catch branch, a folder name with no `YYYY-MM-DD` prefix, and the `## Session Ended` parser
+      continuing past a line that doesn't match `ended:\s*(.+)` before finding the real one) and
+      `readSessionDetail()` (match by `session_id`, fallback match by folder name, no match → `null`,
+      and — deliberately structured as *only* a broken entry rather than "broken + valid sibling", since
+      the function returns on first match and a valid sibling could otherwise mask the catch branch
+      entirely depending on directory iteration order — an unreadable folder correctly falling through
+      to `null` without throwing). 100% statements/branches/functions/lines on the file.
+      **Found the same live production bug a third time**: both `readSessions()` and
+      `readSessionDetail()` had the identical `data.started ? String(data.started) : date` pattern as
+      the `claude-discovery.ts`/`antigravity-discovery.ts` item above, and the real session-start hooks
+      (`integrations/{claude-code,antigravity}/src/hooks/session-start.{sh,ps1}`) write exactly the
+      vulnerable unquoted format (`started: 2025-05-17T10:30:00Z`) into every `SESSION.md`. Extracted a
+      shared `frontmatterString()` helper (`value instanceof Date ? value.toISOString() : String(value)`)
+      and used it at both call sites instead of duplicating the ternary a third time. The observable
+      impact here is milder than the `TasksTab.tsx` case — `SessionsTab.tsx`'s `fmtTime()` re-parses the
+      value via `new Date(iso)` rather than string-slicing it, and V8 happens to round-trip its own
+      `Date.toString()` output, so the display doesn't currently show garbage — but it's still the same
+      underlying defect (relying on undocumented engine-specific string round-tripping instead of
+      actually being an ISO string), so it's fixed for the same reason. Full suite 323/323 at the time,
+      `tsc --noEmit` and lint clean.
+- [x] **`server/services/notifications.ts`** (resolved 2026-07-21) — 15 new tests
+      (`tests/services/notifications.test.ts`) covering `createNotification()` (default vs. explicit
+      channel/deliveryStatus/entity fields), `getUsersToNotify()` (always-included active admins, the
+      global-active-users branch when `projectId` is `null` vs. the `project_members` branch when it's
+      set, and de-duplication when an admin is also a project member), `scanStaleIssues()` (the
+      `stale_issues_enabled === false` early return, default vs. custom `stale_threshold_days`, creating
+      a notification for a not-yet-notified user, skipping a user already notified about the same stale
+      issue within 24h, notifying project members for a project-scoped issue, and the outer try/catch
+      logging via `console.error` without throwing), `startNotificationScheduler()` (fake-timer-advanced
+      through both the 15s initial delay and the hourly interval, confirming `scanStaleIssues` fires
+      each time), and `startDigestScheduler()` (`spawn` called with the right args/`stdio: 'inherit'`,
+      plus its `'error'`/`'close'` handlers, using the same `EventEmitter`-based fake-child pattern as
+      `notifier.test.ts`). 100% lines/branches, 95.12% statements, 83.33% functions — the gap is the
+      `.catch(err => console.error(...))` wrapping each `scanStaleIssues()` call in the scheduler, which
+      by construction never actually rejects (its own internal try/catch swallows everything first), so
+      forcing that branch would need a fragile test rather than a meaningful one. No production bug
+      found. Full suite 338/338 at the time, `tsc --noEmit` and lint clean.
+- [x] **`server/services/audit.ts`** (resolved 2026-07-21) — 3 new tests
+      (`tests/services/audit.test.ts`): a full `logAudit()` call with metadata serialized to JSON, every
+      optional field (`userId`/`username`/`entityName`/`metadata`) nullified when omitted, and DB errors
+      swallowed without throwing (audit failures are explicitly non-fatal). 100% coverage on the file. No
+      production bug found. Full suite 341/341, `tsc --noEmit` and lint clean.
+- [x] **`server/services/tasks-watcher.ts`** (resolved 2026-07-21) — 16 new tests
+      (`tests/services/tasks-watcher.test.ts`) split into `readTaskTree()`/`parseTasksFile()` against real
+      temp-directory `TASKS.md` fixtures (missing file, full frontmatter + all four checkbox statuses
+      `[x]`/`[ ]`/`[~]`/`[!]` + a `<!-- done: YYYY-MM-DD -->` stamp, malformed frontmatter falling back
+      gracefully, a phase with zero items not dividing by zero, a checklist-shaped line appearing before
+      any `## ` heading being ignored, and a body with no headings at all) and the `chokidar`-backed
+      watcher lifecycle (`subscribe`/`refreshProjectWatch`/`initTasksWatcher`) with `chokidar` and the DB
+      pool mocked — a hand-built `EventEmitter`-based fake `FSWatcher` (`.on`/`.close()`), covering the
+      300ms debounce (not-yet-fired at 299ms, fires at 300ms), coalescing rapid changes into one
+      broadcast, no broadcast after unsubscribe, a subscriber whose `res.write()` throws being dropped
+      from the set without affecting others, `refreshProjectWatch` closing the previous watcher and
+      clearing its pending debounce timer before starting a new one, `fsPath: null` closing without
+      restarting, and `initTasksWatcher`'s DB-driven startup (N projects → N watchers + a count log, 0
+      projects, and a query failure logged via `console.error` without throwing).
+      **Debounce callback awaits real `fs.readFile`, which fake timers don't drive** (same shape as the
+      `backup.ts` item's scheduler test) — advancing past the 300ms mark only *starts* the callback; the
+      broadcast lands asynchronously afterward. Fixed by switching to real timers + `vi.waitFor()`
+      immediately after the fake-timer advance that crosses the debounce threshold, same bridge pattern
+      as `backup.test.ts`. 100% statements/branches/functions/lines on the file.
+      **Found the same `lastUpdated` bug a 4th time, and extracted a shared fix**: `parseTasksFile()` had
+      the identical `data.last_updated ? String(data.last_updated) : null`, and — unlike the discovery
+      services, which only feed the *scan* view — `readTaskTree()` backs the *live* per-project view:
+      `GET /api/claude-projects/:id/tasks` and `GET /api/antigravity-projects/:id/tasks`
+      (`routes/{claude,antigravity}-projects.ts`) both call it directly, and both feed the exact same
+      `TasksTab.tsx:93` `.slice(0, 10)` display already fixed for the discovery-scan path — so the live
+      per-project tab was still showing the garbled date even after that earlier fix. At four independent
+      copies of the same one-liner (`claude-discovery.ts`, `antigravity-discovery.ts`, `session-reader.ts`,
+      now this file), duplicating a fifth guard stopped making sense — extracted `frontmatterString()` into
+      new `server/lib/frontmatter.ts` (4 new tests, `tests/lib/frontmatter.test.ts`, 100% coverage) and
+      switched all four call sites to import it instead of inlining or locally duplicating the check
+      (`session-reader.ts`'s own local copy of the same helper removed in favor of the shared one).
+      Full suite 361/361, `tsc --noEmit` and lint clean on both sides.
+
+**All 9 zero-coverage services from the 2026-07-20 baseline are now covered.** Server coverage overall:
+Statements 83.65% / Branches 78.62% / Functions 84.97% / Lines 87.36% (baseline was 39.61/30.12/36.45/41.14%).
 
 ## Partially-Covered Service Tests (found via 2026-07-20 coverage baseline)
 
 > Same baseline, the tier above 0% — these have *some* tests but leave large gaps. Deepening these
 > should also raise `coverage.thresholds` once done.
 
-- [ ] **`server/services/links.ts`** (12 stmts, 16.66%/0% branch) — effectively untested despite the
-      nonzero number; smallest file here, quick to bring close to 100%.
-- [ ] **`server/services/ai.ts`** (103 stmts, 37.86%/29.16% branch) — the unified AI client
-      (`services/ai.ts` per CLAUDE.md); low coverage on a file every AI call in the app routes through
-      is disproportionately risky. Cover the Ollama/Claude/Gemini provider-switch branches and the
-      streaming paths specifically, not just one happy path.
-- [ ] **`server/services/integrations.ts`** (79 stmts, 46.83%/29.23% branch) — GitHub/Linear/Jira sync;
-      cover the per-provider response-parsing branches (`GithubIssue`/`JiraSearchResponse`/
-      `LinearResponse`), which is exactly the code that had its `any` types removed in the lint-cleanup
-      pass — real types now, but still branch-thin on error/edge responses.
-- [ ] **`server/services/parser.ts`** (95 stmts, 64.21%/70.37% branch) — already the best-covered file
-      in this list; round out the remaining format-specific branches (PDF/DOCX/XLSX parse-failure
-      fallbacks) rather than a full rewrite.
+- [x] **`server/services/links.ts`** (resolved 2026-07-21) — 10 new tests (`tests/services/links.test.ts`):
+      `resolveEntities()` (empty-`ids` short-circuit without a query, the `issue`/`release` table+column
+      maps, a `null` subtitle passed through), `entityExists()` (row present/absent), and
+      `deleteLinksFor()` (the `a_type`/`b_type` OR-clause DELETE). 100% coverage on the file.
+- [x] **`server/services/ai.ts`** (resolved 2026-07-21) — extended the existing `tests/services/ai.test.ts`
+      (Ollama-only before) with full Claude and Gemini coverage for both `aiChat()` and `aiChatStream()`:
+      request shape (system prompt separated for Claude, `system_instruction` + role remap — `assistant`
+      → `model` — for Gemini), non-ok responses throwing with the provider-specific error message, SSE
+      parsing for both providers (`content_block_delta` events for Claude, `candidates[].content.parts[]`
+      for Gemini) including a malformed-JSON line and a well-formed-but-textless event both being skipped
+      rather than throwing, and Gemini's `system_instruction` being omitted entirely when no system
+      message is present. Also added the one missing Ollama-path case: a malformed NDJSON stream line
+      being skipped instead of aborting the rest of the stream. Provider switching is driven by mutating
+      the shared mocked `env.AI_PROVIDER` between describe blocks (reset to `'ollama'` in each `afterEach`)
+      rather than a second mock setup, since `ai.ts` reads `env.AI_PROVIDER` live on every call rather
+      than caching it at import time. 100% coverage on the file (up from 37.86%/29.16% branch).
+- [x] **`server/services/integrations.ts`** (resolved 2026-07-21) — extended `integrations.test.ts` with
+      `syncJira()` entirely (previously untested): the Basic-auth header construction, `mapJiraStatus`/
+      `mapJiraPriority`'s branches (`Done`→resolved, `In Review`→investigating, else→open;
+      `Blocker`→critical, `Major`→high, `Minor`→low, absent→medium), the
+      `description?.content?.[0]?.content?.[0]?.text || ''` optional-chain fallback, the ON CONFLICT
+      rowCount 0 → skipped branch, and `integration.config ?? {}` when no config is set. Also rounded out
+      `syncGitHub` (existing/rowCount-0 → skipped, no-token → no `Authorization` header, non-ok throws)
+      and `syncLinear` (the remaining `mapLinearPriority`/`mapLinearStatus` branches, a GraphQL
+      `errors[]` response throwing with the API's own message, non-ok throws). One test-authoring bug
+      caught and fixed before it shipped: a fixture used Jira priority `"Trivial"`, which doesn't contain
+      either `"low"` or `"minor"` and would actually map to `medium`, not `low` — corrected to `"Minor"`.
+      100% coverage on the file (up from 46.83%/29.23% branch).
+- [x] **`server/services/parser.ts`** (resolved 2026-07-21) — extended `parser.test.ts` with the
+      previously-untested `.pdf`/`.docx` paths on both sides (MarkItDown-success and the
+      MarkItDown-unavailable native fallback via `pdf-parse`/`mammoth`, both mocked the same way the
+      existing `.doc`/word-extractor test already does — a real PDF/DOCX binary fixture isn't worth
+      constructing for a unit test), `.xlsx`'s native fallback via a **real** workbook built and written
+      with the `xlsx` package itself (unmocked — round-tripping the library's own writer/reader avoided
+      having to hand-mock its sheet/CSV API surface) asserting the `## Sheet: <name>` + CSV-per-sheet
+      output across two sheets, a `.pptx` MarkItDown-unavailable case hitting the "PPTX requires
+      MarkItDown" throw (the existing pptx test only exercised the MarkItDown-success path),
+      `renderCellOutput`'s `error`-type rendering and its final `''` fallback for an unrecognized output
+      type with no `text/plain` data, `joinSource`'s plain-string (non-array) and empty/undefined
+      branches, a notebook JSON with no `cells` field at all, and `parseUrl`/`fetchUrl` (success trims
+      the fetched text and derives the title from the URL's hostname; a non-ok Jina response throws with
+      status + statusText). 100% statements/lines/functions, 98.14% branches — the one remaining branch
+      (the ternary's `ext === 'md'` arm inside the MarkItDown-success `else` block) is genuine dead code:
+      `.md` is never in `markItDownSupported`, so that branch of `text !== null` can't be reached by any
+      input, not a real gap. Up from 64.21%/70.37% branch.
+
+**All four Partially-Covered services are now at or effectively at 100%.** `lib/**+services/**` overall:
+Statements 96.29% / Branches 92.26% / Functions 95.85% / Lines 99.01% (was 83.65/78.62/84.97/87.36% after
+the Zero-Coverage pass above, and 39.61/30.12/36.45/41.14% at the original 2026-07-20 baseline). Full
+server suite 401/401, `tsc --noEmit` and lint clean.
 
 ## Untested Route Handlers (found via 2026-07-20 audit — routes/** not yet in the coverage gate)
 
@@ -173,37 +355,366 @@ reverted "Ready to upload…" status text both matched the assertion.
 > `projects.ts`, `search.ts`, `tasks.ts`, `templates.ts`, `api-tokens.ts`, `audit.ts`, `auth.ts`). These
 > 11 have none. Ordered smallest first.
 
-- [ ] **`server/routes/export.ts`** (54 lines) — smallest untested route, quick win.
-- [ ] **`server/routes/aitask.ts`** (95 lines) — the `AiTask.tsx` backend counterpart (see the
-      `useExample`→`applyExample` rename in the lint-cleanup section — that bug lived one layer up from
-      this route, in the component calling it).
-- [ ] **`server/routes/integrations.ts`** (117 lines) — route layer on top of `services/integrations.ts`
-      above; consider pairing with that item since they'll likely share fixtures/mocks.
-- [ ] **`server/routes/runbooks.ts`** (162 lines)
-- [ ] **`server/routes/antigravity-projects.ts`** (165 lines) — pairs naturally with the
-      `antigravity-discovery.ts` service item above (same feature, different layer).
-- [ ] **`server/routes/claude-projects.ts`** (166 lines) — same as above, paired with
-      `claude-discovery.ts`.
-- [ ] **`server/routes/users.ts`** (222 lines) — RBAC/user management; higher-stakes than most on this
-      list (auth-adjacent), worth prioritizing above its line count would otherwise suggest.
-- [ ] **`server/routes/dashboard.ts`** (255 lines)
-- [ ] **`server/routes/commands.ts`** (268 lines)
-- [ ] **`server/routes/releases.ts`** (405 lines)
-- [ ] **`server/routes/settings.ts`** (672 lines, largest untested route) — do this last; also the route
-      behind LDAP config, Apprise channels, and the Antigravity scan-root setting, so high complexity to
-      match its size.
+> **All 11 resolved 2026-07-21** — 304 new tests across 11 new `tests/routes/*.test.ts` files, all at or
+> effectively at 100% coverage in isolation (`--coverage.include='routes/<file>.ts'`). Every handler test
+> calls the route function directly off the Express router's own `stack` (bypassing `requireRole`/
+> `multer` middleware and real HTTP entirely — middleware sits earlier in the same route's stack, the
+> handler under test is always `stack[stack.length - 1].handle`), so no supertest/real-server harness was
+> needed anywhere in this batch.
+>
+> **One real cross-cutting bug in the *test* suite, not the app, worth flagging for future route test
+> work**: `vi.clearAllMocks()` clears call history but does **not** clear queued
+> `mockResolvedValueOnce`/`mockRejectedValueOnce` values. `users.test.ts` initially had a test whose
+> request body failed Zod validation before ever reaching `pool.query`, so that test's queued rejection
+> went unconsumed and silently leaked into (and desynced) every subsequent test in the file. Fixed the
+> immediate bug and switched that file (and `commands.test.ts`, `settings.test.ts`) to
+> `vi.resetAllMocks()` in `beforeEach`, which also clears the once-queue — the safer default whenever a
+> route under test has an early-return path that a test might trigger by accident.
+>
+> **Found and fixed one production bug in the process**: see `export.ts`'s changelog entry below — the
+> same `archiver@8` breakage originally caught in `services/backup.ts` extended to this route's two
+> endpoints too, and was still unfixed here.
 
-## Bring `routes/**` Into the Coverage Gate
+- [x] **`server/routes/export.ts`** — 5 tests (`export.test.ts`), reusing the real-archiver-plus-real-
+      `Writable`-sink pattern from `services/backup.test.ts` (a plain `status`/`json` stub can't stand in
+      for `res` here since `archive.pipe(res)` needs a real stream). **Found the same `archiver@8`
+      breakage as the `backup.ts` item further up this file, in a route that hadn't been touched by that
+      fix**: `/api/export/project/:id` and `/api/export/all` both still called the old
+      `archiver('zip', opts)` factory function, so both were throwing `archiver is not a function` at
+      runtime despite `tsc` being clean (same root cause — `@types/archiver` is pinned to the pre-v8
+      factory-function shape). Fixed both call sites the same way as `backup.ts`: swapped to
+      `new ZipArchive(opts)` via the same `createRequire` cast. 87.5%/100%/50%/100% — the gap is
+      `archive.on('error', ...)`'s callback, never forced into a real archiver error state.
+- [x] **`server/routes/aitask.ts`** — 14 tests (`aitask.test.ts`): validation, the non-streaming and SSE
+      streaming paths (`aiChatStream`'s `onChunk` callback, the `[DONE]` sentinel, an error mid-stream
+      still ending the response), and the fire-and-forget `handleAiTaskDoneNotification()` (default vs.
+      `ai_task_alerts_enabled: false`, task truncated to 60 chars in the notification body, a notification
+      failure logged via `console.error` without affecting the already-sent response) — awaited via
+      `vi.waitFor()` since it's never awaited by the route itself. 100% lines/branches/statements, 60%
+      functions (the two empty `.catch(() => {})` arrows guarding that same structurally-never-rejects
+      promise, same shape as the `notifications.ts` service item above).
+- [x] **`server/routes/integrations.ts`** — 18 tests (`integrations.test.ts`): config CRUD, token
+      encryption on create (and `COALESCE`-preserving the existing one when a create/update omits a new
+      token), and `/:id/sync`'s provider dispatch (github/jira/linear/unrecognized-provider-defaults-to-
+      zero), token decryption only when `token_enc` is set, the sync-complete notification's default-on
+      and `sync_alerts_enabled: false` branches, a notification-lookup failure logged without breaking the
+      response, and `last_synced_at` only being updated on sync success (not after a thrown sync error).
+      100% coverage on the file.
+- [x] **`server/routes/runbooks.ts`** — 25 tests (`runbooks.test.ts`): full CRUD plus `GET /` 's WHERE-
+      clause construction (`projectId=global` vs. a specific id vs. `search`, and their combined `$1`/`$2`
+      placement), `PUT /:id`'s dynamic `SET` clause (including the `steps` column's `::jsonb` cast +
+      `JSON.stringify`), and `POST /:id/use`. 100% coverage on the file.
+- [x] **`server/routes/antigravity-projects.ts`** + **`server/routes/claude-projects.ts`** — 28 tests
+      each (near-duplicate files, matching suites, same pairing rationale as the discovery-service item
+      above): `/scan` (no scan root configured, a successful scan, **a second scan request aborting the
+      first's `AbortController`** — verified by capturing the signal passed into the mocked
+      `discoverProjects()` and asserting `.aborted` after the second request starts, then resolving the
+      first to avoid leaving it hanging — and a scan failure), `/:id/tasks`, the SSE `/:id/tasks/watch`
+      endpoint (headers + initial payload + `subscribe()`/`unsubscribe()` on `req`'s `'close'` event, the
+      5-minute idle-timeout `setTimeout` via fake timers, and the `!res.headersSent` guard on the error
+      path — simulated by having `flushHeaders()` flip `headersSent` before the failure), and
+      `/:id/sessions` + `/:id/sessions/:sessionId` (status/search filtering across all five searchable
+      fields, pagination clamped to a max `limit` of 50). 100% coverage on both files.
+- [x] **`server/routes/users.ts`** — 31 tests (`users.test.ts`): user CRUD with `bcryptjs` mocked
+      (`hash`/`compare` needed an explicit `Mock<(...) => Promise<...>>` cast — `vi.mocked()` picked the
+      wrong overload off bcryptjs's ambiguous callback-vs-promise signatures and inferred a `void` return),
+      the self-service-vs-admin-reset-another-user's-password branch (own password needs no
+      `adminPassword`; someone else's needs it, verified via `bcrypt.compare` against the admin's own
+      stored hash, with distinct 403s for "missing", "admin has no hash on file", and "wrong password"),
+      `logAudit()` called with the right actor/entity/action on create/update/delete, "cannot delete
+      yourself", and the invite flow (token hashed with real `node:crypto` for storage while the raw token
+      is returned once, `created_by` nulled for the built-in `dev` user). 100% coverage on the file. This
+      is also the file where the `resetAllMocks()` test-suite bug above was first caught.
+- [x] **`server/routes/dashboard.ts`** — 10 tests (`dashboard.test.ts`) covering all three endpoints'
+      `Promise.all`-parallel query fan-out with a single SQL-substring-dispatching mock (same pattern as
+      `exporter.test.ts`'s `mockTableQueries`, needed because a shared `pool.query` mock can't otherwise
+      tell six simultaneous calls apart): the project-filter branch skipping the projects-listing query
+      entirely (`Promise.resolve({rows:[]})` instead of a real query when a project is selected — verified
+      via call count, 6 vs. 5), and `/stats`'s default-when-no-rows fallbacks for `embeddingHealth` and
+      `commandsThisWeek`. 100% coverage on the file, including 45/45 branches on `GET /`'s query-building.
+- [x] **`server/routes/commands.ts`** — 38 tests (`commands.test.ts`): `GET /`'s namespace logic (
+      `personal`/`team`/default-team-plus-own, each both with and without a "real" user — `legacy`/`dev`/
+      absent all skip the `created_by` filter the same way), `PATCH /bulk`'s transaction (tag/favorite/
+      delete actions, `BEGIN`/`COMMIT`/`ROLLBACK` via a hand-built fake `pool.connect()` client, and
+      `client.release()` always firing including on failure), and the fire-and-forget
+      `embedCommandAsync()` on create/update (awaited via `vi.waitFor()`, same reasoning as `aitask.ts`
+      above). 100% statements/lines, 98.55% branch/92.3% functions — the gaps are the exhaustively-
+      validated `action === 'delete'` `else if`'s unreachable false arm (action is pre-validated to one of
+      three literals before reaching it) and `embedCommandAsync`'s empty `.catch(() => {})`.
+- [x] **`server/routes/releases.ts`** — 46 tests (`releases.test.ts`), the most AI-endpoint-heavy route
+      tested this session: `/ai-generate`, `/compare` (including `releaseContext()`'s notes/features/
+      fixes/breaking-changes presence-or-absence formatting for both releases being compared), `/:id/qa`,
+      `/import-git` (default-to-today date, `ai.* ?? []/''` fallbacks when the AI response omits fields,
+      the `pgErr.code === '23505'` duplicate-version 409), `/draft` (explicit `issueIds` vs. project/date-
+      range issue lookup, the issue-list-with-and-without-a-resolution formatting, 422 when no resolved
+      issues are found), and standard CRUD. Every AI-JSON-extraction route shares the same
+      `raw.match(/\{[\s\S]*\}/)` regex, tested via a markdown-fenced response to prove it extracts the
+      object regardless of surrounding fence text. 100% coverage on the file.
+- [x] **`server/routes/settings.ts`** (672 lines, largest route in the app) — 61 tests
+      (`settings.test.ts`), by far the largest single test file written this session, covering all 18
+      routes: LDAP (config CRUD with the bind password encrypted at rest and `hasPassword` derived from
+      its presence, `/ldap/test` falling back to stored-and-decrypted settings vs. a request override,
+      401 on bad LDAP creds), the AI/auth summary at `GET /` (provider-branched `chatModel`, driven by
+      mutating the shared mocked `env` object's `AI_PROVIDER`/`AUTH_PASSWORD` between tests the same way
+      `ai.test.ts` does), `claude`/`antigravity`/`notifications`/`digest` scan-root and rules CRUD,
+      `GET /backup` (JSON export across 7 parallel queries, with the `tasks` table's own
+      `.catch(() => ({rows:[]}))` fallback distinct from the outer 500 path), `POST /import` (dry-run
+      tallying via `countExisting()` — including the zero-query short-circuit when a table has no ids at
+      all — vs. a real transactional import via a faked `pool.connect()` client, `ON CONFLICT`
+      rowCount-0-means-skipped), `backup-config`/`backup-now` (merging into existing extra fields on
+      partial update, `triggerBackupNow()` only called once a path is configured), and `POST /zip-import`
+      — the most involved single endpoint tested this session: built **real** `.zip` fixtures with the
+      `adm-zip` package itself (unmocked, same "round-trip the library's own writer/reader" reasoning as
+      `parser.ts`'s xlsx test) containing real frontmatter+body `.md` entries, covering the dry-run vs.
+      real-transaction split, duplicate-title skip detection, command-text extraction from a code fence,
+      silently-skipped malformed-frontmatter entries, and every one of the "not actually a document" scan
+      exclusions (wrong extension, unrecognized `entityDir`, unknown project slug, too few path segments,
+      directory entries). 99.29% statements, 90.19% branches, 100% functions/lines — the remaining branch
+      gaps are exhaustively the same shape: per-row `?? default` fallbacks on optional bulk-import fields
+      (project description/color/status/etc.) where only the "field present" side was exercised, a
+      pattern already validated correct dozens of times elsewhere this session — diminishing returns to
+      chase further on an already 100%-lines file.
 
-- [ ] Add `routes/**` to `coverage.include` in `server/vitest.config.ts` and re-baseline
-      `coverage.thresholds` from a fresh run. **Sequencing note**: do this *after* picking off at least
-      some of the Untested Route Handlers above (or expect thresholds to need lowering immediately) —
-      routes/** is a much larger surface (25 files, several 200-600+ lines) than `lib/**+services/**`
-      combined, so adding it to `include` before writing those tests would sharply drop the measured
-      percentage even though nothing regressed; it would just make previously-invisible gaps visible.
-      Once included, the CI Coverage Gating item above should be revisited too: the 37/28/34/39%
-      thresholds were calibrated against `lib/**+services/**` only and will no longer reflect reality
-      once the denominator changes.
+**All 11 previously-untested route handlers are now covered.** Full server suite 705/705, `tsc --noEmit`
+and lint clean (0 errors; only pre-existing `no-non-null-assertion` warnings, none introduced this
+session). Isolated per-file coverage for all 11 is at or effectively at 100%; the other 14 route files
+(which already had *some* test coverage before this session, e.g. `documents.ts`, `issues.ts`, `auth.ts`)
+were out of scope here and still have real gaps — see the item below.
+
+## Deepen Partially-Tested Route Handlers (found via 2026-07-21 `routes/**` coverage check)
+
+> Byproduct of finishing the Untested Route Handlers item above: running coverage with
+> `--coverage.include='routes/**'` (ad hoc — `routes/**` still isn't in the real `coverage.include`, see
+> the item below) to sanity-check those 11 files also revealed exactly how thin the *other* 14 route
+> files' existing tests are. These files aren't untested — each has a `tests/routes/*.test.ts` — but the
+> tests only cover a fraction of each file. Ordered by measured statement coverage, lowest (most
+> concerning) first. Each item should raise `server/vitest.config.ts`'s `coverage.thresholds` floor to
+> match once `routes/**` is actually in the gate (see the item below) and its file is deepened.
+
+- [x] **`server/routes/issues.ts`** (resolved 2026-07-22) — 80 tests (`tests/routes/issues.test.ts`)
+      covering every handler: `GET /` 's full filter-building matrix (project id/`global`-combining,
+      status/priority/tags array params, the non-array-non-string-to-single-item-array coercion, date
+      range, the shared `q`/`search` full-text+ILIKE placeholder reuse, limit clamped to 100), `GET
+      /related` and `GET /triage` (default vs. custom stale-threshold-days settings row, project vs.
+      global vs. unfiltered), `PATCH /bulk`'s transaction (tag/status/delete actions, the
+      resolved-vs-non-resolved `resolved_at` clause, rollback+400 on a non-string tag/status value,
+      rollback+release+500 on a transaction failure), full CRUD (`POST`/`PUT`/`DELETE`), the
+      steps-only vs. scalar-only vs. combined update paths on `PUT /:id` (steps replaced atomically,
+      404 on a steps-only update against a missing issue, re-embed fires only when title/description
+      actually change), notes CRUD, commit linking/unlinking (sha regex validation), and every
+      AI-touching endpoint (`related-commands`, `related-docs`, `suggest-steps`'s numbered-list
+      parsing incl. dropping short lines, `summarize`'s prompt construction incl. the all-empty
+      `(none)`-fallback case, `reembed`, `suggest-tags`'s JSON-array extraction incl. no-match →
+      `[]`). This test file already existed uncommitted on disk when this item was picked up (from
+      earlier route-test-authoring work) — verified rather than rewritten: all 80 tests pass, isolated
+      coverage 97.89% stmts / 94.96% branch / 98.98% lines. The one remaining branch gap
+      (`PUT /:id`'s `else if (resolvedClause)` arm, lines 433-438) is unreachable dead code given the
+      current schema — `resolvedClause` is only ever set when `updates.status` is present, and
+      `status` is itself in `ISSUE_UPDATABLE_COLS`, so `fields.length` can never be 0 when
+      `resolvedClause` is truthy — same "exhaustively-validated branch" shape already noted elsewhere
+      in this file (`commands.ts`'s delete-action `else if`), not worth a fragile test to force. Full
+      server suite 989/989, `tsc --noEmit` and lint clean (0 errors, only pre-existing
+      `no-non-null-assertion` warnings).
+- [x] **`server/routes/tasks.ts`** (resolved 2026-07-22) — a test file already existed uncommitted
+      (`tests/routes/tasks.test.ts`, 24 tests) covering `GET /`'s filter-building (`global`/project id/
+      status/priority, sequential placeholders), `POST /import-md`'s markdown-checkbox parser (`##`
+      sections as tags, `[ ]`/`[x]` items, created-vs-skipped tallying, a per-item insert failure
+      counted as skipped rather than aborting the batch, default `'Imported'` tag + null `projectId`),
+      full `POST`/`PUT`/`DELETE` CRUD (`PUT`'s `done_at` auto-set/-clear on status change, the
+      `project_id`/`due_date` `colMap` column-name translation, "Nothing to update" 400 on an empty
+      body), plus a separate pre-existing `tests/routes/tasks_get_by_id.test.ts` (3 tests) covering the
+      `GET /:id` success path and `DELETE /:id`'s `deleteLinksFor` call — together these two files
+      already reached 95.14%/92% stmts/branch (100% once combined, since each file's gaps were exactly
+      what the other covered). One real gap found and closed: `POST /import-md`'s `(rowCount ?? 0) > 0`
+      fallback (line 139, for a `null`/`undefined` `rowCount` from the driver) had no test in either
+      file — added one (`rowCount: null` → counted as skipped). Full file now 100%
+      stmts/branches/functions/lines. Full server suite 990/990, `tsc --noEmit` and lint clean (0
+      errors, only pre-existing `no-non-null-assertion` warnings).
+- [x] **`server/routes/projects.ts`** (resolved 2026-07-22) — two test files already existed uncommitted
+      (`tests/routes/projects_crud.test.ts`, full CRUD + member-management coverage; and
+      `tests/routes/projects.test.ts`, the admin-vs-member visibility-join logic on `GET /` and `GET
+      /:id`), together already at **100% stmts/branches/functions/lines** — verified, nothing to add.
+      Covers: the admin (no join) vs. non-admin (`JOIN project_members` + `WHERE pm.user_id`) query
+      branch on both list and single-project reads, full project CRUD (409 on a duplicate `short_name`
+      via a message-substring check, the `''` → `null` field-coercion on `PUT`, "No fields to update"
+      400), `PUT /:id/link`'s filesystem validation (422 on a non-directory or nonexistent path, the
+      null-unlink skip-fs-check path, `refreshProjectWatch` called with the new path), `POST
+      /seed/reset`'s prod-environment 403 guard, and full member CRUD (add/upgrade via `ON CONFLICT`,
+      role-update, remove, invalid-role 400).
+- [x] **`server/routes/auth.ts`** (resolved 2026-07-22) — two test files already existed uncommitted
+      (`tests/routes/auth.test.ts`, the comprehensive suite; `tests/routes/auth_tokens.test.ts`, invite-
+      token registration only) at 98.73% stmts / 98.83% branch / 75% functions before this pass. Covers:
+      dev-mode (`AUTH_PASSWORD` unset) login/`/me` short-circuits, legacy single-password mode (wrong
+      password, first-admin creation defaulting username to `"admin"`, explicit username), multi-user
+      mode (missing username, deactivated account, wrong password, correct login, the timing-guard dummy
+      `bcrypt.compare` against `DUMMY_HASH` when a user isn't found, LDAP fallback — config decrypt,
+      auth failure, successful upsert-login, deactivated LDAP-linked user, the LDAP-settings-query-throws
+      → logged + falls through to 401 path), `/register`'s three branches (first-run forces admin, invite
+      token validates + deletes the invite, admin-Bearer-required otherwise, malformed/non-admin token
+      handling, 409 on duplicate username vs. 500 via `serverError` otherwise), `/me`'s cookie-vs-bearer
+      precedence and API-token vs. JWT paths, and `/change-password` (legacy/dev-mode block, LDAP-only
+      404, wrong-current-password 401, success + `logAudit` call). One real gap found and closed: the
+      `tryApiToken(token).catch(() => null)` fallback (line 256) had no test forcing `tryApiToken` to
+      actually reject — added one. Full file now 99.36% stmts / 98.83% branch / 87.5% functions — the one
+      remaining gap (line 43, the `express-rate-limit` `handler` callback) is structurally unreachable by
+      this suite's pattern of invoking the route's own handler directly off the router stack (same
+      pattern used by every other route test file in this repo) — `express-rate-limit`'s internal
+      request-counting middleware sits earlier in the stack and is never exercised, so its callback can
+      only fire under a real HTTP flood via `supertest`, not worth introducing a second test harness for
+      one line. The remaining branch gap is the `process.env.NODE_ENV === 'production' ? 10 : 1000` rate-
+      limit ternary (line 39) — evaluated once at module import time under whatever `NODE_ENV` the test
+      run has, so only one side is ever reachable without a module-reset trick, same shape as `ai.test.ts`
+      mutating `env.AI_PROVIDER` elsewhere except this one is baked in at import rather than read live.
+- [x] **`server/routes/git.ts`** (resolved 2026-07-22) — two test files already existed uncommitted
+      (`tests/routes/git.test.ts`, local-vs-GitHub-fallback logic; `tests/routes/git_crud.test.ts`, full
+      route coverage), together already at **100% stmts/branches/functions/lines** — verified, nothing
+      to add. Covers: `POST /:projectId/repo`'s partial-field `SET` clause (repo_url only / PAT only,
+      encrypted via `encrypt()` / both with sequential placeholders / "Nothing to update" 400), `GET
+      /:projectId/commits`'s local-git-preferred-with-GitHub-fallback (the local `execAsync` failure
+      falling through to the GitHub API rather than erroring, `parseGitHubRepo`'s malformed/non-GitHub/
+      no-repo-segment URL rejection, PAT decrypt only when stored, a non-ok GitHub response passed
+      through with status + truncated body, limit clamped to 50), `GET /:projectId/branches` (local
+      `git branch` + `--show-current`, empty when no `fs_path`), `GET /:projectId/diff/:sha` (400 when
+      no linked local path — this endpoint has no GitHub fallback), commit link/unlink (SHA-length
+      validation, `ON CONFLICT DO NOTHING`), and `GET /:projectId/compare`'s mirror of the commits
+      route's local-then-GitHub-fallback logic with its own commit-log string formatting.
+- [x] **`server/routes/search.ts`** (resolved 2026-07-22) — two test files already existed uncommitted
+      (`tests/routes/search.test.ts`, the saved-filters/history CRUD; `tests/routes/search_query.test.ts`,
+      the hybrid-search endpoint), together already at **100% stmts/branches/functions/lines** — verified,
+      nothing to add. Covers: `GET /`'s empty-query "recent items per type" branch vs. the non-empty-query
+      hybrid-search branch (pgvector cosine search on docs falling back to tsvector/ILIKE when `aiEmbed`
+      throws — Ollama-down scenario — tsvector-with-ILIKE-fallback for issues/commands specifically when
+      the primary tsvector match returns zero rows, ILIKE-only for releases/runbooks which have no
+      tsvector column), the project-id filter applied consistently across every one of those query
+      variants, limit clamped to [1,50], the fire-and-forget search-history insert+trim only firing when
+      `req.user` is present (awaited via `vi.waitFor()`, its failure logged without affecting the
+      response), `GET /suggestions`'s 3-issues+2-docs combine, and saved-filter CRUD (`POST /filters`'s
+      required-field 400, `DELETE /filters/:id`'s ownership-scoped `rowCount === 0` → 404).
+- [x] **`server/routes/notify.ts`** (resolved 2026-07-22) — two test files already existed uncommitted
+      (`tests/routes/notify.test.ts`, an earlier pass; `tests/routes/notify_crud.test.ts`, the
+      comprehensive one), together already at **100% stmts/branches/functions/lines** — verified,
+      nothing to add. Covers: `POST /` (the external webhook receiver — 404 on unknown `short_name`,
+      `delivered_to` summed correctly across users with differing per-user channel counts, including a
+      user with zero configured channels), `POST /send-digest`'s localhost-only guard (all three
+      loopback address forms — `127.0.0.1`, `::1`, `::ffff:127.0.0.1` — accepted, anything else 403s),
+      `GET /log`'s full filter-building matrix (project/level/channel-lowercased/status/date-range with
+      sequential placeholders, limit defaulted to 50 and clamped to 200), `POST /test`'s three-way
+      outcome (no channels → 400, any channel failed → 500 with details, all sent → 200), `POST
+      /retry/:id` (the `external_` prefix stripped back to a bare level, `projectId` nulled for a non-
+      project-scoped notification, the stale log row deleted only when a retry actually lands `sent`),
+      Apprise channel CRUD (URL masking — short URLs left unmasked, a `decrypt()` throw masked to `''`
+      instead of propagating — encrypt-on-create, delete, enabled-flag patch with 400/404 guards), and
+      project-notification-prefs `GET`/`PUT` (the `ON CONFLICT DO UPDATE` upsert).
+- [x] **`server/routes/documents.ts`** (resolved 2026-07-22) — 11 test files already existed uncommitted
+      covering the AI-touching routes in depth (`documents_explain`, `documents_diagram`,
+      `documents_save_explanation`, `documents_component_overview`, `documents_find_duplicates`,
+      `documents_suggest_tags_from_file`, `documents_update_content`, `documents_chunk_context`,
+      `documents_component`, `documents_bulk_reembed` [re-embed action only],
+      `documents_embedding_status`) — combined isolated coverage was only 68.1% stmts / 57.97% branch
+      because the *plumbing* routes (list, CRUD, delete, plain re-embed, suggest-tags) had no test file
+      at all. Added **`tests/routes/documents_list_and_crud.test.ts`** (58 tests) covering: `GET /`'s
+      filter-building matrix (same shape as `issues.ts`/`tasks.ts` — project id/`global`-combining,
+      fileType/tags/component array params, date range, `q`/`search` full-text+ILIKE, limit clamped to
+      100, the non-string/non-array param coercion), `PATCH /bulk`'s tag/component/delete actions
+      (component `.trim() || null` clearing, rollback+400 on non-string values, rollback+500 on a
+      transaction failure — `re-embed` already covered by `documents_bulk_reembed.test.ts`), `GET /:id`
+      404/500, `POST /` and `POST /url`'s remaining validation paths (422 no-extractable-text, 409
+      dedup-by-content-hash, malformed-JSON tags falling back to `[]`, the outer-catch cleanup DELETE
+      when a step after insert throws, and — since `docId` is only set *after* a successful insert — a
+      separate case where `parseFile`/`parseUrl` itself throws before `docId` exists, proving the cleanup
+      DELETE is correctly skipped rather than called with `undefined`), `PATCH /:id` (title/tags/
+      projectId including the camelCase→snake_case `project_id` mapping and null-clearing, "Nothing to
+      update" 400, 404 — `component` alone already covered by `documents_component.test.ts`), `DELETE
+      /:id` (success + `deleteLinksFor`, 404, 500), `POST /:id/reembed` (404, the fire-and-forget
+      done/failed status flow via `vi.waitFor()`, 500), and `POST /suggest-tags` (400/success/no-match/
+      500 — the title+hint variant, distinct from `suggest-tags-from-file`'s real-file-content variant).
+      Also closed smaller branch gaps found while chasing the remaining percentage, one test each added to
+      the routes' *existing* files rather than the new one, to keep each gap colocated with its route's
+      established test file: `documents_explain`/`documents_diagram` (500 response; the truncated-content
+      prompt note; diagram's null-language→`'code'` fallback), `documents_save_explanation` (500; a null
+      `tags` on the source doc falling back to `[]`), `documents_component_overview` (500; a null
+      `projectId` + no-language file exercising the create-new path's remaining ternary branches),
+      `documents_find_duplicates`/`documents_suggest_tags_from_file`/`documents_component` (500 each),
+      `documents_chunk_context` (500), `documents_update_content` (422 no-text; a null-language file; the
+      failed-status cleanup UPDATE itself rejecting, swallowed silently), and four "cleanup query itself
+      fails, swallowed by an empty `.catch(() => {})`" cases across `POST /`, `POST /url`, and `POST
+      /:id/reembed` — genuinely reachable code, not dead branches, so worth the direct coverage rather
+      than leaving them undocumented. File now 99.77% stmts / 99.51% branch / 100% functions/lines — the
+      one remaining branch (line 206, `PATCH /bulk`'s implicit final `else` after the `re-embed`/`tag`/
+      `component`/`delete` chain) is unreachable dead code given the earlier `action` allowlist check,
+      same "exhaustively-validated branch" shape as `commands.ts`'s analogous delete-action `else if`.
+      Full server suite 1062/1062, `tsc --noEmit` and lint clean (0 errors, only pre-existing
+      `no-non-null-assertion` warnings).
+- [x] **`server/routes/templates.ts`** (resolved 2026-07-22) — rewrote `tests/routes/templates.test.ts`
+      (20 tests, up from 4 loosely-structured ones covering only the happy paths) to the
+      `getHandler(method, path)` + per-route-describe convention used elsewhere: `GET /`'s
+      global/built-in-scoping vs. a specific `projectId` (both with and without a `type` filter) plus 500;
+      `POST /`'s ZodError→400 vs. any-other-error→500 split (the route's `try/catch` distinguishes them via
+      `err instanceof z.ZodError`, not a separate `.safeParse()` — different from every other route in this
+      codebase, which was the reason this file's validation path had never been exercised); `PUT /:id`'s
+      full dynamic-`SET`-clause coverage (`project_id`-including-null, `description`, `body` all together,
+      not just `name` alone), the built-in-template 403 guard, 404, "No fields to update" 400, ZodError 400,
+      and 500; `DELETE /:id`'s built-in 403, 404, and 500. 100% stmts/functions/lines, 97.05% branch — the
+      one gap (`whereClause`'s `conditions.length > 0 ? ... : ''` ternary's false arm) is unreachable dead
+      code: `GET /`'s `if (projectId === 'global' || !projectId) {...} else {...}` unconditionally pushes a
+      condition on every request regardless of which arm runs, so `conditions.length` can never be 0.
+- [x] **`server/routes/notifications.ts`** (resolved 2026-07-22) — rewrote `tests/routes/notifications.test.ts`
+      (9 tests) covering all three routes' success path plus the previously-missing 404 (`PATCH /:id/read`
+      against an unowned/nonexistent notification) and 500 for each, and the `limit`/`offset` default-vs.-
+      given branches on `GET /`. 100% stmts/branches/functions/lines — the route layer over
+      `services/notifications.ts` (already 100%, see the Zero-Coverage Service Tests item above) is now
+      fully wired.
+- [x] **`server/routes/audit.ts`** (resolved 2026-07-22) — rewrote `tests/routes/audit.test.ts` (8 tests)
+      covering `GET /`'s full filter combination (`entityType`+`entityId`+`userId` together with sequential
+      placeholders — the original test only ever set `entityType` alone), the no-filter/default-limit-
+      offset case, and 500; `GET /export`'s CSV generation including the `username ?? 'system'` and
+      `entity_name ?? ''` fallback branches (the original fixtures always supplied both) plus 500. 100%
+      stmts/branches/functions/lines.
+- [x] **`server/routes/chat.ts`** (resolved 2026-07-22) — the RAG Q&A SSE route, by far the most involved
+      file in this batch. Added 13 tests to the existing 22-test `tests/routes/chat.test.ts`: the missing
+      400 (invalid body) and a session-resolution DB failure returning a plain 500 *before* the SSE stream
+      opens (distinct from the mid-stream error path, which must instead emit an SSE `error` event since
+      headers are already flushed by that point) — covering `sendError()`/`done()` and both sides of the
+      `(err as Error).message ?? 'Unknown error'` fallback (a thrown non-Error value with no `.message`);
+      the 5-minute idle-timeout `setTimeout(onIdle, ...)` firing via `vi.advanceTimersByTimeAsync()` against
+      a deliberately-hung `aiChatStream` mock; the `req.on('close', ...)` cleanup handler, captured and
+      invoked directly since the test harness's `req.on` stub doesn't fire real socket events; the long-
+      question title-truncation branch (`question.length > 60`); a long-chunk citation excerpt truncated to
+      300 chars; Full Context Mode's remaining branches — prior conversation turns included in its prompt
+      too (`...priorTurns.map(...)`, only reachable with an *existing* session that has real history, unlike
+      every prior full-context test which used a brand-new session), and the referenced document not
+      existing (falls through to normal chunk retrieval, same as the already-covered "too long" case);
+      `getRecentCitedChunkIds()`'s `msg.citations ?? []` and `if (c.id)` fallback branches (a null
+      `citations` field and a citation object with no `id`); `rewriteQuery()`'s own `catch` (an `aiChat`
+      rejection during query-rewrite treated as "no rewrite," falling back to the canned response, not
+      propagating); and 500s for `GET /sessions`, `GET /sessions/:id/messages`, and `DELETE
+      /sessions/:id`. 99.29% stmts / 98.48% branch / 100% functions/lines — the one remaining gap
+      (`rewriteQuery`'s internal `if (priorTurns.length === 0) return null` guard) is unreachable dead code:
+      its only call site already gates on `priorTurns.length > 0` before invoking it.
+- [x] **`server/routes/api-tokens.ts`** (resolved 2026-07-22) — extended `tests/routes/api-tokens.test.ts`
+      with 6 tests: 500s for all three routes, the dev-mode/legacy-session rejection branch for `POST /`
+      and `DELETE /:id` (previously only asserted for `GET /`, despite all three routes independently
+      calling the same `requireRealUser()` guard), and `expiresInDays` actually being supplied (the `?
+      new Date(...) : null` branch — the existing "creates a token" test always omitted it). 100%
+      stmts/branches/functions/lines.
+
+## Bring `routes/**` Into the Coverage Gate (resolved 2026-07-22)
+
+- [x] Added `routes/**` to `coverage.include` in `server/vitest.config.ts` and re-baselined
+      `coverage.thresholds` from a fresh run. All 25 route files already had test coverage by this point
+      (the Untested Route Handlers + Deepen Partially-Tested Route Handlers items above), so the aggregate
+      landed high rather than the ~65% the sequencing note here had warned about: fresh full-suite run
+      (1118/1118 tests, 65 files) measured Statements 98.46% / Branches 95.78% / Functions 96.29% / Lines
+      99.51% across `lib/**+services/**+routes/**` combined — up from the pre-routes 96.29/92.26/95.85/
+      99.01% baseline. Set thresholds a few points below actual, same convention as the original gate:
+      statements 96 / branches 93 / functions 94 / lines 97. `services/env.ts` (53% stmts) and
+      `services/errors.ts` (100%/50% branch) are the only sub-90% files remaining, both tiny and outside
+      today's scope. Verified the gate fires: temporarily set `statements` to 99.9%, confirmed `vitest`
+      printed `ERROR: Coverage for statements (98.46%) does not meet global threshold (99.9%)` and exited
+      non-zero; reverted to 96 and confirmed a clean pass, exit 0. No CI workflow change needed — `.github/
+      workflows/ci.yml`'s server job already just runs `npm run test:coverage`, so the new include/
+      thresholds apply automatically. `tsc --noEmit` and lint clean on both sides (0 errors, only
+      pre-existing `no-non-null-assertion` warnings).
 
 ## Backup Retention & Offsite Destination
 
@@ -214,13 +725,52 @@ reverted "Ready to upload…" status text both matched the assertion.
       existing local-path-only scheduler — local-only means a disk failure loses DevBrain and its
       backups together.
 
-## Trend & Visibility Dashboards
+## Trend & Visibility Dashboards (resolved 2026-07-22)
 
-- [ ] Time-series view for issue throughput (opened/resolved per week) per project — `GET
-      /api/dashboard/stats` only returns current-snapshot counts today, no history.
-- [ ] Embedding health over time (pending/failed document trend, not just current counts) — would have
-      made the 2026-07-15 GPU-thrashing regression (see Known Issues) visible sooner than a live
-      incident did.
+- [x] **Issue throughput (opened/resolved per week) per project** — new `GET
+      /api/dashboard/issue-throughput` in `server/routes/dashboard.ts`, a pure aggregation over
+      `issues.created_at`/`resolved_at` (no schema change needed) mirroring the existing `GET
+      /dashboard/activity` handler's `generate_series` + `date_trunc` + `LEFT JOIN` day-bucket pattern,
+      just at week granularity over a 12-week (~3 month) window, and reusing the same `pid`/`pf()`
+      project-filter convention already in that file. Client: `dashboardApi.issueThroughput()` +
+      `IssueThroughputWeek` type in `lib/api.ts`, new hand-rolled `IssueThroughputChart` widget in
+      `Dashboard.tsx` (grouped two-bar-per-week, no chart library — matches every other widget in this
+      file, e.g. `OpenIssuesByProject`'s plain CSS bars), wired into the existing analytics grid and
+      fetched inside `loadAnalytics()`.
+- [x] **Embedding health over time** — unlike throughput, `documents.embedding_status` only reflects
+      *right now*, so this needed real historical snapshots: new `embedding_health_snapshots` table
+      (migration `db/migrations/add_embedding_health_snapshots.ts`, mirrored into `db/schema.sql` per
+      this repo's convention of keeping schema.sql as the canonical fresh-install source), and a new
+      `server/services/embeddingHealthSnapshot.ts` scheduler following `services/backup.ts`'s exact
+      shape (`startBackupScheduler()`'s 30s-startup-delay-then-hourly pattern, DB-not-ready swallowed via
+      `catch {}`) — `captureSnapshot()` counts `documents` by `embedding_status` and inserts one row,
+      `pruneOldSnapshots()` deletes anything older than 30 days every tick (bounded retention from day
+      one, unlike `backup.ts`'s original unbounded growth — see the still-open "Backup Retention" item
+      below, which exists precisely because that mistake wasn't caught earlier). **Scope call: global,
+      not per-project** — the GPU-thrashing failure mode this exists to catch (2026-07-15, see Known
+      Issues) is a system-wide Ollama problem, not a per-project one, so a single global counter keeps
+      the schema and scheduler trivial; flagged explicitly in the plan and approved. Wired into
+      `index.ts` alongside the other schedulers. New route `GET /api/dashboard/embedding-health-trend`
+      (last 30 days, oldest first, no project filter). Client: `dashboardApi.embeddingHealthTrend()` +
+      `EmbeddingHealthSnapshot` type, new `EmbeddingHealthTrendChart` widget — a small hand-rolled SVG
+      polyline chart (pending + failed lines; `done` omitted from the plot since it dominates the scale
+      and isn't the signal being watched for), showing a "Not enough history yet" empty state below 2
+      snapshots.
+      12 new tests in `tests/services/embeddingHealthSnapshot.test.ts` (capture/prune query shape,
+      scheduler timing via fake timers matching `backup.test.ts`'s approach, a capture failure swallowed
+      without throwing and skipping that tick's prune) — 100% stmts/branches/lines, 75% functions (the
+      gap is two `.catch(() => {})` guards on a promise chain that structurally never rejects, same
+      accepted shape as `aitask.ts`'s equivalent noted earlier in this file) — plus 6 new route tests in
+      `tests/routes/dashboard.test.ts` for the two new endpoints, 100% coverage. Full server suite
+      1118/1118, `tsc --noEmit` and lint clean on both sides (0 errors).
+      **Verified live**: ran the migration against the local dev DB, started the app via
+      `devbrain.ps1 dev start`, and checked the real Dashboard in a headless-browser session — both
+      widgets render correctly (Issue Throughput showing real non-zero "opened" bars against
+      correctly-zero "resolved" bars, matching the 0-resolved-in-30-days state also shown by the
+      pre-existing Avg Resolution widget; Embedding Health Trend showing the expected empty state).
+      Confirmed the scheduler itself fires for real in the running server, not just under test: after
+      the 30s startup delay it captured a snapshot whose counts (26 done / 0 elsewhere) exactly matched
+      a direct DB query of the live `documents` table.
 
 ## Two-Way Integration Sync (GitHub / Linear / Jira)
 

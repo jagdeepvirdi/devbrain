@@ -14,16 +14,16 @@ export default defineConfig({
     },
     coverage: {
       provider: 'v8',
-      include:  ['lib/**', 'services/**'],
+      include:  ['lib/**', 'services/**', 'routes/**'],
       exclude:  ['services/ldap.ts'],
       reporter: ['text', 'lcov'],
       thresholds: {
-        // Baseline from the 2026-07-20 coverage run (39.61/30.12/36.45/41.14%),
+        // Re-baselined 2026-07-22 after adding routes/** to include (98.46/95.78/96.29/99.51%),
         // set a few points below actual so CI gates regressions, not noise.
-        statements: 37,
-        branches:   28,
-        functions:  34,
-        lines:      39,
+        statements: 96,
+        branches:   93,
+        functions:  94,
+        lines:      97,
       },
     },
   },
