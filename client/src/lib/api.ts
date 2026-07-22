@@ -1343,11 +1343,26 @@ export type ImportSummary = {
   summary: Record<string, { created: number; skipped: number }>
 }
 
+export type RemoteBackupConfig =
+  | { type: 'none' }
+  | { type: 's3'; endpoint: string | null; region: string | null; bucket: string; prefix: string | null; accessKeyId: string; forcePathStyle: boolean; hasSecretAccessKey: boolean }
+  | { type: 'sftp'; host: string; port: number | null; username: string; remotePath: string; hasPassword: boolean; hasPrivateKey: boolean }
+
+// The PUT/test-remote request shape — secret fields are optional so an
+// omitted value means "keep whatever's already stored" server-side.
+export type RemoteBackupConfigInput =
+  | { type: 'none' }
+  | { type: 's3'; endpoint?: string | null; region?: string | null; bucket: string; prefix?: string | null; accessKeyId: string; secretAccessKey?: string; forcePathStyle?: boolean }
+  | { type: 'sftp'; host: string; port?: number | null; username: string; remotePath: string; password?: string; privateKey?: string }
+
 export type BackupConfig = {
-  path:            string | null
-  schedule:        'daily' | 'weekly' | 'off'
-  last_backup_at:  string | null
-  retention_count: number
+  path:                      string | null
+  schedule:                  'daily' | 'weekly' | 'off'
+  last_backup_at:            string | null
+  retention_count:           number
+  remote:                    RemoteBackupConfig
+  last_remote_backup_at:     string | null
+  last_remote_backup_error:  string | null
 }
 
 export type LdapSettings = {
@@ -1432,11 +1447,14 @@ export const settingsApi = {
   getBackupConfig: () =>
     request<BackupConfig>('/settings/backup-config'),
 
-  saveBackupConfig: (cfg: Pick<BackupConfig, 'path' | 'schedule' | 'retention_count'>) =>
+  saveBackupConfig: (cfg: Pick<BackupConfig, 'path' | 'schedule' | 'retention_count'> & { remote?: RemoteBackupConfigInput }) =>
     request<BackupConfig>('/settings/backup-config', { method: 'PUT', body: JSON.stringify(cfg) }),
 
   backupNow: () =>
     request<{ ok: boolean; path: string }>('/settings/backup-now', { method: 'POST' }),
+
+  testBackupRemote: (remote: RemoteBackupConfigInput) =>
+    request<{ ok: boolean }>('/settings/backup-config/test-remote', { method: 'POST', body: JSON.stringify(remote) }),
 
   // ── Phase 21 zip import ──────────────────────────────────────────────────
 

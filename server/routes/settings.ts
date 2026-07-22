@@ -8,7 +8,8 @@ import matter from 'gray-matter'
 import { pool } from '../db/pool.js'
 import { env } from '../lib/env.js'
 import { serverError } from '../lib/errors.js'
-import { triggerBackupNow, DEFAULT_BACKUP_RETENTION_COUNT } from '../services/backup.js'
+import { triggerBackupNow, DEFAULT_BACKUP_RETENTION_COUNT, resolveRemoteConfig } from '../services/backup.js'
+import { testRemoteConnection, type RemoteConfig } from '../services/remoteBackup.js'
 import { requireRole } from '../middleware/auth.js'
 import { encrypt, decrypt } from '../services/crypto.js'
 import { ldapAuth, type LdapConfig } from '../services/ldap.js'
@@ -394,12 +395,7 @@ router.get('/backup-config', async (_req, res) => {
   try {
     const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'backup_settings'`)
     const cfg = (rows[0]?.value ?? {}) as Record<string, unknown>
-    res.json({ data: {
-      path:            (cfg.path as string | null) ?? null,
-      schedule:        (cfg.schedule as string) ?? 'off',
-      last_backup_at:  (cfg.last_backup_at as string | null) ?? null,
-      retention_count: (cfg.retention_count as number | null) ?? DEFAULT_BACKUP_RETENTION_COUNT,
-    } })
+    res.json({ data: redactBackupConfig(cfg) })
   } catch (err) {
     serverError(res, err)
   }
@@ -407,23 +403,119 @@ router.get('/backup-config', async (_req, res) => {
 
 // ── PUT /api/settings/backup-config ─────────────────────────────────────────
 
+const S3RemoteBody = z.object({
+  type:            z.literal('s3'),
+  endpoint:        z.string().optional().nullable(),
+  region:          z.string().optional().nullable(),
+  bucket:          z.string().min(1),
+  prefix:          z.string().optional().nullable(),
+  accessKeyId:     z.string().min(1),
+  secretAccessKey: z.string().optional(), // omitted = keep the existing encrypted value
+  forcePathStyle:  z.boolean().optional(),
+})
+
+const SftpRemoteBody = z.object({
+  type:       z.literal('sftp'),
+  host:       z.string().min(1),
+  port:       z.number().int().optional().nullable(),
+  username:   z.string().min(1),
+  remotePath: z.string().min(1),
+  password:   z.string().optional(), // omitted = keep the existing encrypted value
+  privateKey: z.string().optional(), // omitted = keep the existing encrypted value
+})
+
+const NoneRemoteBody = z.object({ type: z.literal('none') })
+
+const RemoteBody = z.discriminatedUnion('type', [NoneRemoteBody, S3RemoteBody, SftpRemoteBody])
+
 const BackupConfigBody = z.object({
   path:            z.string().nullable(),
   schedule:        z.enum(['daily', 'weekly', 'off']),
   retention_count: z.number().int().min(1).max(365).optional(),
+  remote:          RemoteBody.optional(),
 })
+
+// Redacts encrypted secret fields to booleans (hasSecretAccessKey / hasPassword
+// / hasPrivateKey) so the client can show "already configured" without ever
+// seeing the plaintext or ciphertext — same pattern as GET /ldap's hasPassword.
+function redactBackupConfig(cfg: Record<string, unknown>) {
+  const remote = (cfg.remote ?? { type: 'none' }) as Record<string, unknown>
+  const redactedRemote =
+    remote.type === 's3'
+      ? {
+          type:               's3',
+          endpoint:           remote.endpoint ?? null,
+          region:             remote.region ?? null,
+          bucket:             remote.bucket,
+          prefix:             remote.prefix ?? null,
+          accessKeyId:        remote.accessKeyId,
+          forcePathStyle:     !!remote.forcePathStyle,
+          hasSecretAccessKey: !!remote.secretAccessKeyEnc,
+        }
+      : remote.type === 'sftp'
+      ? {
+          type:          'sftp',
+          host:          remote.host,
+          port:          remote.port ?? null,
+          username:      remote.username,
+          remotePath:    remote.remotePath,
+          hasPassword:   !!remote.passwordEnc,
+          hasPrivateKey: !!remote.privateKeyEnc,
+        }
+      : { type: 'none' }
+
+  return {
+    path:                     (cfg.path as string | null) ?? null,
+    schedule:                 (cfg.schedule as string) ?? 'off',
+    last_backup_at:           (cfg.last_backup_at as string | null) ?? null,
+    retention_count:          (cfg.retention_count as number | null) ?? DEFAULT_BACKUP_RETENTION_COUNT,
+    remote:                   redactedRemote,
+    last_remote_backup_at:    (cfg.last_remote_backup_at as string | null) ?? null,
+    last_remote_backup_error: (cfg.last_remote_backup_error as string | null) ?? null,
+  }
+}
 
 router.put('/backup-config', requireRole('admin'), async (req, res) => {
   const parsed = BackupConfigBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
   try {
     const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'backup_settings'`)
-    const existing = (rows[0]?.value ?? {}) as Record<string, unknown>
-    const updated  = {
+    const existing       = (rows[0]?.value ?? {}) as Record<string, unknown>
+    const existingRemote = (existing.remote ?? { type: 'none' }) as Record<string, unknown>
+
+    let remote: Record<string, unknown> | undefined
+    const r = parsed.data.remote
+    if (r?.type === 'none') {
+      remote = { type: 'none' }
+    } else if (r?.type === 's3') {
+      remote = {
+        type:               's3',
+        endpoint:           r.endpoint ?? null,
+        region:             r.region ?? null,
+        bucket:             r.bucket,
+        prefix:             r.prefix ?? null,
+        accessKeyId:        r.accessKeyId,
+        secretAccessKeyEnc: r.secretAccessKey ? encrypt(r.secretAccessKey) : existingRemote.secretAccessKeyEnc,
+        forcePathStyle:     !!r.forcePathStyle,
+      }
+    } else if (r?.type === 'sftp') {
+      remote = {
+        type:          'sftp',
+        host:          r.host,
+        port:          r.port ?? null,
+        username:      r.username,
+        remotePath:    r.remotePath,
+        passwordEnc:   r.password   ? encrypt(r.password)   : existingRemote.passwordEnc,
+        privateKeyEnc: r.privateKey ? encrypt(r.privateKey) : existingRemote.privateKeyEnc,
+      }
+    }
+
+    const updated = {
       ...existing,
       path:            parsed.data.path,
       schedule:        parsed.data.schedule,
       retention_count: parsed.data.retention_count ?? existing.retention_count ?? DEFAULT_BACKUP_RETENTION_COUNT,
+      ...(remote ? { remote } : {}),
     }
     await pool.query(
       `INSERT INTO app_settings (key, value)
@@ -431,7 +523,7 @@ router.put('/backup-config', requireRole('admin'), async (req, res) => {
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
       [JSON.stringify(updated)],
     )
-    res.json({ data: updated })
+    res.json({ data: redactBackupConfig(updated) })
   } catch (err) {
     serverError(res, err)
   }
@@ -442,12 +534,63 @@ router.put('/backup-config', requireRole('admin'), async (req, res) => {
 router.post('/backup-now', requireRole('admin'), async (_req, res) => {
   try {
     const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'backup_settings'`)
-    const cfg = rows[0]?.value as { path: string | null; retention_count?: number | null } | undefined
+    const cfg = rows[0]?.value as { path: string | null; retention_count?: number | null; remote?: unknown } | undefined
     if (!cfg?.path) return res.status(400).json({ error: 'No backup path configured' })
-    await triggerBackupNow(cfg.path, cfg.retention_count ?? DEFAULT_BACKUP_RETENTION_COUNT)
+    await triggerBackupNow(cfg.path, cfg.retention_count ?? DEFAULT_BACKUP_RETENTION_COUNT, resolveRemoteConfig(cfg.remote))
     res.json({ data: { ok: true, path: cfg.path } })
   } catch (err) {
     serverError(res, err)
+  }
+})
+
+// ── POST /api/settings/backup-config/test-remote ────────────────────────────
+// Verifies the remote destination is reachable before the user commits to a
+// schedule — mirrors /ldap/test's "override falls back to stored+decrypted"
+// pattern so a secret field can be left blank to test against what's already
+// saved rather than re-entering it.
+
+function resolveSecret(provided: string | undefined, existingRemote: Record<string, unknown>, expectedType: string, encField: string): string | undefined {
+  if (provided) return provided
+  if (existingRemote.type === expectedType && existingRemote[encField]) return decrypt(existingRemote[encField] as string)
+  return undefined
+}
+
+router.post('/backup-config/test-remote', requireRole('admin'), async (req, res) => {
+  const parsed = RemoteBody.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
+  if (parsed.data.type === 'none') return res.status(400).json({ error: 'No remote destination selected' })
+
+  try {
+    const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'backup_settings'`)
+    const existingRemote = ((rows[0]?.value as Record<string, unknown> | undefined)?.remote ?? { type: 'none' }) as Record<string, unknown>
+
+    const r = parsed.data
+    const testConfig: RemoteConfig =
+      r.type === 's3'
+        ? {
+            type:            's3',
+            endpoint:        r.endpoint ?? undefined,
+            region:          r.region ?? undefined,
+            bucket:          r.bucket,
+            prefix:          r.prefix ?? undefined,
+            accessKeyId:     r.accessKeyId,
+            secretAccessKey: resolveSecret(r.secretAccessKey, existingRemote, 's3', 'secretAccessKeyEnc') ?? '',
+            forcePathStyle:  !!r.forcePathStyle,
+          }
+        : {
+            type:       'sftp',
+            host:       r.host,
+            port:       r.port ?? undefined,
+            username:   r.username,
+            remotePath: r.remotePath,
+            password:   resolveSecret(r.password, existingRemote, 'sftp', 'passwordEnc'),
+            privateKey: resolveSecret(r.privateKey, existingRemote, 'sftp', 'privateKeyEnc'),
+          }
+
+    await testRemoteConnection(testConfig)
+    res.json({ data: { ok: true } })
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message })
   }
 })
 

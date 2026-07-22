@@ -750,9 +750,55 @@ were out of scope here and still have real gaps — see the item below.
       suite 1130/1130 (up from 1118), coverage still comfortably above the routes/** gate's 96/93/94/97%
       thresholds (98.46/95.82/96.32/99.51% actual), `tsc --noEmit` and lint clean on both sides (0 errors,
       only pre-existing `no-non-null-assertion` warnings).
-- [ ] Optional remote backup destination (S3-compatible bucket, or an rsync/SFTP target) alongside the
-      existing local-path-only scheduler — local-only means a disk failure loses DevBrain and its
-      backups together.
+- [x] **Optional remote backup destination** (resolved 2026-07-22) — implemented both options rather
+      than picking one: an S3-compatible bucket (AWS SDK v3, works with AWS/MinIO/Backblaze B2/
+      Cloudflare R2 over plain HTTPS, no external binaries — chosen over a CLI-shelling approach since
+      this app runs natively on Windows) and an SFTP target (`ssh2-sftp-client`, since `rsync` itself
+      isn't available on Windows without WSL/Cygwin — a pure-JS SFTP client was the pragmatic substitute
+      for "rsync/SFTP" that still works cross-platform), selected via a destination-type dropdown in the
+      Settings UI rather than two separate features.
+      New `server/services/remoteBackup.ts`: `uploadBackupToRemote()`, `pruneRemoteBackups()` (mirrors
+      `pruneOldBackups()`'s local retention policy on the remote side using the *same* `retention_count`
+      setting — otherwise remote storage grows unbounded the same way local backups did before that
+      fix), and `testRemoteConnection()` (HeadBucket for S3 / connect-then-close for SFTP, backing a
+      Settings UI "Test connection" button). Wired into `services/backup.ts`'s `runBackup()` via a new
+      `handleRemote()`: best-effort, non-fatal — a remote failure is logged and recorded via new
+      `last_remote_backup_at`/`last_remote_backup_error` fields on the `backup_settings` row, but never
+      rolls back or fails the local backup, since that's already the primary safety net by the time
+      remote upload runs. Fires from both the scheduled path (`maybeRunBackup`) and manual "Backup now"
+      (`triggerBackupNow`, which gained `keepLastN`/`remote` parameters).
+      Secrets (S3 secret access key, SFTP password/private key) are encrypted at rest via the existing
+      `services/crypto.js` AES-256-GCM helper — same pattern as LDAP's bind password and Apprise channel
+      URLs — with a `resolveRemoteConfig()` decrypt step in `backup.ts` for the scheduler/manual-trigger
+      path. `routes/settings.ts`'s `PUT /backup-config` follows the established "omitted secret field
+      keeps the existing encrypted value" convention (zod `.optional()` + COALESCE-style fallback), and
+      `GET /backup-config` redacts secrets to `hasSecretAccessKey`/`hasPassword`/`hasPrivateKey` booleans
+      (mirroring LDAP's `hasPassword`) so the client can show "already configured" without ever seeing
+      plaintext or ciphertext. New `POST /backup-config/test-remote` mirrors `/ldap/test`'s "provided
+      value overrides the stored+decrypted one, falling back only when the stored type matches" pattern,
+      explicitly *not* falling back to a differently-typed stored secret (an S3 test can't reuse an SFTP
+      password).
+      Client: `Settings.tsx`'s Scheduled Backup section gained a destination-type selector with
+      conditional S3/SFTP field groups (secret/password/private-key inputs show "configured — leave
+      blank to keep" rather than ever displaying a stored secret), a "Test connection" button, and
+      last-remote-backup-at/error display.
+      New dependencies: `@aws-sdk/client-s3`, `ssh2-sftp-client` (+ `@types/ssh2-sftp-client`) — `npm
+      audit` shows 11 pre-existing vulnerabilities in unrelated packages (adm-zip, xlsx, vite, js-yaml,
+      etc.), none introduced by these two.
+      43 new tests: 25 in new `tests/services/remoteBackup.test.ts` (upload/prune/test-connection across
+      S3 and SFTP, the "none" no-op, prefix handling, a missing-`Contents`/keyless-object edge case, an
+      SFTP `mkdir`-already-exists tolerance, and every `.catch(() => {})` connection-close guard across
+      all three exported functions — 100% stmts/branches/functions/lines on the file); 8 in
+      `tests/services/backup.test.ts` (`resolveRemoteConfig`'s decrypt/passthrough branches, remote
+      upload+prune+status-write wiring through `triggerBackupNow`, a remote failure being logged/recorded
+      without throwing or blocking the local backup's own success, and the scheduled path resolving and
+      invoking the configured remote); 10 in `tests/routes/settings.test.ts` (GET redaction for both
+      remote types, PUT encrypting/preserving/switching-away-from secrets, 400 on an unrecognized remote
+      type, `backup-now` resolving and threading the stored remote through, and `test-remote`'s
+      stored-secret-fallback / cross-type-no-fallback / underlying-error-message-on-failure branches).
+      Full server suite 1180/1180 (up from 1130), coverage still comfortably above the routes/** gate's
+      96/93/94/97% thresholds (98.51/95.95/96.3/99.53% actual), `tsc --noEmit` and lint clean on both
+      sides (0 errors, only pre-existing warnings), client production build succeeds.
 
 ## Trend & Visibility Dashboards (resolved 2026-07-22)
 

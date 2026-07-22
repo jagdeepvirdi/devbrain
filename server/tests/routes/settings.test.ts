@@ -20,6 +20,11 @@ vi.mock('../../services/ldap.js', () => ({
 vi.mock('../../services/backup.js', () => ({
   triggerBackupNow: vi.fn(),
   DEFAULT_BACKUP_RETENTION_COUNT: 30,
+  resolveRemoteConfig: vi.fn((r: unknown) => r ?? { type: 'none' }),
+}))
+
+vi.mock('../../services/remoteBackup.js', () => ({
+  testRemoteConnection: vi.fn(),
 }))
 
 vi.mock('../../lib/env.js', () => ({
@@ -36,7 +41,8 @@ import settingsRouter from '../../routes/settings.js'
 import { pool } from '../../db/pool.js'
 import { encrypt, decrypt } from '../../services/crypto.js'
 import { ldapAuth } from '../../services/ldap.js'
-import { triggerBackupNow } from '../../services/backup.js'
+import { triggerBackupNow, resolveRemoteConfig } from '../../services/backup.js'
+import { testRemoteConnection } from '../../services/remoteBackup.js'
 import { env } from '../../lib/env.js'
 
 const mockQuery   = vi.mocked(pool.query)
@@ -45,6 +51,8 @@ const mockEncrypt = vi.mocked(encrypt)
 const mockDecrypt = vi.mocked(decrypt)
 const mockLdapAuth = vi.mocked(ldapAuth)
 const mockTriggerBackupNow = vi.mocked(triggerBackupNow)
+const mockResolveRemoteConfig = vi.mocked(resolveRemoteConfig)
+const mockTestRemoteConnection = vi.mocked(testRemoteConnection)
 
 type RouteLayer = { route?: { path: string; methods: Record<string, boolean>; stack: { handle: (...args: unknown[]) => unknown }[] } }
 
@@ -461,19 +469,53 @@ describe('POST /api/settings/import', () => {
   })
 })
 
+const NONE_REMOTE = { type: 'none' }
+
 describe('GET/PUT /api/settings/backup-config', () => {
   it('GET returns defaults when unset', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] } as never)
     const res = fakeRes()
     await getHandler('/backup-config', 'get')({}, res, () => {})
-    expect(res.json).toHaveBeenCalledWith({ data: { path: null, schedule: 'off', last_backup_at: null, retention_count: 30 } })
+    expect(res.json).toHaveBeenCalledWith({ data: {
+      path: null, schedule: 'off', last_backup_at: null, retention_count: 30,
+      remote: NONE_REMOTE, last_remote_backup_at: null, last_remote_backup_error: null,
+    } })
   })
 
   it('GET falls back to the default retention_count when the stored row predates that field', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ value: { path: '/x', schedule: 'daily', last_backup_at: '2026-01-01' } }] } as never)
     const res = fakeRes()
     await getHandler('/backup-config', 'get')({}, res, () => {})
-    expect(res.json).toHaveBeenCalledWith({ data: { path: '/x', schedule: 'daily', last_backup_at: '2026-01-01', retention_count: 30 } })
+    expect(res.json).toHaveBeenCalledWith({ data: {
+      path: '/x', schedule: 'daily', last_backup_at: '2026-01-01', retention_count: 30,
+      remote: NONE_REMOTE, last_remote_backup_at: null, last_remote_backup_error: null,
+    } })
+  })
+
+  it('GET redacts an S3 remote config to a hasSecretAccessKey boolean', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ value: {
+      path: '/x', schedule: 'off',
+      remote: { type: 's3', bucket: 'b', accessKeyId: 'AKIA123', secretAccessKeyEnc: 'enc:shh', region: 'us-east-1' },
+      last_remote_backup_at: '2026-01-02', last_remote_backup_error: null,
+    } }] } as never)
+    const res = fakeRes()
+    await getHandler('/backup-config', 'get')({}, res, () => {})
+    expect(res.json).toHaveBeenCalledWith({ data: expect.objectContaining({
+      remote: { type: 's3', endpoint: null, region: 'us-east-1', bucket: 'b', prefix: null, accessKeyId: 'AKIA123', forcePathStyle: false, hasSecretAccessKey: true },
+      last_remote_backup_at: '2026-01-02',
+    }) })
+  })
+
+  it('GET redacts an SFTP remote config to hasPassword/hasPrivateKey booleans', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ value: {
+      path: '/x', schedule: 'off',
+      remote: { type: 'sftp', host: 'h', username: 'u', remotePath: '/r', passwordEnc: 'enc:pw' },
+    } }] } as never)
+    const res = fakeRes()
+    await getHandler('/backup-config', 'get')({}, res, () => {})
+    expect(res.json).toHaveBeenCalledWith({ data: expect.objectContaining({
+      remote: { type: 'sftp', host: 'h', port: null, username: 'u', remotePath: '/r', hasPassword: true, hasPrivateKey: false },
+    }) })
   })
 
   it('GET responds via serverError on a failure', async () => {
@@ -495,6 +537,12 @@ describe('GET/PUT /api/settings/backup-config', () => {
     expect(res.status).toHaveBeenCalledWith(400)
   })
 
+  it('PUT 400s on a remote body with an unrecognized type', async () => {
+    const res = fakeRes()
+    await getHandler('/backup-config', 'put')({ body: { path: '/x', schedule: 'off', remote: { type: 'ftp' } } }, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(400)
+  })
+
   it('PUT merges into any existing extra fields and stores, defaulting retention_count when never set', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ value: { path: '/old', schedule: 'off', last_backup_at: '2026-01-01' } }] } as never)
     mockQuery.mockResolvedValueOnce({ rows: [] } as never)
@@ -502,7 +550,9 @@ describe('GET/PUT /api/settings/backup-config', () => {
 
     await getHandler('/backup-config', 'put')({ body: { path: '/new', schedule: 'daily' } }, res, () => {})
 
-    expect(res.json).toHaveBeenCalledWith({ data: { path: '/new', schedule: 'daily', last_backup_at: '2026-01-01', retention_count: 30 } })
+    expect(res.json).toHaveBeenCalledWith({ data: expect.objectContaining({
+      path: '/new', schedule: 'daily', last_backup_at: '2026-01-01', retention_count: 30, remote: NONE_REMOTE,
+    }) })
   })
 
   it('PUT stores an explicit retention_count', async () => {
@@ -512,7 +562,7 @@ describe('GET/PUT /api/settings/backup-config', () => {
 
     await getHandler('/backup-config', 'put')({ body: { path: '/new', schedule: 'daily', retention_count: 5 } }, res, () => {})
 
-    expect(res.json).toHaveBeenCalledWith({ data: { path: '/new', schedule: 'daily', last_backup_at: null, retention_count: 5 } })
+    expect(res.json).toHaveBeenCalledWith({ data: expect.objectContaining({ path: '/new', schedule: 'daily', last_backup_at: null, retention_count: 5 }) })
   })
 
   it('PUT preserves the existing retention_count when the request omits it', async () => {
@@ -522,7 +572,75 @@ describe('GET/PUT /api/settings/backup-config', () => {
 
     await getHandler('/backup-config', 'put')({ body: { path: '/old', schedule: 'weekly' } }, res, () => {})
 
-    expect(res.json).toHaveBeenCalledWith({ data: { path: '/old', schedule: 'weekly', last_backup_at: null, retention_count: 5 } })
+    expect(res.json).toHaveBeenCalledWith({ data: expect.objectContaining({ path: '/old', schedule: 'weekly', last_backup_at: null, retention_count: 5 }) })
+  })
+
+  it('PUT encrypts a new S3 secret access key and stores it', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ value: { path: '/x', schedule: 'off' } }] } as never)
+    mockQuery.mockResolvedValueOnce({ rows: [] } as never)
+    const res = fakeRes()
+
+    await getHandler('/backup-config', 'put')({ body: {
+      path: '/x', schedule: 'off',
+      remote: { type: 's3', bucket: 'b', accessKeyId: 'AKIA123', secretAccessKey: 'shh' },
+    } }, res, () => {})
+
+    expect(mockEncrypt).toHaveBeenCalledWith('shh')
+    const [, params] = mockQuery.mock.calls[1]
+    const stored = JSON.parse((params as string[])[0])
+    expect(stored.remote.secretAccessKeyEnc).toBe('enc:shh')
+    expect(res.json).toHaveBeenCalledWith({ data: expect.objectContaining({ remote: expect.objectContaining({ type: 's3', hasSecretAccessKey: true }) }) })
+  })
+
+  it('PUT preserves the existing encrypted S3 secret when the request omits it', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ value: {
+      path: '/x', schedule: 'off',
+      remote: { type: 's3', bucket: 'old-bucket', accessKeyId: 'AKIAOLD', secretAccessKeyEnc: 'enc:old-secret' },
+    } }] } as never)
+    mockQuery.mockResolvedValueOnce({ rows: [] } as never)
+    const res = fakeRes()
+
+    await getHandler('/backup-config', 'put')({ body: {
+      path: '/x', schedule: 'off',
+      remote: { type: 's3', bucket: 'new-bucket', accessKeyId: 'AKIAOLD' },
+    } }, res, () => {})
+
+    expect(mockEncrypt).not.toHaveBeenCalled()
+    const [, params] = mockQuery.mock.calls[1]
+    const stored = JSON.parse((params as string[])[0])
+    expect(stored.remote.secretAccessKeyEnc).toBe('enc:old-secret')
+    expect(stored.remote.bucket).toBe('new-bucket')
+  })
+
+  it('PUT encrypts SFTP password and private key and stores them', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ value: { path: '/x', schedule: 'off' } }] } as never)
+    mockQuery.mockResolvedValueOnce({ rows: [] } as never)
+    const res = fakeRes()
+
+    await getHandler('/backup-config', 'put')({ body: {
+      path: '/x', schedule: 'off',
+      remote: { type: 'sftp', host: 'h', username: 'u', remotePath: '/r', password: 'pw', privateKey: 'key-data' },
+    } }, res, () => {})
+
+    const [, params] = mockQuery.mock.calls[1]
+    const stored = JSON.parse((params as string[])[0])
+    expect(stored.remote.passwordEnc).toBe('enc:pw')
+    expect(stored.remote.privateKeyEnc).toBe('enc:key-data')
+  })
+
+  it('PUT switches back to no remote destination', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ value: {
+      path: '/x', schedule: 'off',
+      remote: { type: 's3', bucket: 'b', accessKeyId: 'AKIA123', secretAccessKeyEnc: 'enc:shh' },
+    } }] } as never)
+    mockQuery.mockResolvedValueOnce({ rows: [] } as never)
+    const res = fakeRes()
+
+    await getHandler('/backup-config', 'put')({ body: { path: '/x', schedule: 'off', remote: { type: 'none' } } }, res, () => {})
+
+    const [, params] = mockQuery.mock.calls[1]
+    const stored = JSON.parse((params as string[])[0])
+    expect(stored.remote).toEqual({ type: 'none' })
   })
 
   it('PUT responds via serverError on a failure', async () => {
@@ -548,7 +666,8 @@ describe('POST /api/settings/backup-now', () => {
 
     await getHandler('/backup-now', 'post')({}, res, () => {})
 
-    expect(mockTriggerBackupNow).toHaveBeenCalledWith('/backups', 30)
+    expect(mockResolveRemoteConfig).toHaveBeenCalledWith(undefined)
+    expect(mockTriggerBackupNow).toHaveBeenCalledWith('/backups', 30, { type: 'none' })
     expect(res.json).toHaveBeenCalledWith({ data: { ok: true, path: '/backups' } })
   })
 
@@ -558,7 +677,18 @@ describe('POST /api/settings/backup-now', () => {
 
     await getHandler('/backup-now', 'post')({}, res, () => {})
 
-    expect(mockTriggerBackupNow).toHaveBeenCalledWith('/backups', 5)
+    expect(mockTriggerBackupNow).toHaveBeenCalledWith('/backups', 5, { type: 'none' })
+  })
+
+  it('resolves the stored remote config and passes it through to triggerBackupNow', async () => {
+    const rawRemote = { type: 's3', bucket: 'b', accessKeyId: 'AKIA123', secretAccessKeyEnc: 'enc:shh' }
+    mockQuery.mockResolvedValueOnce({ rows: [{ value: { path: '/backups', remote: rawRemote } }] } as never)
+    const res = fakeRes()
+
+    await getHandler('/backup-now', 'post')({}, res, () => {})
+
+    expect(mockResolveRemoteConfig).toHaveBeenCalledWith(rawRemote)
+    expect(mockTriggerBackupNow).toHaveBeenCalledWith('/backups', 30, rawRemote) // mock resolveRemoteConfig is an identity passthrough
   })
 
   it('responds via serverError when the backup fails', async () => {
@@ -569,6 +699,94 @@ describe('POST /api/settings/backup-now', () => {
     await getHandler('/backup-now', 'post')({}, res, () => {})
 
     expect(res.status).toHaveBeenCalledWith(500)
+  })
+})
+
+describe('POST /api/settings/backup-config/test-remote', () => {
+  it('400s on an invalid body', async () => {
+    const res = fakeRes()
+    await getHandler('/backup-config/test-remote', 'post')({ body: { type: 'ftp' } }, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(mockTestRemoteConnection).not.toHaveBeenCalled()
+  })
+
+  it('400s when type is none', async () => {
+    const res = fakeRes()
+    await getHandler('/backup-config/test-remote', 'post')({ body: { type: 'none' } }, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(mockTestRemoteConnection).not.toHaveBeenCalled()
+  })
+
+  it('tests an S3 config built entirely from the request body', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] } as never)
+    mockTestRemoteConnection.mockResolvedValueOnce(undefined)
+    const res = fakeRes()
+
+    await getHandler('/backup-config/test-remote', 'post')({
+      body: { type: 's3', bucket: 'b', accessKeyId: 'AKIA123', secretAccessKey: 'shh' },
+    }, res, () => {})
+
+    expect(mockTestRemoteConnection).toHaveBeenCalledWith(expect.objectContaining({ type: 's3', bucket: 'b', secretAccessKey: 'shh' }))
+    expect(res.json).toHaveBeenCalledWith({ data: { ok: true } })
+  })
+
+  it('falls back to the stored, decrypted S3 secret when the request omits it', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ value: {
+      remote: { type: 's3', bucket: 'b', accessKeyId: 'AKIA123', secretAccessKeyEnc: 'enc:stored-secret' },
+    } }] } as never)
+    mockTestRemoteConnection.mockResolvedValueOnce(undefined)
+    const res = fakeRes()
+
+    await getHandler('/backup-config/test-remote', 'post')({
+      body: { type: 's3', bucket: 'b', accessKeyId: 'AKIA123' },
+    }, res, () => {})
+
+    expect(mockDecrypt).toHaveBeenCalledWith('enc:stored-secret')
+    expect(mockTestRemoteConnection).toHaveBeenCalledWith(expect.objectContaining({ secretAccessKey: 'stored-secret' }))
+  })
+
+  it('does not fall back to a stored secret from a different remote type', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ value: {
+      remote: { type: 'sftp', host: 'h', username: 'u', remotePath: '/r', passwordEnc: 'enc:sftp-pw' },
+    } }] } as never)
+    mockTestRemoteConnection.mockResolvedValueOnce(undefined)
+    const res = fakeRes()
+
+    await getHandler('/backup-config/test-remote', 'post')({
+      body: { type: 's3', bucket: 'b', accessKeyId: 'AKIA123' },
+    }, res, () => {})
+
+    expect(mockDecrypt).not.toHaveBeenCalled()
+    expect(mockTestRemoteConnection).toHaveBeenCalledWith(expect.objectContaining({ secretAccessKey: '' }))
+  })
+
+  it('tests an SFTP config, falling back to the stored password and private key', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ value: {
+      remote: { type: 'sftp', host: 'old', username: 'u', remotePath: '/r', passwordEnc: 'enc:storedpw', privateKeyEnc: 'enc:storedkey' },
+    } }] } as never)
+    mockTestRemoteConnection.mockResolvedValueOnce(undefined)
+    const res = fakeRes()
+
+    await getHandler('/backup-config/test-remote', 'post')({
+      body: { type: 'sftp', host: 'new-host', username: 'u', remotePath: '/r' },
+    }, res, () => {})
+
+    expect(mockTestRemoteConnection).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'sftp', host: 'new-host', password: 'storedpw', privateKey: 'storedkey',
+    }))
+  })
+
+  it('responds 400 with the underlying error message when the connection test fails', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] } as never)
+    mockTestRemoteConnection.mockRejectedValueOnce(new Error('ENOTFOUND'))
+    const res = fakeRes()
+
+    await getHandler('/backup-config/test-remote', 'post')({
+      body: { type: 's3', bucket: 'b', accessKeyId: 'AKIA123', secretAccessKey: 'shh' },
+    }, res, () => {})
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({ error: 'ENOTFOUND' })
   })
 })
 

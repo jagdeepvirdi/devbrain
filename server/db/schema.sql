@@ -410,7 +410,7 @@ VALUES ('antigravity_scan_root', '{"scan_root": null}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
 INSERT INTO app_settings (key, value)
-VALUES ('backup_settings', '{"path": null, "schedule": "off", "last_backup_at": null, "retention_count": null}'::jsonb)
+VALUES ('backup_settings', '{"path": null, "schedule": "off", "last_backup_at": null, "retention_count": null, "remote": {"type": "none"}, "last_remote_backup_at": null, "last_remote_backup_error": null}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
 -- Phase 23: AI Enhancements — persistent explanation and summary fields

@@ -17,7 +17,19 @@ vi.mock('../../services/exporter.js', () => ({
   buildZipToStream: (archive: Archiver, projectIds: string[] | 'all') => buildZipToStreamMock(archive, projectIds),
 }))
 
-const { triggerBackupNow, startBackupScheduler, pruneOldBackups } = await import('../../services/backup.js')
+vi.mock('../../services/crypto.js', () => ({
+  decrypt: vi.fn((s: string) => s.replace('enc:', '')),
+}))
+
+const uploadBackupToRemoteMock = vi.fn()
+const pruneRemoteBackupsMock   = vi.fn()
+
+vi.mock('../../services/remoteBackup.js', () => ({
+  uploadBackupToRemote: (...args: unknown[]) => uploadBackupToRemoteMock(...args),
+  pruneRemoteBackups:   (...args: unknown[]) => pruneRemoteBackupsMock(...args),
+}))
+
+const { triggerBackupNow, startBackupScheduler, pruneOldBackups, resolveRemoteConfig } = await import('../../services/backup.js')
 const { pool } = await import('../../db/pool.js')
 
 const mockQuery = vi.mocked(pool.query)
@@ -259,6 +271,104 @@ describe('backup service', () => {
       // so the single oldest fixture should have been pruned.
       expect(remaining).toHaveLength(2)
       expect(remaining).not.toContain('devbrain-backup-2020-01-01.zip')
+    })
+  })
+
+  describe('resolveRemoteConfig', () => {
+    it('resolves null/undefined to type "none"', () => {
+      expect(resolveRemoteConfig(null)).toEqual({ type: 'none' })
+      expect(resolveRemoteConfig(undefined)).toEqual({ type: 'none' })
+    })
+
+    it('passes an explicit "none" through unchanged', () => {
+      expect(resolveRemoteConfig({ type: 'none' })).toEqual({ type: 'none' })
+    })
+
+    it('decrypts a stored S3 secret access key', () => {
+      const resolved = resolveRemoteConfig({
+        type: 's3', bucket: 'b', accessKeyId: 'AKIA123', secretAccessKeyEnc: 'enc:shh', region: 'us-east-1', forcePathStyle: true,
+      })
+      expect(resolved).toEqual({
+        type: 's3', endpoint: undefined, region: 'us-east-1', bucket: 'b', prefix: undefined,
+        accessKeyId: 'AKIA123', secretAccessKey: 'shh', forcePathStyle: true,
+      })
+    })
+
+    it('defaults an S3 config with no stored secret to an empty string', () => {
+      const resolved = resolveRemoteConfig({ type: 's3', bucket: 'b', accessKeyId: 'AKIA123' })
+      expect(resolved).toMatchObject({ type: 's3', secretAccessKey: '' })
+    })
+
+    it('decrypts a stored SFTP password and private key', () => {
+      const resolved = resolveRemoteConfig({
+        type: 'sftp', host: 'h', username: 'u', remotePath: '/r', passwordEnc: 'enc:pw', privateKeyEnc: 'enc:key',
+      })
+      expect(resolved).toEqual({ type: 'sftp', host: 'h', port: undefined, username: 'u', remotePath: '/r', password: 'pw', privateKey: 'key' })
+    })
+
+    it('leaves SFTP password/private key undefined when none are stored', () => {
+      const resolved = resolveRemoteConfig({ type: 'sftp', host: 'h', username: 'u', remotePath: '/r' })
+      expect(resolved).toMatchObject({ password: undefined, privateKey: undefined })
+    })
+  })
+
+  describe('triggerBackupNow remote handling', () => {
+    it('does not attempt a remote upload when remote is type "none"', async () => {
+      mockQuery.mockResolvedValue({ rows: [] } as never)
+      await triggerBackupNow(tmpRoot, 30, { type: 'none' })
+      expect(uploadBackupToRemoteMock).not.toHaveBeenCalled()
+      expect(pruneRemoteBackupsMock).not.toHaveBeenCalled()
+    })
+
+    it('uploads and prunes remotely, then records last_remote_backup_at, when a remote is configured', async () => {
+      mockQuery.mockResolvedValue({ rows: [] } as never)
+      const remote = { type: 's3' as const, bucket: 'b', accessKeyId: 'AKIA123', secretAccessKey: 'shh' }
+
+      await triggerBackupNow(tmpRoot, 5, remote)
+
+      expect(uploadBackupToRemoteMock).toHaveBeenCalledWith(
+        expect.stringContaining('devbrain-backup-'), expect.stringMatching(/^devbrain-backup-\d{4}-\d{2}-\d{2}\.zip$/), remote,
+      )
+      expect(pruneRemoteBackupsMock).toHaveBeenCalledWith(remote, 5)
+      const remoteStatusCall = mockQuery.mock.calls.find(([sql]) => (sql as string).includes('last_remote_backup_at'))
+      expect(remoteStatusCall).toBeDefined()
+    })
+
+    it('logs and records the error, without throwing, when the remote upload fails', async () => {
+      mockQuery.mockResolvedValue({ rows: [] } as never)
+      uploadBackupToRemoteMock.mockRejectedValueOnce(new Error('network unreachable'))
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const remote = { type: 'sftp' as const, host: 'h', username: 'u', remotePath: '/r' }
+
+      await expect(triggerBackupNow(tmpRoot, 30, remote)).resolves.toBeUndefined()
+
+      expect(errSpy).toHaveBeenCalledWith('  backup: remote upload failed:', 'network unreachable')
+      const errorStatusCall = mockQuery.mock.calls.find(([sql]) => (sql as string).includes('last_remote_backup_error'))
+      expect(errorStatusCall).toBeDefined()
+      // A failed remote upload must not also attempt to prune the remote side.
+      expect(pruneRemoteBackupsMock).not.toHaveBeenCalled()
+
+      errSpy.mockRestore()
+    })
+  })
+
+  describe('scheduled backup remote handling', () => {
+    it('resolves and uploads to the configured remote after a successful scheduled run', async () => {
+      vi.useFakeTimers()
+      const rawRemote = { type: 's3', bucket: 'b', accessKeyId: 'AKIA123', secretAccessKeyEnc: 'enc:shh' }
+      mockQuery.mockResolvedValueOnce({ rows: [{ value: { path: tmpRoot, schedule: 'daily', last_backup_at: null, remote: rawRemote } }] } as never)
+      mockQuery.mockResolvedValue({ rows: [] } as never) // writeLastBackupAt / writeRemoteBackupSuccess
+
+      startBackupScheduler()
+      await vi.advanceTimersByTimeAsync(30_000)
+      vi.useRealTimers()
+
+      await vi.waitFor(() => {
+        expect(uploadBackupToRemoteMock).toHaveBeenCalled()
+      }, { timeout: 3000, interval: 10 })
+
+      expect(uploadBackupToRemoteMock.mock.calls[0][2]).toEqual({ type: 's3', bucket: 'b', accessKeyId: 'AKIA123', secretAccessKey: 'shh', endpoint: undefined, region: undefined, prefix: undefined, forcePathStyle: false })
+      expect(pruneRemoteBackupsMock).toHaveBeenCalled()
     })
   })
 })
