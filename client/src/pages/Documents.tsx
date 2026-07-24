@@ -10,6 +10,12 @@ import { LinkedItems } from '../components/LinkedItems'
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
+// Code files (file_type 'code') live on the Codes page, not here — the
+// Documents filter UI doesn't even offer 'code' as an option. When the user
+// hasn't picked a type filter, explicitly request these non-code types so
+// code rows don't leak into the "all types" default view.
+const NON_CODE_FILE_TYPES = ['pdf', 'docx', 'md', 'txt', 'xlsx', 'url']
+
 const TYPE_STYLE: Record<string, { label: string; color: string; bg: string; border: string }> = {
   pdf:  { label: 'PDF',  color: '#F8A8A8', bg: 'rgba(240,90,90,.10)',  border: 'rgba(240,90,90,.25)'  },
   docx: { label: 'DOCX', color: '#93C5FD', bg: 'rgba(96,165,250,.10)',  border: 'rgba(96,165,250,.25)'  },
@@ -416,7 +422,7 @@ export function DocumentsPage() {
       const result = await documentsApi.list({
         projectId:  selectedId ?? undefined,
         projectIds: selectedId ? undefined : (filters.projectIds.length > 0 ? filters.projectIds : undefined),
-        fileType:   filters.fileType.length > 0 ? filters.fileType : undefined,
+        fileType:   filters.fileType.length > 0 ? filters.fileType : NON_CODE_FILE_TYPES,
         tags:       filters.tags.length > 0 ? filters.tags : undefined,
         component:  filters.component.length > 0 ? filters.component : undefined,
         dateFrom:   filters.dateFrom || undefined,
