@@ -21,6 +21,14 @@ A private developer knowledge base for organizing work artifacts across all acti
 - **Templates** — built-in Bug Report, Investigation, Deployment Runbook, and Postmortem templates; create custom templates scoped per-project.
 - **Multi-project** — top-bar project switcher; all views scope to the selected project or show a unified global view across all.
 
+### Code Tracking
+- **Codes tab** — track source files (`.ts`, `.py`, `.dart`, `.sql`, and 20+ other languages) as their own tracked type, separate from Documents; language-aware chunking via tree-sitter for embedding and search.
+- **AI explain & diagrams** — one-click AI explanation of any tracked code file, plus an AI-generated Mermaid diagram of its functions/classes and how they call each other.
+- **Staleness detection** — explanations and diagrams are hash-stamped against the file's content; re-uploading a changed file flags them stale instead of silently going out of date.
+- **Component overview** — generate one combined architecture doc from every code file tagged to the same component.
+- **Duplicate detection** — two-phase (embedding shortlist + line-similarity scoring) scan for near-duplicate code files across a project.
+- **Links Graph View** — force-directed visualization of every cross-entity link (docs, issues, commands, releases, runbooks, code) as a companion to the chip-list Linked Items view.
+
 ### AI (100% local via Ollama — zero cost)
 - **RAG document Q&A** — `mistral:7b` answers questions using only your documents; cites sources.
 - **Auto-tagging** — `gemma3:4b` suggests tags on upload and issue creation.
@@ -57,6 +65,10 @@ A private developer knowledge base for organizing work artifacts across all acti
 - **Multi-select** — checkbox column on Issues, Documents, and Commands.
 - **Floating action bar** — bulk tag, status change, re-embed, favorite, or delete.
 - **Triage view** — dedicated Issues tab showing stale and high-priority open items sorted by urgency.
+
+### Dashboard & Analytics
+- **Issue Throughput** — per-project weekly opened-vs-resolved bar chart over a 12-week window.
+- **Embedding Health Trend** — 30-day trend of pending/failed embedding counts, backed by an hourly snapshot scheduler — surfaces the kind of Ollama GPU-thrashing regression documented in `TASKS.md`'s Known Issues before it silently piles up.
 
 ### Backups
 - **Scheduled local backups** — daily or weekly, with automatic pruning to a configurable retention count (default: keep the last 30).
@@ -201,8 +213,8 @@ devbrain/
 ├── client/                   # React + Vite frontend
 │   ├── src/
 │   │   ├── components/       # issues, docs, commands, search, releases, notifications
-│   │   ├── pages/            # Dashboard, Documents, Issues, Commands, Releases,
-│   │   │                     # Runbooks, Settings, NotificationLog
+│   │   ├── pages/            # Dashboard, Documents, Codes, Issues, Commands, Releases,
+│   │   │                     # Runbooks, Graph, Settings, NotificationLog
 │   │   └── lib/              # api.ts, ai.ts, streaming.ts
 │   └── e2e/                  # Playwright end-to-end tests
 ├── server/                   # Express + TypeScript backend
