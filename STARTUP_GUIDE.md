@@ -53,6 +53,7 @@ Minimum required changes in `server/.env`:
 | Variable | What to set |
 |----------|------------|
 | `JWT_SECRET` | Any 32+ char random string. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `ENCRYPTION_KEY` | Any 32+ char random string, **different** from `JWT_SECRET`. Encrypts stored secrets (LDAP/S3/SFTP/integration credentials) at rest — always required, dev and prod. |
 | `AUTH_PASSWORD` | Required in **prod** mode. Leave blank in dev to skip the login gate. |
 
 ### First-time Ollama model pull
@@ -169,7 +170,7 @@ Every `start` command runs these prechecks and steps in order.
 
 | Step | What happens |
 |------|-------------|
-| **Env check** | Fails if `server/.env` is missing. Warns if `JWT_SECRET` is still the dev default. **Fails** if `AUTH_PASSWORD` is not set. |
+| **Env check** | Fails if `server/.env` is missing. Warns if `JWT_SECRET` or `ENCRYPTION_KEY` is still a default/placeholder value. **Fails** if `ENCRYPTION_KEY` or `AUTH_PASSWORD` is not set. |
 | **Build** | Runs `tsc` for the server, then `vite build` for the client. Copies `client/dist` → `server/public`. Skipped with `-SkipBuild` / `--skip-build` (verifies artifacts exist first). |
 | **Server** | Opens `npm run start` (compiled `node dist/index.js` on `:3001`). Client is served as static files from `server/public`. |
 

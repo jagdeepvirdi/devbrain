@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest'
 // Mock env before the module loads
 vi.mock('../../lib/env.js', () => ({
   env: {
-    JWT_SECRET: 'test-secret-key-32-chars-long-at-least',
+    ENCRYPTION_KEY: 'test-encryption-key-32-chars-long-at-least',
   },
 }))
 

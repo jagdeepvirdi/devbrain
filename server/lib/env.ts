@@ -6,6 +6,12 @@ const schema = z.object({
   OLLAMA_CHAT_MODEL:  z.string().default('mistral'),
   PORT:               z.coerce.number().int().positive().default(3001),
   JWT_SECRET:         z.string().min(16, 'JWT_SECRET must be at least 16 characters'),
+  // Separate from JWT_SECRET on purpose: this is the root key for encrypting stored secrets
+  // (LDAP bind password, S3/SFTP credentials, integration tokens) at rest. Sharing one secret
+  // for both session signing and encryption-at-rest means a leaked JWT_SECRET also decrypts
+  // every stored credential, and rotating JWT_SECRET (e.g. to force logout) would silently
+  // break decryption of everything else.
+  ENCRYPTION_KEY:     z.string().min(16, 'ENCRYPTION_KEY must be at least 16 characters'),
   AUTH_PASSWORD:      z.string().optional(),
   AI_PROVIDER:        z.enum(['ollama', 'claude', 'gemini']).default('ollama'),
   ANTHROPIC_API_KEY:  z.string().optional(),

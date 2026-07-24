@@ -111,13 +111,14 @@ A private developer knowledge base for organizing work artifacts across all acti
 git clone https://github.com/jagdeepvirdi/devbrain.git
 cd devbrain
 cp .env.example .env
-cp .env.example server/.env   # edit server/.env — set AUTH_PASSWORD and JWT_SECRET
+cp .env.example server/.env   # edit server/.env — set AUTH_PASSWORD, JWT_SECRET, ENCRYPTION_KEY
 ```
 
 Edit `server/.env` at minimum:
 
 ```env
-JWT_SECRET=<random 32-char string>   # openssl rand -base64 32
+JWT_SECRET=<random 32-char string>       # openssl rand -base64 32
+ENCRYPTION_KEY=<a different random 32-char string>   # openssl rand -base64 32
 AUTH_PASSWORD=<your login password>
 ```
 
@@ -159,7 +160,8 @@ Log in with the `AUTH_PASSWORD` you set in `server/.env`.
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama API base URL |
 | `OLLAMA_CHAT_MODEL` | `mistral` | Model used for RAG chat (Ollama provider) |
 | `PORT` | `3001` | Express server port |
-| `JWT_SECRET` | — | **Required** — min 32 chars |
+| `JWT_SECRET` | — | **Required** — min 32 chars, signs session tokens |
+| `ENCRYPTION_KEY` | — | **Required** — min 32 chars, encrypts stored secrets at rest (LDAP/S3/SFTP/integration credentials); keep distinct from `JWT_SECRET` |
 | `AUTH_PASSWORD` | — | Login password (required in production) |
 | `AI_PROVIDER` | `ollama` | AI backend: `ollama` \| `claude` \| `gemini` |
 | `ANTHROPIC_API_KEY` | — | Required when `AI_PROVIDER=claude` |

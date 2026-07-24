@@ -5,6 +5,7 @@ import express      from 'express'
 import cors         from 'cors'
 import cookieParser from 'cookie-parser'
 import rateLimit    from 'express-rate-limit'
+import helmet       from 'helmet'
 import path         from 'path'
 import { fileURLToPath } from 'url'
 import swaggerUi from 'swagger-ui-express'
@@ -35,6 +36,31 @@ if (env.FORCE_HTTPS) {
 app.use(cors())
 app.use(cookieParser())
 app.use(express.json({ limit: '50mb' }))
+
+// ── Security headers ──────────────────────────────────────────────────────
+// CSP tuned for what this app actually does: Google Fonts (client/index.html),
+// inline `style={{}}` attributes used throughout the React client, and
+// Vite/vite-plugin-pwa's same-origin script tags. Deliberately skips /api/docs —
+// swagger-ui-express's bundled UI needs a looser policy than the rest of the app.
+const cspMiddleware = helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc:     ["'self'"],
+      scriptSrc:      ["'self'"],
+      styleSrc:       ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      fontSrc:        ["'self'", 'https://fonts.gstatic.com'],
+      imgSrc:         ["'self'", 'data:', 'blob:'],
+      connectSrc:     ["'self'"],
+      objectSrc:      ["'none'"],
+      frameAncestors: ["'none'"],
+      baseUri:        ["'self'"],
+    },
+  },
+})
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/docs')) { next(); return }
+  cspMiddleware(req, res, next)
+})
 
 // ── Health check ──────────────────────────────────────────────────────────
 
@@ -78,6 +104,23 @@ app.use('/api/notify', notifyRouter)
 
 import { requireAuth } from './middleware/auth.js'
 app.use('/api', requireAuth)
+
+// ── Baseline rate limit for every authenticated route ─────────────────────
+// Previously only ~9 hand-picked AI/mutation endpoints were limited at all;
+// everything else (issues/commands/releases/runbooks/projects/users CRUD) had
+// no ceiling whatsoever. This applies a generous per-user baseline across the
+// board; mutationLimiter below layers a tighter ceiling on top of it for the
+// AI-heavy routes specifically.
+const apiLimiter = rateLimit({
+  windowMs:        60 * 1000,  // 1 minute
+  max:             300,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  handler: (_req, res) => {
+    res.status(429).json({ error: 'Too many requests — slow down' })
+  },
+})
+app.use('/api', apiLimiter)
 
 // ── Rate limiting for AI / mutation-heavy endpoints ───────────────────────
 

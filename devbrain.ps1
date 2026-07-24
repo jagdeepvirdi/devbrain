@@ -100,6 +100,13 @@ function Assert-ProdEnv {
         Warn "JWT_SECRET is still the dev default - change it before exposing to a network"
         Write-Host "    Generate: node -e `"console.log(require('crypto').randomBytes(32).toString('hex'))`"" -ForegroundColor DarkGray
     }
+    if ($env -match "ENCRYPTION_KEY\s*=\s*replace-with") {
+        Warn "ENCRYPTION_KEY is still the example placeholder - change it before exposing to a network"
+        Write-Host "    Generate: node -e `"console.log(require('crypto').randomBytes(32).toString('hex'))`"" -ForegroundColor DarkGray
+    }
+    if ($env -notmatch "ENCRYPTION_KEY\s*=\s*.+") {
+        Fail "ENCRYPTION_KEY not set in server/.env`n    Add: ENCRYPTION_KEY=<32+ char random string>"
+    }
     if ($env -notmatch "AUTH_PASSWORD\s*=\s*.+") {
         Fail "AUTH_PASSWORD not set in server/.env`n    Add: AUTH_PASSWORD=your-strong-password"
     }

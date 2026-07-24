@@ -8,6 +8,7 @@ export default defineConfig({
     env: {
       DATABASE_URL:      'postgresql://test:test@localhost:5432/test',
       JWT_SECRET:        'test-secret-at-least-16-chars!!',
+      ENCRYPTION_KEY:    'test-encryption-key-16-chars!!!',
       OLLAMA_URL:        'http://localhost:11434',
       OLLAMA_CHAT_MODEL: 'mistral',
       AI_PROVIDER:       'ollama',

@@ -30,7 +30,7 @@ docker exec -it devbrain-ollama-1 ollama pull nomic-embed-text
 
 # 4. Configure environment
 cp .env.example .env
-# Edit .env — set JWT_SECRET to any 32+ character random string
+# Edit .env — set JWT_SECRET and ENCRYPTION_KEY to different 32+ character random strings
 
 # 5. Start dev servers (two terminals)
 cd server && npm run dev
@@ -109,6 +109,7 @@ See `.env.example` for the full list. Required variables:
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string |
 | `JWT_SECRET` | ≥32 character secret for signing tokens |
+| `ENCRYPTION_KEY` | ≥32 character secret for encrypting stored credentials at rest — must differ from `JWT_SECRET` |
 | `OLLAMA_URL` | Ollama base URL (default: `http://localhost:11434`) |
 
 Optional:

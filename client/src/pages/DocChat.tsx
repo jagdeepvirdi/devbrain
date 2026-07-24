@@ -73,8 +73,20 @@ function renderMarkdownLite(text: string): React.ReactNode[] {
   })
 }
 
-function inlineMd(text: string): string {
+// Escapes raw text before any markdown-to-HTML substitution runs — this text is the AI's
+// RAG answer, grounded in uploaded/URL-imported document content the model may echo back
+// verbatim, so it must never reach dangerouslySetInnerHTML unescaped.
+function escapeHtml(text: string): string {
   return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function inlineMd(text: string): string {
+  return escapeHtml(text)
     .replace(/`([^`]+)`/g,   '<code style="background:var(--bg);padding:1px 4px;border-radius:3px;font-family:var(--font-mono);font-size:11px">$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*]+)\*/g,     '<em>$1</em>')

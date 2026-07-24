@@ -31,6 +31,7 @@ services:
       OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-mistral}
       PORT:              3001
       JWT_SECRET:        ${JWT_SECRET:?JWT_SECRET must be set}
+      ENCRYPTION_KEY:    ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set}
       AUTH_PASSWORD:     ${AUTH_PASSWORD:?AUTH_PASSWORD must be set in production}
       AI_PROVIDER:       ${AI_PROVIDER:-ollama}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -38,7 +39,6 @@ services:
       GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-2.0-flash}
       FORCE_HTTPS:       true
       NODE_ENV:          production
-      ENCRYPT_KEY:       ${ENCRYPT_KEY:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     deploy:

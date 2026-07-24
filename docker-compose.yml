@@ -38,6 +38,7 @@ services:
       OLLAMA_CHAT_MODEL: mistral
       PORT:              3001
       JWT_SECRET:        ${JWT_SECRET:?JWT_SECRET must be set}
+      ENCRYPTION_KEY:    ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set}
       AUTH_PASSWORD:     ${AUTH_PASSWORD:-}
       AI_PROVIDER:       ${AI_PROVIDER:-ollama}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

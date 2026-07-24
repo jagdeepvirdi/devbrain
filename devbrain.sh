@@ -103,6 +103,12 @@ assert_prod_env() {
         warn "JWT_SECRET is still the dev default — change it before exposing to a network"
         printf "    Generate: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"\n"
     fi
+    if grep -qE "ENCRYPTION_KEY\s*=\s*replace-with" "$env_file"; then
+        warn "ENCRYPTION_KEY is still the example placeholder — change it before exposing to a network"
+        printf "    Generate: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"\n"
+    fi
+    grep -qE "ENCRYPTION_KEY\s*=\s*.+" "$env_file" || \
+        fail "ENCRYPTION_KEY not set in server/.env — add: ENCRYPTION_KEY=\$(openssl rand -base64 32)"
     grep -qE "AUTH_PASSWORD\s*=\s*.+" "$env_file" || \
         fail "AUTH_PASSWORD not set in server/.env — add: AUTH_PASSWORD=your-strong-password"
     ok "Environment checks passed"

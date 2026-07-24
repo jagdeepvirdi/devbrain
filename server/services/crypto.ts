@@ -1,9 +1,10 @@
 import crypto from 'node:crypto'
 import { env } from '../lib/env.js'
 
-// AES-256-GCM encryption — key derived from JWT_SECRET
+// AES-256-GCM encryption — key derived from ENCRYPTION_KEY, a secret dedicated to this
+// purpose and kept separate from JWT_SECRET (see lib/env.ts for why).
 function key(): Buffer {
-  return crypto.createHash('sha256').update(env.JWT_SECRET).digest()
+  return crypto.createHash('sha256').update(env.ENCRYPTION_KEY).digest()
 }
 
 export function encrypt(plaintext: string): string {
