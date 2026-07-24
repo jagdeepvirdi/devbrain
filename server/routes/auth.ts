@@ -1,6 +1,6 @@
 import { Router }     from 'express'
 import jwt             from 'jsonwebtoken'
-import bcrypt          from 'bcryptjs'
+import bcrypt          from 'bcrypt'
 import crypto          from 'node:crypto'
 import rateLimit       from 'express-rate-limit'
 import { z }           from 'zod'

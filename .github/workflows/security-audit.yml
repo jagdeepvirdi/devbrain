@@ -1,0 +1,50 @@
+name: Security Audit
+
+# Runs separately from ci.yml (not on every push/PR) so it can't block merges on
+# already-known, currently-unfixable transitive vulnerabilities (see the accepted-risk
+# note below) — it exists purely to surface *new* high/critical advisories as they land.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Mondays 06:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  audit-server:
+    name: npm audit — server
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      # Known accepted-risk findings as of 2026-07-24 (no fix available upstream):
+      # adm-zip (via @huggingface/transformers -> onnxruntime-node), sharp (same chain),
+      # xlsx. Re-evaluate if this job starts failing on something new.
+      - run: npm audit --audit-level=high
+
+  audit-client:
+    name: npm audit — client
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci
+      # Known accepted-risk finding as of 2026-07-24: react-router-dom's moderate open-
+      # redirect advisories require a v6 -> v7 major bump (breaking API changes), not
+      # done as a side effect of this audit job. Re-evaluate if this job starts failing
+      # on something new, or when the v7 migration is scheduled separately.
+      - run: npm audit --audit-level=high

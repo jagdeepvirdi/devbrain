@@ -19,6 +19,12 @@ const schema = z.object({
   GEMINI_CHAT_MODEL:  z.string().default('gemini-2.0-flash'),
   NODE_ENV:           z.enum(['development', 'production', 'test']).default('development'),
   FORCE_HTTPS:        z.enum(['true', 'false']).default('false').transform(v => v === 'true'),
+  // Comma-separated allowlist of origins allowed to call the API cross-origin (e.g.
+  // "https://app.example.com,https://admin.example.com"). Unset = same-origin only in
+  // production (the client is served from this same Express process there anyway);
+  // in development, unset falls back to reflecting the request origin so the Vite dev
+  // server (a different port) keeps working without extra config.
+  CORS_ORIGINS:       z.string().optional().transform(v => v ? v.split(',').map(s => s.trim()).filter(Boolean) : undefined),
   // LDAP — all optional; set LDAP_URL to activate
   LDAP_URL:           z.string().optional(),
   LDAP_BIND_DN:       z.string().optional(),

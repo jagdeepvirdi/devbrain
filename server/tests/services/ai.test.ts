@@ -88,6 +88,62 @@ describe('aiEmbed', () => {
   })
 })
 
+// ── Ollama concurrency queue ──────────────────────────────────────────────────
+// Guards against the documented GPU-thrashing failure mode (TASKS.md Known Issues,
+// 2026-07-15): concurrent Ollama calls must run one at a time, not in parallel.
+
+describe('Ollama concurrency queue', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('serializes a concurrent chat + embed call instead of firing them in parallel', async () => {
+    const callOrder: string[] = []
+    let resolveChat: (() => void) | undefined
+
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith('/api/chat')) {
+        callOrder.push('start:chat')
+        return new Promise(resolve => {
+          resolveChat = () => {
+            callOrder.push('end:chat')
+            resolve(makeJsonResponse({ message: { content: 'chat-done' } }))
+          }
+        })
+      }
+      callOrder.push('start:embed')
+      callOrder.push('end:embed')
+      return Promise.resolve(makeJsonResponse({ embedding: [0.1] }))
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const chatPromise  = aiChat('prompt', 'system')
+    const embedPromise = aiEmbed('text')
+
+    // Flush pending microtasks — the embed call must NOT have started yet,
+    // because it's queued behind the still-unresolved chat call.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(callOrder).toEqual(['start:chat'])
+
+    resolveChat!()
+    await chatPromise
+    await embedPromise
+
+    expect(callOrder).toEqual(['start:chat', 'end:chat', 'start:embed', 'end:embed'])
+  })
+
+  it('does not wedge the queue when a queued call throws', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(makeJsonResponse('boom', false, 500))
+      .mockResolvedValueOnce(makeJsonResponse({ embedding: [0.5] })))
+
+    await expect(aiChat('p', 's')).rejects.toThrow(/Ollama chat error 500/)
+
+    // A call queued after a failed one must still run, not hang forever.
+    const result = await aiEmbed('text')
+    expect(result).toEqual([0.5])
+  })
+})
+
 // ── aiChatStream (Ollama path) ────────────────────────────────────────────────
 
 describe('aiChatStream — Ollama path', () => {

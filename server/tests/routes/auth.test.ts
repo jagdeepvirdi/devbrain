@@ -24,7 +24,7 @@ vi.mock('../../middleware/auth.js', () => ({
   requireRole: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }))
 
-vi.mock('bcryptjs', () => ({
+vi.mock('bcrypt', () => ({
   default: { hash: vi.fn(), compare: vi.fn(), hashSync: vi.fn(() => 'dummy-hash') },
 }))
 
@@ -38,7 +38,7 @@ import { decrypt } from '../../services/crypto.js'
 import { ldapAuth } from '../../services/ldap.js'
 import { logAudit } from '../../services/audit.js'
 import { tryApiToken } from '../../middleware/auth.js'
-import bcrypt from 'bcryptjs'
+import bcrypt from 'bcrypt'
 import { env } from '../../lib/env.js'
 import type { Mock } from 'vitest'
 

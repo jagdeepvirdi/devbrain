@@ -597,6 +597,15 @@ See design exported from Claude Design. Key tokens:
 - No Jira/Linear sync (v2)
 - No real-time collaboration
 - Claude API never auto-called — manual opt-in only
+- **Not designed for concurrent multi-tenant SaaS scale.** The default AI backend is one
+  Ollama instance on one consumer GPU (see Hardware Configuration) — this is explicitly
+  self-hosted, single-tenant software for a person or small team, not a product meant to
+  serve many simultaneous unrelated users. `services/ai.ts` queues Ollama calls so
+  concurrent requests degrade to slower-but-correct rather than thrashing the GPU (see
+  Known Issues in `TASKS.md`, 2026-07-15), but that's a stability mitigation, not a
+  scaling story. Serving real concurrent load would mean routing to a dedicated inference
+  backend (vLLM/TGI on real GPU(s)) or a paid API tier (`AI_PROVIDER=claude`/`gemini`) —
+  neither of which changes the cost model described above.
 
 ## Claude Code Integration
 

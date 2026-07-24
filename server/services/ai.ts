@@ -8,6 +8,25 @@ const OLLAMA_BASE = env.OLLAMA_URL
 const CHAT_MODEL  = env.OLLAMA_CHAT_MODEL
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta'
 
+// ── Ollama concurrency limiter ───────────────────────────────────────────
+// Ollama here runs on one consumer GPU (see CLAUDE.md's hardware section), which
+// cannot handle truly concurrent requests — interleaved chat+embed calls have been
+// observed to force repeated model swaps and degrade into a hung/thrashing GPU state
+// (TASKS.md Known Issues, 2026-07-15). This serializes every Ollama call — chat,
+// embed, and streaming alike — through one queue so concurrent requests wait their
+// turn instead of all hitting the GPU at once. Claude/Gemini calls (remote APIs, no
+// local GPU contention) are never queued.
+let ollamaQueue: Promise<unknown> = Promise.resolve()
+
+function withOllamaQueue<T>(fn: () => Promise<T>): Promise<T> {
+  const run = ollamaQueue.then(fn, fn)
+  // Chain against a version that swallows rejections, so one failed call doesn't
+  // wedge the queue for everyone waiting behind it. The real result/error still
+  // propagates to this call's own caller via `run`.
+  ollamaQueue = run.then(() => undefined, () => undefined)
+  return run
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────
 
 type Message = { role: 'system' | 'user' | 'assistant'; content: string }
@@ -80,32 +99,34 @@ export async function aiChat(prompt: string, system: string): Promise<string> {
   }
 
   // Default: Ollama (local, free)
-  // 120s, not 30s — non-streaming generation time scales with prompt size
-  // (e.g. component-overview combines several files' outlines into one
-  // prompt) and this is a 7B model on a 6GB laptop GPU; 30s was tight even
-  // for single-file prompts and was observed timing out in practice on a
-  // multi-file one. Matches the streaming path's existing 120s below.
-  const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(120_000),
-    body: JSON.stringify({
-      model:    CHAT_MODEL,
-      stream:   false,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user',   content: prompt },
-      ],
-    }),
+  return withOllamaQueue(async () => {
+    // 120s, not 30s — non-streaming generation time scales with prompt size
+    // (e.g. component-overview combines several files' outlines into one
+    // prompt) and this is a 7B model on a 6GB laptop GPU; 30s was tight even
+    // for single-file prompts and was observed timing out in practice on a
+    // multi-file one. Matches the streaming path's existing 120s below.
+    const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(120_000),
+      body: JSON.stringify({
+        model:    CHAT_MODEL,
+        stream:   false,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user',   content: prompt },
+        ],
+      }),
+    })
+
+    if (!res.ok) {
+      const body = await res.text()
+      throw new Error(`Ollama chat error ${res.status}: ${body}`)
+    }
+
+    const data = await res.json() as { message: { content: string } }
+    return data.message.content
   })
-
-  if (!res.ok) {
-    const body = await res.text()
-    throw new Error(`Ollama chat error ${res.status}: ${body}`)
-  }
-
-  const data = await res.json() as { message: { content: string } }
-  return data.message.content
 }
 
 // ── aiEmbed ───────────────────────────────────────────────────────────────
@@ -118,23 +139,25 @@ export async function aiChat(prompt: string, system: string): Promise<string> {
  * Returns a 768-dimension float array suitable for pgvector storage.
  */
 export async function aiEmbed(text: string): Promise<number[]> {
-  const res = await fetch(`${OLLAMA_BASE}/api/embeddings`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(30_000),
-    body: JSON.stringify({
-      model:  'nomic-embed-text',
-      prompt: text,
-    }),
+  return withOllamaQueue(async () => {
+    const res = await fetch(`${OLLAMA_BASE}/api/embeddings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(30_000),
+      body: JSON.stringify({
+        model:  'nomic-embed-text',
+        prompt: text,
+      }),
+    })
+
+    if (!res.ok) {
+      const body = await res.text()
+      throw new Error(`Ollama embed error ${res.status}: ${body}`)
+    }
+
+    const data = await res.json() as { embedding: number[] }
+    return data.embedding
   })
-
-  if (!res.ok) {
-    const body = await res.text()
-    throw new Error(`Ollama embed error ${res.status}: ${body}`)
-  }
-
-  const data = await res.json() as { embedding: number[] }
-  return data.embedding
 }
 
 // ── aiChatStream ──────────────────────────────────────────────────────────
@@ -244,40 +267,42 @@ export async function aiChatStream(
   }
 
   // Default: Ollama streaming
-  const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(120_000),  // streaming can legitimately take longer
-    body: JSON.stringify({
-      model:    CHAT_MODEL,
-      stream:   true,
-      messages,
-    }),
-  })
+  return withOllamaQueue(async () => {
+    const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(120_000),  // streaming can legitimately take longer
+      body: JSON.stringify({
+        model:    CHAT_MODEL,
+        stream:   true,
+        messages,
+      }),
+    })
 
-  if (!res.ok) {
-    const body = await res.text()
-    throw new Error(`Ollama stream error ${res.status}: ${body}`)
-  }
+    if (!res.ok) {
+      const body = await res.text()
+      throw new Error(`Ollama stream error ${res.status}: ${body}`)
+    }
 
-  const reader  = res.body!.getReader()
-  const decoder = new TextDecoder()
+    const reader  = res.body!.getReader()
+    const decoder = new TextDecoder()
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    const lines = decoder.decode(value, { stream: true }).split('\n').filter(Boolean)
-    for (const line of lines) {
-      try {
-        const json = JSON.parse(line) as { message?: { content?: string }; done?: boolean }
-        if (json.message?.content) {
-          onChunk(json.message.content)
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const lines = decoder.decode(value, { stream: true }).split('\n').filter(Boolean)
+      for (const line of lines) {
+        try {
+          const json = JSON.parse(line) as { message?: { content?: string }; done?: boolean }
+          if (json.message?.content) {
+            onChunk(json.message.content)
+          }
+        } catch {
+          // incomplete JSON line — skip
         }
-      } catch {
-        // incomplete JSON line — skip
       }
     }
-  }
+  })
 }
 
 // ── ollamaReady ───────────────────────────────────────────────────────────

@@ -2,6 +2,8 @@
 
 A private developer knowledge base for organizing work artifacts across all active projects. Supports document Q&A via RAG, issue investigation workflows, a commands/snippets library, release notes, and runbooks — all powered by local AI with zero API cost.
 
+**Scope**: this is self-hosted software for a person or small team, not multi-tenant SaaS. The default AI backend is one Ollama instance on one machine's GPU — fine for personal/team use, not built to serve many simultaneous unrelated users. See [Performance](#performance-rtx-2060-max-q-6gb-vram) below and `CLAUDE.md`'s Non-Goals for details.
+
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 ![React](https://img.shields.io/badge/React-Vite-61DAFB?logo=react&logoColor=black)
 ![Ollama](https://img.shields.io/badge/AI-Ollama%20%28local%29-000000?logo=ollama&logoColor=white)
@@ -162,6 +164,7 @@ Log in with the `AUTH_PASSWORD` you set in `server/.env`.
 | `PORT` | `3001` | Express server port |
 | `JWT_SECRET` | — | **Required** — min 32 chars, signs session tokens |
 | `ENCRYPTION_KEY` | — | **Required** — min 32 chars, encrypts stored secrets at rest (LDAP/S3/SFTP/integration credentials); keep distinct from `JWT_SECRET` |
+| `CORS_ORIGINS` | unset | Comma-separated cross-origin allowlist. Unset = same-origin only in production, permissive in dev |
 | `AUTH_PASSWORD` | — | Login password (required in production) |
 | `AI_PROVIDER` | `ollama` | AI backend: `ollama` \| `claude` \| `gemini` |
 | `ANTHROPIC_API_KEY` | — | Required when `AI_PROVIDER=claude` |

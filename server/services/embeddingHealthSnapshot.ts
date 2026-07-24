@@ -1,4 +1,5 @@
 import { pool } from '../db/pool.js'
+import { withAdvisoryLock, LOCK_KEYS } from '../lib/advisoryLock.js'
 
 const RETENTION_DAYS = 30
 
@@ -34,11 +35,17 @@ async function tick(): Promise<void> {
   }
 }
 
+function runLockedTick(): Promise<void> {
+  // Advisory-locked so only one server instance captures (and prunes) a snapshot per
+  // tick — otherwise 2+ instances would insert duplicate rows for the same hour.
+  return withAdvisoryLock(LOCK_KEYS.embeddingSnapshot, tick)
+}
+
 export function startEmbeddingHealthScheduler(): void {
   // Run once after 30s delay (let DB settle on startup), then every hour —
   // same shape as services/backup.ts's startBackupScheduler().
   setTimeout(() => {
-    tick().catch(() => {})
-    setInterval(() => { tick().catch(() => {}) }, 60 * 60 * 1000)
+    runLockedTick().catch(() => {})
+    setInterval(() => { runLockedTick().catch(() => {}) }, 60 * 60 * 1000)
   }, 30_000)
 }

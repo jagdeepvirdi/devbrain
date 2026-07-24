@@ -1,12 +1,26 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { promises as fs } from 'node:fs'
 import os   from 'node:os'
 import path from 'node:path'
 import type { Response } from 'express'
 
+// The dedicated LISTEN client (see startListening in tasks-watcher.ts) is a real
+// Postgres connection in production; here it's a fake EventEmitter the tests can
+// manually .emit('notification', ...) on to simulate what Postgres would deliver
+// after publishTaskUpdate's pg_notify — there's no real pub/sub to round-trip
+// through against a mocked pool.
+class FakeListenClient extends EventEmitter {
+  query   = vi.fn().mockResolvedValue({ rows: [] })
+  release = vi.fn()
+}
+const listenClient = new FakeListenClient()
+
 vi.mock('../../db/pool.js', () => ({
-  pool: { query: vi.fn() },
+  pool: {
+    query:   vi.fn(),
+    connect: vi.fn().mockResolvedValue(listenClient),
+  },
 }))
 
 class FakeWatcher extends EventEmitter {
@@ -18,10 +32,18 @@ vi.mock('chokidar', () => ({
   default: { watch: (...args: unknown[]) => mockWatch(...args) },
 }))
 
-const { readTaskTree, subscribe, refreshProjectWatch, initTasksWatcher } = await import('../../services/tasks-watcher.js')
+const { readTaskTree, subscribe, refreshProjectWatch, initTasksWatcher, startListening, stopListening } = await import('../../services/tasks-watcher.js')
 const { pool } = await import('../../db/pool.js')
 
 const mockQuery = vi.mocked(pool.query)
+
+// Simulates the real round-trip: production code calls publishTaskUpdate (INSERT +
+// pg_notify), Postgres delivers the notification to every LISTENing instance, which
+// re-reads task_tree_cache and broadcasts. Here: manually emit on the fake listen
+// client, backed by a canned row for whatever project id the SELECT asks for.
+function fireNotification(projectId: string) {
+  listenClient.emit('notification', { channel: 'tasks_update', payload: projectId })
+}
 
 async function write(root: string, relPath: string, content: string) {
   const full = path.join(root, relPath)
@@ -121,8 +143,22 @@ describe('readTaskTree', () => {
 describe('watcher lifecycle: subscribe, broadcast, refreshProjectWatch', () => {
   let root: string
 
+  // Registered once for the whole block — startListening() attaches a 'notification'
+  // listener to the shared fake listenClient; calling it per-test would stack up
+  // duplicate listeners and double-broadcast.
+  beforeAll(async () => {
+    await startListening()
+  })
+
   beforeEach(async () => {
     vi.clearAllMocks()
+    mockQuery.mockImplementation((sql: unknown, params?: unknown) => {
+      if (typeof sql === 'string' && sql.includes('SELECT tree FROM task_tree_cache')) {
+        const projectId = (params as [string])[0]
+        return Promise.resolve({ rows: [{ tree: { projectId, lastUpdated: null, phases: [], overallPct: 0, totalDone: 0, totalItems: 0 } }] })
+      }
+      return Promise.resolve({ rows: [] })
+    })
     vi.useFakeTimers()
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'devbrain-tasks-watcher-live-'))
     await write(root, 'TASKS.md', '---\n---\n## P\n- [x] a')
@@ -151,11 +187,13 @@ describe('watcher lifecycle: subscribe, broadcast, refreshProjectWatch', () => {
     await vi.advanceTimersByTimeAsync(299)
     expect(res.write).not.toHaveBeenCalled()
 
-    // The debounce fires here (fake timer), but its callback awaits real
-    // fs.readFile — fake timers don't control that, so bridge to real timers
-    // and poll for the broadcast to actually land.
+    // The debounce fires here (fake timer), but its callback awaits real fs.readFile
+    // and pool.query (publishTaskUpdate) — fake timers don't control that, so bridge
+    // to real timers and poll. fireNotification simulates the pg_notify round-trip
+    // a real Postgres would deliver once publishTaskUpdate's INSERT/NOTIFY land.
     await vi.advanceTimersByTimeAsync(1)
     vi.useRealTimers()
+    fireNotification('p1')
     await vi.waitFor(() => expect(res.write).toHaveBeenCalledTimes(1))
 
     const payload = res.write.mock.calls[0][0] as string
@@ -178,6 +216,7 @@ describe('watcher lifecycle: subscribe, broadcast, refreshProjectWatch', () => {
 
     await vi.advanceTimersByTimeAsync(100)
     vi.useRealTimers()
+    fireNotification('p2')
     await vi.waitFor(() => expect(res.write).toHaveBeenCalledTimes(1))
   })
 
@@ -209,6 +248,7 @@ describe('watcher lifecycle: subscribe, broadcast, refreshProjectWatch', () => {
     watcher.emit('change')
     await vi.advanceTimersByTimeAsync(300)
     vi.useRealTimers()
+    fireNotification('p4')
     await vi.waitFor(() => expect(good.write).toHaveBeenCalledTimes(1))
     expect(bad.write).toHaveBeenCalledTimes(1)
 
@@ -216,6 +256,7 @@ describe('watcher lifecycle: subscribe, broadcast, refreshProjectWatch', () => {
     watcher.emit('change')
     await vi.advanceTimersByTimeAsync(300)
     vi.useRealTimers()
+    fireNotification('p4')
     await vi.waitFor(() => expect(good.write).toHaveBeenCalledTimes(2))
     expect(bad.write).toHaveBeenCalledTimes(1) // removed after throwing, not called again
   })
@@ -241,6 +282,7 @@ describe('watcher lifecycle: subscribe, broadcast, refreshProjectWatch', () => {
     watcher2.emit('change')
     await vi.advanceTimersByTimeAsync(300)
     vi.useRealTimers()
+    fireNotification('p5')
     await vi.waitFor(() => expect(res.write).toHaveBeenCalledTimes(1)) // only the new watcher's change broadcasts
   })
 
@@ -293,5 +335,109 @@ describe('initTasksWatcher', () => {
 
     expect(errSpy).toHaveBeenCalledWith('  tasks-watcher: init failed:', 'db down')
     errSpy.mockRestore()
+  })
+})
+
+// Each test here gives pool.connect() its own fresh FakeListenClient via
+// mockResolvedValueOnce, instead of the shared module-level `listenClient` the other
+// describe blocks use — startListening() attaches a new listener every call, and the
+// shared instance accumulates one from every prior call in this file, which would
+// make exact call-count assertions here flaky depending on test order.
+describe('startListening / stopListening', () => {
+  it('issues LISTEN on the dedicated client', async () => {
+    const client = new FakeListenClient()
+    vi.mocked(pool.connect).mockResolvedValueOnce(client as never)
+
+    await startListening()
+
+    expect(client.query).toHaveBeenCalledWith('LISTEN tasks_update')
+  })
+
+  it('retries after a delay when pool.connect() fails, then succeeds', async () => {
+    vi.useFakeTimers()
+    const client = new FakeListenClient()
+    vi.mocked(pool.connect)
+      .mockRejectedValueOnce(new Error('connection refused'))
+      .mockResolvedValueOnce(client as never)
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const callsBefore = vi.mocked(pool.connect).mock.calls.length
+
+    await startListening()
+    expect(errSpy).toHaveBeenCalledWith(
+      '  tasks-watcher: failed to start listen connection, retrying:', 'connection refused'
+    )
+
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(vi.mocked(pool.connect).mock.calls.length).toBe(callsBefore + 2)
+    expect(client.query).toHaveBeenCalledWith('LISTEN tasks_update')
+
+    errSpy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('reconnects when the listen connection itself errors', async () => {
+    vi.useFakeTimers()
+    const client1 = new FakeListenClient()
+    const client2 = new FakeListenClient()
+    vi.mocked(pool.connect).mockResolvedValueOnce(client1 as never).mockResolvedValueOnce(client2 as never)
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await startListening()
+    client1.emit('error', new Error('connection lost'))
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(errSpy).toHaveBeenCalledWith('  tasks-watcher: listen connection error, reconnecting:', 'connection lost')
+    expect(client2.query).toHaveBeenCalledWith('LISTEN tasks_update')
+
+    errSpy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('destroys the connection via release(true) on stopListening', async () => {
+    const client = new FakeListenClient()
+    vi.mocked(pool.connect).mockResolvedValueOnce(client as never)
+
+    await startListening()
+    stopListening()
+
+    expect(client.release).toHaveBeenCalledWith(true)
+  })
+
+  it('is safe to call stopListening twice in a row', async () => {
+    const client = new FakeListenClient()
+    vi.mocked(pool.connect).mockResolvedValueOnce(client as never)
+
+    await startListening()
+    stopListening()
+    expect(() => stopListening()).not.toThrow()
+    expect(client.release).toHaveBeenCalledTimes(1)
+  })
+
+  it('logs an error without throwing when the cache lookup fails after a notification', async () => {
+    const client = new FakeListenClient()
+    vi.mocked(pool.connect).mockResolvedValueOnce(client as never)
+    await startListening()
+
+    mockQuery.mockRejectedValueOnce(new Error('select failed'))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    client.emit('notification', { channel: 'tasks_update', payload: 'px' })
+
+    await vi.waitFor(() => expect(errSpy).toHaveBeenCalledWith(
+      '  tasks-watcher: failed to load cached tree after notify:', 'select failed'
+    ))
+    errSpy.mockRestore()
+  })
+
+  it('ignores a notification with no payload', async () => {
+    const client = new FakeListenClient()
+    vi.mocked(pool.connect).mockResolvedValueOnce(client as never)
+    await startListening()
+    mockQuery.mockClear()
+
+    client.emit('notification', { channel: 'tasks_update', payload: undefined })
+    await new Promise(resolve => setImmediate(resolve))
+
+    expect(mockQuery).not.toHaveBeenCalled()
   })
 })

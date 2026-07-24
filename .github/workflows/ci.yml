@@ -33,7 +33,7 @@ jobs:
         run: npm run test:coverage
 
   client:
-    name: Client — typecheck
+    name: Client — typecheck + tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -53,6 +53,9 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Tests
+        run: npm run test
 
   e2e:
     name: E2E Tests

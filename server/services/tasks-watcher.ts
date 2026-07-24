@@ -3,6 +3,7 @@ import matter from 'gray-matter'
 import path from 'node:path'
 import { promises as fs } from 'node:fs'
 import type { Response } from 'express'
+import type { PoolClient } from 'pg'
 import { pool } from '../db/pool.js'
 import { frontmatterString } from '../lib/frontmatter.js'
 
@@ -129,6 +130,70 @@ function broadcast(projectId: string, tree: TaskTree) {
   }
 }
 
+// ── Cross-instance broadcast (Postgres LISTEN/NOTIFY) ─────────────────────────
+// Only the server instance with a given project's fs_path actually mounted can ever
+// detect a TASKS.md change via chokidar — but a load balancer may route any given
+// client's SSE connection to a *different* instance. publishTaskUpdate() caches the
+// freshly-parsed tree in task_tree_cache and pg_notify's every instance (including
+// itself), so whichever instance holds a given client's connection can broadcast to it.
+// NOTIFY payloads are capped at 8000 bytes by Postgres — too small for an arbitrarily
+// large task tree — so the payload is just the project id; the cache table carries
+// the real data.
+
+const NOTIFY_CHANNEL = 'tasks_update'
+
+async function publishTaskUpdate(projectId: string, tree: TaskTree): Promise<void> {
+  await pool.query(
+    `INSERT INTO task_tree_cache (project_id, tree, updated_at) VALUES ($1, $2::jsonb, now())
+     ON CONFLICT (project_id) DO UPDATE SET tree = $2::jsonb, updated_at = now()`,
+    [projectId, JSON.stringify(tree)]
+  )
+  await pool.query('SELECT pg_notify($1, $2)', [NOTIFY_CHANNEL, projectId])
+}
+
+let listenClient: PoolClient | null = null
+
+async function handleNotification(payload: string | undefined): Promise<void> {
+  if (!payload) return
+  try {
+    const { rows } = await pool.query<{ tree: TaskTree }>(
+      'SELECT tree FROM task_tree_cache WHERE project_id = $1', [payload]
+    )
+    if (rows[0]) broadcast(payload, rows[0].tree)
+  } catch (err) {
+    console.error('  tasks-watcher: failed to load cached tree after notify:', (err as Error).message)
+  }
+}
+
+// Keeps one dedicated connection LISTENing indefinitely — never returned to the pool.
+// Reconnects with a short delay if the connection drops (network blip, DB restart).
+export async function startListening(): Promise<void> {
+  try {
+    const client = await pool.connect()
+    listenClient = client
+    await client.query(`LISTEN ${NOTIFY_CHANNEL}`)
+
+    client.on('notification', msg => { handleNotification(msg.payload).catch(() => {}) })
+    client.on('error', err => {
+      console.error('  tasks-watcher: listen connection error, reconnecting:', err.message)
+      listenClient = null
+      setTimeout(() => { startListening().catch(() => {}) }, 2000)
+    })
+  } catch (err) {
+    console.error('  tasks-watcher: failed to start listen connection, retrying:', (err as Error).message)
+    setTimeout(() => { startListening().catch(() => {}) }, 2000)
+  }
+}
+
+// The listen client is checked out from the pool indefinitely (see startListening
+// above) and never returned normally — `pool.end()` on graceful shutdown would hang
+// waiting for it. release(true) destroys the underlying connection instead of
+// returning it to the idle pool, so shutdown can proceed. Call before pool.end().
+export function stopListening(): void {
+  listenClient?.release(true)
+  listenClient = null
+}
+
 // ── Watcher lifecycle ─────────────────────────────────────────────────────────
 
 const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -149,7 +214,9 @@ function startWatch(projectId: string, fsPath: string) {
     const timer = setTimeout(async () => {
       debounceTimers.delete(projectId)
       const tree = await readTaskTree(projectId, fsPath)
-      broadcast(projectId, tree)
+      await publishTaskUpdate(projectId, tree).catch(err => {
+        console.error('  tasks-watcher: failed to publish update:', (err as Error).message)
+      })
     }, 300)
 
     debounceTimers.set(projectId, timer)
@@ -172,6 +239,7 @@ export async function refreshProjectWatch(projectId: string, fsPath: string | nu
 }
 
 export async function initTasksWatcher() {
+  await startListening()
   try {
     const { rows } = await pool.query<{ id: string; fs_path: string }>(
       `SELECT id, fs_path FROM projects WHERE fs_path IS NOT NULL`

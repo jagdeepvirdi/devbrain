@@ -8,19 +8,19 @@ vi.mock('../../services/audit.js', () => ({
   logAudit: vi.fn(),
 }))
 
-vi.mock('bcryptjs', () => ({
+vi.mock('bcrypt', () => ({
   default: { hash: vi.fn(), compare: vi.fn() },
 }))
 
 import usersRouter from '../../routes/users.js'
 import { pool } from '../../db/pool.js'
 import { logAudit } from '../../services/audit.js'
-import bcrypt from 'bcryptjs'
+import bcrypt from 'bcrypt'
 import type { Mock } from 'vitest'
 
 const mockQuery   = vi.mocked(pool.query)
 const mockLogAudit = vi.mocked(logAudit)
-// bcryptjs's async overloads are ambiguous through vi.mocked() (one signature
+// bcrypt's async overloads are ambiguous through vi.mocked() (one signature
 // takes a callback and resolves to void) — cast to the shape we actually use.
 const mockHash    = bcrypt.hash    as unknown as Mock<(s: string, salt: number) => Promise<string>>
 const mockCompare = bcrypt.compare as unknown as Mock<(s: string, hash: string) => Promise<boolean>>

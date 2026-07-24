@@ -2,7 +2,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 
 vi.mock('../../db/pool.js', () => ({
-  pool: { query: vi.fn() },
+  pool: {
+    query: vi.fn(),
+    // Advisory-lock client: always "acquires" the lock in these tests so the
+    // pre-existing pool.query-mocked assertions below don't need to change —
+    // the lock-contention path itself is covered separately in advisoryLock.test.ts.
+    connect: vi.fn(async () => ({
+      query: vi.fn((sql: string) =>
+        Promise.resolve(sql.includes('pg_try_advisory') ? { rows: [{ locked: true }] } : { rows: [] })
+      ),
+      release: vi.fn(),
+    })),
+  },
 }))
 
 vi.mock('child_process', () => ({
@@ -210,11 +221,11 @@ describe('startDigestScheduler', () => {
     vi.clearAllMocks()
   })
 
-  it('spawns the python digest scheduler with inherited stdio', () => {
+  it('spawns the python digest scheduler with inherited stdio', async () => {
     const child = new EventEmitter()
     mockSpawn.mockReturnValue(child as never)
 
-    startDigestScheduler()
+    await startDigestScheduler()
 
     expect(mockSpawn).toHaveBeenCalledWith('python', ['server/scripts/digest_scheduler.py'], {
       stdio: 'inherit',
@@ -222,27 +233,42 @@ describe('startDigestScheduler', () => {
     })
   })
 
-  it('logs an error when the child process errors', () => {
+  it('logs an error when the child process errors', async () => {
     const child = new EventEmitter()
     mockSpawn.mockReturnValue(child as never)
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    startDigestScheduler()
+    await startDigestScheduler()
     child.emit('error', new Error('spawn failed'))
 
     expect(errSpy).toHaveBeenCalledWith('[Digest Scheduler Process] Error:', 'spawn failed')
     errSpy.mockRestore()
   })
 
-  it('logs the exit code when the child process closes', () => {
+  it('logs the exit code when the child process closes', async () => {
     const child = new EventEmitter()
     mockSpawn.mockReturnValue(child as never)
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
 
-    startDigestScheduler()
+    await startDigestScheduler()
     child.emit('close', 0)
 
     expect(logSpy).toHaveBeenCalledWith('[Digest Scheduler Process] Exited with code 0')
+    logSpy.mockRestore()
+  })
+
+  it('skips spawning when another instance already holds the digest lock', async () => {
+    const { pool } = await import('../../db/pool.js')
+    vi.mocked(pool.connect).mockResolvedValueOnce({
+      query: vi.fn().mockResolvedValue({ rows: [{ locked: false }] }),
+      release: vi.fn(),
+    } as never)
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await startDigestScheduler()
+
+    expect(mockSpawn).not.toHaveBeenCalled()
+    expect(logSpy).toHaveBeenCalledWith('  digest-scheduler: another instance already owns this lock — skipping')
     logSpy.mockRestore()
   })
 })

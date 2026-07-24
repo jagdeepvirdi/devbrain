@@ -12,6 +12,7 @@ import { pool } from '../db/pool.js'
 import { buildZipToStream } from './exporter.js'
 import { decrypt } from './crypto.js'
 import { uploadBackupToRemote, pruneRemoteBackups, type RemoteConfig } from './remoteBackup.js'
+import { withAdvisoryLock, LOCK_KEYS } from '../lib/advisoryLock.js'
 
 type BackupSchedule = 'daily' | 'weekly' | 'off'
 
@@ -193,10 +194,17 @@ export async function triggerBackupNow(
   await handleRemote(filePath, keepLastN, remote)
 }
 
+function runLockedBackupTick(): Promise<void> {
+  // Wrapped in an advisory lock so only one server instance actually runs a scheduled
+  // backup when 2+ instances share this database — otherwise every instance would
+  // write (and remote-mirror) its own duplicate backup on the same tick.
+  return withAdvisoryLock(LOCK_KEYS.backup, maybeRunBackup)
+}
+
 export function startBackupScheduler(): void {
   // Run once after 30 s delay (let DB settle on startup), then every hour
   setTimeout(() => {
-    maybeRunBackup().catch(() => {})
-    setInterval(() => { maybeRunBackup().catch(() => {}) }, 60 * 60 * 1000)
+    runLockedBackupTick().catch(() => {})
+    setInterval(() => { runLockedBackupTick().catch(() => {}) }, 60 * 60 * 1000)
   }, 30_000)
 }

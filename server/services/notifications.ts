@@ -1,5 +1,6 @@
 import { spawn } from 'child_process'
 import { pool } from '../db/pool.js'
+import { withAdvisoryLock, tryAcquireLongLivedLock, LOCK_KEYS } from '../lib/advisoryLock.js'
 
 
 export async function createNotification(userId: string, params: {
@@ -106,17 +107,33 @@ export async function scanStaleIssues() {
   }
 }
 
+function runLockedStaleScan(): Promise<void> {
+  // Advisory-locked so only one server instance actually scans + notifies per tick —
+  // otherwise every instance would independently notify the same users about the same
+  // stale issues.
+  return withAdvisoryLock(LOCK_KEYS.staleIssueScan, scanStaleIssues)
+}
+
 export function startNotificationScheduler() {
   // Run once after 15s delay, then every hour
   setTimeout(() => {
-    scanStaleIssues().catch(err => console.error('Error running scanStaleIssues:', err))
+    runLockedStaleScan().catch(err => console.error('Error running scanStaleIssues:', err))
     setInterval(() => {
-      scanStaleIssues().catch(err => console.error('Error running scanStaleIssues:', err))
+      runLockedStaleScan().catch(err => console.error('Error running scanStaleIssues:', err))
     }, 60 * 60 * 1000)
   }, 15_000)
 }
 
-export function startDigestScheduler() {
+export async function startDigestScheduler(): Promise<void> {
+  // A session-level lock (not the per-tick withAdvisoryLock above) since this owns a
+  // long-running child process, not a single short job — held for as long as the
+  // subprocess runs so only one server instance ever has a digest process alive at once.
+  const release = await tryAcquireLongLivedLock(LOCK_KEYS.dailyDigest)
+  if (!release) {
+    console.log('  digest-scheduler: another instance already owns this lock — skipping')
+    return
+  }
+
   console.log('  digest-scheduler: starting Python background process...')
   const child = spawn('python', ['server/scripts/digest_scheduler.py'], {
     stdio: 'inherit',
@@ -129,6 +146,7 @@ export function startDigestScheduler() {
 
   child.on('close', (code) => {
     console.log(`[Digest Scheduler Process] Exited with code ${code}`)
+    release().catch(() => {})
   })
 }
 

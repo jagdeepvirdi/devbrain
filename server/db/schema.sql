@@ -596,5 +596,20 @@ CREATE TABLE IF NOT EXISTS embedding_health_snapshots (
 CREATE INDEX IF NOT EXISTS embedding_health_snapshots_captured_idx
   ON embedding_health_snapshots (captured_at);
 
+-- ── Task tree cache ───────────────────────────────────────────────────────
+-- Lets services/tasks-watcher.ts's SSE broadcast reach subscribers connected to a
+-- different server instance than the one whose chokidar watcher detected the change
+-- (only one instance can have the project's fs_path mounted). The watcher UPSERTs the
+-- freshly-parsed tree here, then pg_notify's 'tasks_update' with just the project id —
+-- every instance LISTENs and re-reads this row (NOTIFY payloads are capped at 8000
+-- bytes, too small for an arbitrary task tree) to broadcast to its own local
+-- subscribers. See TASKS.md Phase 33.
+
+CREATE TABLE IF NOT EXISTS task_tree_cache (
+  project_id TEXT        PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  tree       JSONB       NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 
 

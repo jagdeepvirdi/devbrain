@@ -5,7 +5,18 @@ import path from 'path'
 import type { Archiver } from 'archiver'
 
 vi.mock('../../db/pool.js', () => ({
-  pool: { query: vi.fn() },
+  pool: {
+    query: vi.fn(),
+    // Advisory-lock client: always "acquires" the lock in these tests so the
+    // pre-existing pool.query-mocked assertions below don't need to change —
+    // the lock-contention path itself is covered separately in advisoryLock.test.ts.
+    connect: vi.fn(async () => ({
+      query: vi.fn((sql: string) =>
+        Promise.resolve(sql.includes('pg_try_advisory') ? { rows: [{ locked: true }] } : { rows: [] })
+      ),
+      release: vi.fn(),
+    })),
+  },
 }))
 
 const buildZipToStreamMock = vi.fn(async (archive: Archiver, _projectIds: string[] | 'all') => {

@@ -14,7 +14,7 @@ import { openApiSpec } from './docs/openapi.js'
 import { pool, dbReady } from './db/pool.js'
 import { runSeed } from './db/seed.js'
 import { ollamaReady } from './services/ai.js'
-import { initTasksWatcher } from './services/tasks-watcher.js'
+import { initTasksWatcher, stopListening } from './services/tasks-watcher.js'
 import { startBackupScheduler } from './services/backup.js'
 import { startNotificationScheduler, startDigestScheduler } from './services/notifications.js'
 import { startEmbeddingHealthScheduler } from './services/embeddingHealthSnapshot.js'
@@ -33,7 +33,12 @@ if (env.FORCE_HTTPS) {
   })
 }
 
-app.use(cors())
+// Explicit origin allowlist via CORS_ORIGINS (comma-separated). Unset: production denies
+// cross-origin entirely (the client is served same-origin by this same process, see the
+// static-file block below), development reflects the request origin so the Vite dev
+// server on a different port keeps working out of the box.
+const corsOrigin = env.CORS_ORIGINS ?? (env.NODE_ENV === 'production' ? false : true)
+app.use(cors({ origin: corsOrigin, credentials: true }))
 app.use(cookieParser())
 app.use(express.json({ limit: '50mb' }))
 
@@ -273,6 +278,9 @@ start().catch(err => {
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
+  // tasks-watcher holds one client checked out from the pool indefinitely for
+  // LISTEN — pool.end() would hang waiting for it without this.
+  stopListening()
   await pool.end()
   process.exit(0)
 })
