@@ -95,6 +95,57 @@ reverted "Ready to upload…" status text both matched the assertion.
 
 ---
 
+## Phase 33 — Architect & VC Review: Production-Readiness Hit-List (2026-07-24)
+
+> External brutal-honesty review requested by the user (architect + VC lens), findings cited against the
+> actual codebase as of commit `51b4b15`, not generic advice. Scores and verdict recorded here for
+> reference; action items below are ordered Critical → High Priority → Nice-to-Have, most severe first
+> within each tier.
+
+### Verdict & Scores (out of 10)
+
+| Category | Score | Why |
+|---|---|---|
+| Architecture | 6 | Clean service/route separation, solid Postgres schema (proper FKs/cascades, GIN+HNSW indexes) — but every background job and SSE endpoint is an in-process singleton with no distributed-lock or pub/sub story; zero horizontal-scaling design. |
+| Code Quality | 6 | Consistent TypeScript, zero `any` (lint-enforced), Zod validation at every boundary — undercut by several 700–3,000-line god-files (`Settings.tsx`, `documents.ts`, `issues.ts`, `settings.ts`). |
+| Test Coverage | 5 | Server: genuinely excellent (96/93/94/97% stmts/branch/fn/lines). Client: **one** test file (`api.test.ts`) covering ~18,700 lines of page/component code, and CI doesn't even run the client's own `npm test`. The average hides a real blind spot. |
+| Security | 4 | Real good instincts (SSRF guard on URL import, httpOnly+Secure+SameSite=Strict cookies, Zod-validated env, AES-256-GCM at rest) undone by an unescaped-HTML stored-XSS path, a key-reuse bug in the crypto helper, no `helmet`, and rate limiting applied to ~9 of ~40 mutating routes. |
+| Usability | 7 | Broad, coherent feature set (RAG, issues, commands, releases, runbooks, Codes tab, dashboards) behind one consistent design system — not independently UX-tested end-to-end as part of this review. |
+| Scalability | 2 | Cannot survive "10,000 users tomorrow." The entire AI layer is one Ollama instance on one consumer GPU, which this project's own Known Issues section (above) already documents thrashing into a 90s-hang degraded state under *single-user* load. |
+| Documentation/Process | 9 | `TASKS.md`/`CHANGELOG.md`/`README.md`/`CLAUDE.md` discipline is genuinely better than most funded startups' — this is the strongest part of the project. |
+| "Moat" | 3 | Every capability is a competent assembly of well-known OSS primitives (pgvector, tree-sitter, Ollama) — no proprietary algorithm, no data network effect. Real value is personal/workflow-specific (wired to this developer's own projects and machine), not a market moat. |
+
+**Overall gut check**: as a personal/local-first knowledge tool, this clears the bar most solo projects never reach — the backend test discipline and documentation are rare, full stop. As a "market-ready product" judged on a VC/architect lens, it isn't close: no tenant isolation, no billing, no horizontal-scaling story, and a real XSS hole sitting in a feature (RAG chat) that's central to the product. Both readings are true at once; which one matters depends entirely on whether this stays a personal tool or becomes a pitch.
+
+### Critical (fix immediately — showstoppers)
+
+- [ ] **Stored XSS via unescaped markdown rendering** — `client/src/pages/DocChat.tsx`'s `inlineMd()` / `renderMarkdownLite()` (lines 16–82) regex-transform text straight into `dangerouslySetInnerHTML` with zero HTML-escaping. The text is the AI's RAG answer, grounded in uploaded-document/URL-imported content — any `member`-role user (or a URL import) can smuggle raw HTML/JS that fires in another user's session when they ask a question that surfaces it. httpOnly protects the JWT cookie from `document.cookie` reads, but injected script still rides the session via same-origin `fetch` (cookie auto-attached) — a real cross-user account-impact vector in the multi-user/LDAP mode this app targets. Fix: escape `<`/`>`/`&`/quotes before the regex passes, or replace the hand-rolled renderer with a real sanitizer (`dompurify`) or a markdown lib that escapes by default.
+- [ ] **Crypto key reuse** — `server/services/crypto.ts:6` derives the AES-256-GCM key for every encrypted-at-rest secret (LDAP bind password, S3 secret key, SFTP password, integration tokens) from `JWT_SECRET` via a single SHA-256 hash. One leaked env var compromises session forgery *and* every stored credential at once; rotating `JWT_SECRET` to invalidate sessions silently bricks decryption of everything else. Fix: introduce a separate `ENCRYPTION_KEY` env var (own Zod validation + a documented rotation/re-encrypt path) instead of deriving it from `JWT_SECRET`.
+- [ ] **Rate limiting covers ~9 of ~40 mutating routes** — `server/index.ts:84-102` applies `mutationLimiter` only to a hand-picked list of AI endpoints. Every other write endpoint (issues, commands, releases, runbooks, projects, users CRUD) has none. Fix: apply a default rate limiter globally in `server/index.ts` right after `requireAuth`, with a higher ceiling override only where genuinely needed (e.g. the AI routes' existing tighter limit).
+- [ ] **No `helmet` (or equivalent) security headers** — zero CSP, X-Content-Type-Options, Referrer-Policy, etc.; only a manual HSTS header gated behind `FORCE_HTTPS` (`server/index.ts:24-33`). Add `helmet` with a real CSP before this goes anywhere near the public internet.
+
+### High Priority (refactoring & scalability)
+
+- [ ] **Single-GPU AI bottleneck is the real scaling ceiling** — every RAG/chat/summarize/embed call funnels through one Ollama instance on one RTX 2060 6GB (`CLAUDE.md` hardware section); the Known Issues entry above (2026-07-15) already documents this thrashing into a 90s-hang degraded state under *single-user* interleaved load. Before any "handle N users" conversation makes sense, decide: (a) a real inference backend (vLLM/TGI on dedicated GPU(s), or a paid API tier) for anything beyond personal use, or (b) explicitly scope this as single-tenant/self-hosted-per-customer software and drop the market/SaaS framing.
+- [ ] **In-process schedulers can't run on more than one instance** — `startBackupScheduler`, `startNotificationScheduler`, `startDigestScheduler`, `startEmbeddingHealthScheduler`, and the `chokidar`-based TASKS.md watcher (all wired in `server/index.ts:206-219`) are per-process singletons with no leader election or distributed lock. Running 2+ server instances (the standard way to scale Express) means duplicate backups, duplicate notifications, duplicate digests today. Needs a lock (a Postgres advisory lock is the cheapest fit given the existing DB) before horizontal scaling is possible.
+- [ ] **SSE state is per-process, not shareable** — the `/tasks/watch` endpoints (`claude-projects.ts`, `antigravity-projects.ts`) and the tasks-watcher subscriber `Set` hold live-update subscribers in memory. A client pinned to instance B never hears about a change written via instance A. Needs Redis pub/sub (or Postgres `LISTEN/NOTIFY`, already available) before this survives a load balancer.
+- [ ] **Client-side test coverage is a blind spot** — server hit 96%+ coverage; the client has one test file (`client/src/lib/api.test.ts`). Bring the highest-risk client logic (API client error handling, `FilterBar.tsx`'s filter-building, the Documents/Codes upload flows) under real unit tests, and add the client's `npm test` as an actual CI gate — right now `.github/workflows/ci.yml`'s `client` job only runs `tsc --noEmit`, never `npm test`.
+- [ ] **God-files need splitting** — `client/src/pages/Settings.tsx` (3,002 lines), `server/routes/documents.ts` (942), `server/routes/settings.ts` (826), `server/routes/issues.ts` (764), `client/src/pages/Commands.tsx` (1,221). Each is a single-responsibility violation waiting to cause a bad merge; split by tab/concern (Settings.tsx already has natural seams — its own sidebar tab groups) before the next feature lands on top of them.
+- [ ] **`bcryptjs` is pure-JS and CPU-blocking** — password hashing runs synchronously-ish on the same event loop serving every other request (`server/routes/auth.ts`, `server/routes/users.ts`). Swap for native `bcrypt` (or `argon2`) so concurrent logins don't stall unrelated requests.
+- [ ] **Open CORS with no origin allowlist** — `cors()` is called with no options (`server/index.ts:35`). Low practical risk today (SameSite=Strict cookies protect the auth cookie specifically), but add an explicit origin allowlist driven by env before any non-same-origin deployment.
+- [ ] **No dependency/vulnerability scanning in CI** — no `npm audit`, Dependabot, or CodeQL despite depending on `ldapjs`, `jsonwebtoken`, `archiver`, `xlsx` and other security-sensitive packages with real CVE history. Add at minimum a scheduled `npm audit --audit-level=high` CI job.
+
+### Nice-to-Have (polish & market-readiness)
+
+- [ ] **No tenant isolation** — multi-user today is RBAC + `project_members` scoping inside one shared Postgres DB, not multi-tenant partitioning. Fine for one org; selling to multiple unrelated customers as SaaS needs a real tenant boundary (schema-per-tenant, or a tenant_id discipline enforced at the query layer, not just app logic).
+- [ ] **No billing/licensing** — no Stripe, no seat limits, no plan gating anywhere in the schema or routes. RBAC exists but nothing meters or monetizes it.
+- [ ] **No product analytics** — zero visibility into real usage beyond the internal audit log; add basic event telemetry if this is ever meant to be observed at a product level, not just a personal-tool level.
+- [ ] **No SAML/OIDC** — only LDAP/AD and local bcrypt; modern B2B buyers expect SSO via SAML/OIDC, not just LDAP.
+- [ ] **No formal privacy/ToS/DPA** — standard procurement blockers for any B2B sale; irrelevant for personal use, required the moment this is pitched externally.
+- [ ] **Cloud-inference cost model undefined** — the "$0/month" pitch (`CLAUDE.md` Cost Summary) only holds for local Ollama on your own GPU; the moment `AI_PROVIDER=claude`/`gemini` becomes the default for other users, "zero cost" becomes "per-token cost per user," and nothing in the app tracks or caps that spend today.
+
+---
+
 # V2 Roadmap
 
 > Re-scoped 2026-07-17: audited the original "Fix → Test → Backup → Visibility → AI → Git →
