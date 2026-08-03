@@ -24,10 +24,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: server/package-lock.json
       - run: npm ci
-      # Known accepted-risk findings as of 2026-07-24 (no fix available upstream):
+      # Known accepted-risk findings as of 2026-08-03 (no fix available upstream):
       # adm-zip (via @huggingface/transformers -> onnxruntime-node), sharp (same chain),
-      # xlsx. Re-evaluate if this job starts failing on something new.
-      - run: npm audit --audit-level=high
+      # xlsx (2 advisories). scripts/audit-check.mjs fails only on high/critical
+      # advisories NOT in this allowlist, so new findings still break the build.
+      - run: |
+          node ../scripts/audit-check.mjs \
+            "GHSA-xcpc-8h2w-3j85,GHSA-f88m-g3jw-g9cj,GHSA-4r6h-8v6p-xvw6,GHSA-5pgg-2g8v-p4x9"
 
   audit-client:
     name: npm audit — client
