@@ -26,7 +26,7 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
 
 ---
 
-## Phase 33 — Architect & VC Review: Production-Readiness Hit-List (2026-07-24)
+## Phase 33 — Architect & VC Review: Production-Readiness Hit-List (2026-07-24) — closed, see [[Phase 39]]
 
 > External brutal-honesty review requested by the user (architect + VC lens), findings cited against the
 > actual codebase as of commit `51b4b15`, not generic advice. Scores and verdict recorded here for
@@ -48,20 +48,9 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
 
 **Overall gut check**: as a personal/local-first knowledge tool, this clears the bar most solo projects never reach — the backend test discipline and documentation are rare, full stop. As a "market-ready product" judged on a VC/architect lens, it isn't close: no tenant isolation, no billing, no horizontal-scaling story, and a real XSS hole sitting in a feature (RAG chat) that's central to the product. Both readings are true at once; which one matters depends entirely on whether this stays a personal tool or becomes a pitch.
 
-> Critical items and most of High Priority resolved 2026-07-24 — see TASKS_ARCHIVE.md.
-
-### High Priority (remaining)
-
-- [ ] **God-files need splitting** — **deferred by user decision (2026-07-24)**: `client/src/pages/Settings.tsx` (3,002 lines), `server/routes/documents.ts` (942), `server/routes/settings.ts` (826), `server/routes/issues.ts` (764), `client/src/pages/Commands.tsx` (1,221) are still single-responsibility violations waiting to cause a bad merge. Revisit now that the client test-coverage item above is landed — splitting with at least some regression tests in place is a materially different risk than doing it against a nearly-untested 3,000-line component.
-
-### Nice-to-Have (polish & market-readiness)
-
-- [ ] **No tenant isolation** — multi-user today is RBAC + `project_members` scoping inside one shared Postgres DB, not multi-tenant partitioning. Fine for one org; selling to multiple unrelated customers as SaaS needs a real tenant boundary (schema-per-tenant, or a tenant_id discipline enforced at the query layer, not just app logic).
-- [ ] **No billing/licensing** — no Stripe, no seat limits, no plan gating anywhere in the schema or routes. RBAC exists but nothing meters or monetizes it.
-- [ ] **No product analytics** — zero visibility into real usage beyond the internal audit log; add basic event telemetry if this is ever meant to be observed at a product level, not just a personal-tool level.
-- [ ] **No SAML/OIDC** — only LDAP/AD and local bcrypt; modern B2B buyers expect SSO via SAML/OIDC, not just LDAP.
-- [ ] **No formal privacy/ToS/DPA** — standard procurement blockers for any B2B sale; irrelevant for personal use, required the moment this is pitched externally.
-- [ ] **Cloud-inference cost model undefined** — the "$0/month" pitch (`CLAUDE.md` Cost Summary) only holds for local Ollama on your own GPU; the moment `AI_PROVIDER=claude`/`gemini` becomes the default for other users, "zero cost" becomes "per-token cost per user," and nothing in the app tracks or caps that spend today.
+> Critical items and most of High Priority resolved 2026-07-24 — see TASKS_ARCHIVE.md. Remaining High
+> Priority and Nice-to-Have action items consolidated into [[Phase 39]] (priority-ordered) on 2026-08-07 —
+> the Verdict/Scores/gut-check above stay here as the dated snapshot they were; see Phase 39 for current status.
 
 ---
 
@@ -75,24 +64,18 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
 
 > Everything else in this roadmap is resolved and archived to TASKS_ARCHIVE.md (2026-07-20 to 2026-07-22).
 
-## Two-Way Integration Sync (GitHub / Linear / Jira)
+## Two-Way Integration Sync (GitHub / Linear / Jira) — closed, see [[Phase 39]]
 
-- [ ] Webhook-based live sync as an alternative to the current manual `POST /api/integrations/:id/sync`
-      pull-only trigger — investigate per-provider webhook setup (GitHub App vs. PAT scopes, Linear
-      webhooks, Jira webhooks) before committing to one approach; biggest unknown of the four items here.
-- [ ] Push-back: create/update the external issue from DevBrain, not just import — needs a design
-      decision on conflict resolution once sync is bidirectional (simultaneous edits on both sides).
+> Action items consolidated into [[Phase 39]] (priority-ordered) on 2026-08-07.
 
 ---
 
-## Phase 34 — Principal Engineer Code Audit & Hardening (2026-07-24)
+## Phase 34 — Principal Engineer Code Audit & Hardening (2026-07-24) — closed, see [[Phase 39]]
 
 > Audit findings across security, architecture, performance, and code quality. Action items prioritized for review.
+> Remaining items consolidated into [[Phase 39]] (priority-ordered) on 2026-08-07.
 
 - [x] **Rate Limiter IP Spoofing via Unconfigured `trust proxy`** — fixed 2026-08-07: added `TRUST_PROXY` env var (`server/lib/env.ts`) wired via `app.set('trust proxy', env.TRUST_PROXY)` in `server/index.ts`, defaulting to `false` (no proxy trusted, `X-Forwarded-For` ignored). `docker-compose.prod.yml` sets `TRUST_PROXY: 1` for its bundled Caddy reverse-proxy hop; documented in `.env.example` and `CONTRIBUTING.md`.
-- [ ] **60 Non-null Assertion (`!`) Warnings in Server Routes** — ESLint flags 60 instances of `@typescript-eslint/no-non-null-assertion` across `aitask.ts`, `auth.ts`, `chat.ts`, `documents.ts`, `users.ts`, `ai.ts`. Refactor to strict guards to prevent uncaught runtime type errors.
-- [ ] **Event Loop Blocking in Duplicate Document Line Similarity** — `POST /api/documents/find-duplicates` computes multiset Dice-similarity on full raw text synchronously on the main event thread. Add string length caps or async yielding for large contents.
-- [ ] **God-File Modularization (`documents.ts`, `Settings.tsx`, `settings.ts`)** — Split monolithic route and page files into isolated domain modules and sub-controllers now that baseline test coverage exists.
 
 ---
 
@@ -266,3 +249,62 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
 > production build succeeds. Not yet verified by clicking through in a browser — this instance has
 > `AUTH_PASSWORD` set, so an automated Playwright pass couldn't get past the login gate; still pending manual
 > confirmation.
+
+---
+
+## Phase 39 — Consolidated Priority Backlog (2026-08-07)
+
+> Every action item still open elsewhere in this file — from [[Phase 33]]'s remaining High Priority/Nice-to-Have
+> items, [[Phase 34]]'s remaining audit findings, and the V2 Roadmap's Two-Way Integration Sync — collected
+> here in one place and ordered by actual priority instead of by which review produced them. Original wording
+> preserved from its source section; each item notes where it came from. The two phases' overlapping "split the
+> god-files" items are merged into one. Tiers, most severe/urgent first:
+
+### Tier 1 — Correctness & reliability (do first)
+
+- [ ] **Event Loop Blocking in Duplicate Document Line Similarity** *(from [[Phase 34]])* — `POST /api/documents/find-duplicates`
+      computes multiset Dice-similarity on full raw text synchronously on the main event thread. Add string
+      length caps or async yielding for large contents. **Why top priority**: this is the only item here that's
+      an active availability risk — a large-content duplicate scan blocks the entire single-threaded Node
+      process, stalling every other in-flight request (including DocChat/RAG) for its duration, not just the
+      requesting user.
+- [ ] **60 Non-null Assertion (`!`) Warnings in Server Routes** *(from [[Phase 34]])* — ESLint flags 60 instances
+      of `@typescript-eslint/no-non-null-assertion` across `aitask.ts`, `auth.ts`, `chat.ts`, `documents.ts`,
+      `users.ts`, `ai.ts`. Refactor to strict guards to prevent uncaught runtime type errors. **Why here**: two
+      of the six files (`auth.ts`, `ai.ts`) sit on core/every-request paths — an unchecked assertion there is a
+      live crash risk, not just a style nit.
+
+### Tier 2 — Code quality / maintainability
+
+- [ ] **God-file splitting** *(merged from [[Phase 33]] and [[Phase 34]], which each listed an overlapping
+      subset)* — `client/src/pages/Settings.tsx` (3,002 lines), `server/routes/documents.ts` (942),
+      `server/routes/settings.ts` (826), `server/routes/issues.ts` (764), `client/src/pages/Commands.tsx`
+      (1,221) are still single-responsibility violations waiting to cause a bad merge. Originally deferred
+      2026-07-24 pending better client test coverage. Status as of 2026-08-07: real progress on that front, but
+      indirect — this session added substantial new client test suites (`CodeEditorOverlay`, `Notes`,
+      `FilesTab`, `ProjectFileEditorOverlay`, ~40 tests total) establishing a working test pattern for
+      interactive components, but none of them cover `Settings.tsx` or `Commands.tsx` themselves. Splitting
+      either still means doing it against effectively untested code — revisit only after adding regression
+      tests for the specific file being split, not a general "coverage improved" green light.
+
+### Tier 3 — Feature enhancements
+
+- [ ] **Webhook-based live sync** *(from V2 Roadmap — Two-Way Integration Sync)* — alternative to the current
+      manual `POST /api/integrations/:id/sync` pull-only trigger — investigate per-provider webhook setup
+      (GitHub App vs. PAT scopes, Linear webhooks, Jira webhooks) before committing to one approach; biggest
+      unknown of the two items here.
+- [ ] **Push-back sync** *(from V2 Roadmap — Two-Way Integration Sync)* — create/update the external issue from
+      DevBrain, not just import — needs a design decision on conflict resolution once sync is bidirectional
+      (simultaneous edits on both sides). Blocked on the design decision, not effort.
+
+### Tier 4 — Nice-to-have / market-readiness (only relevant if this stops being a personal tool)
+
+*(from [[Phase 33]] — all explicitly framed there as non-goals for personal/local-first use; lowest priority by
+design, not oversight)*
+
+- [ ] **No tenant isolation** — multi-user today is RBAC + `project_members` scoping inside one shared Postgres DB, not multi-tenant partitioning. Fine for one org; selling to multiple unrelated customers as SaaS needs a real tenant boundary (schema-per-tenant, or a tenant_id discipline enforced at the query layer, not just app logic).
+- [ ] **No billing/licensing** — no Stripe, no seat limits, no plan gating anywhere in the schema or routes. RBAC exists but nothing meters or monetizes it.
+- [ ] **No product analytics** — zero visibility into real usage beyond the internal audit log; add basic event telemetry if this is ever meant to be observed at a product level, not just a personal-tool level.
+- [ ] **No SAML/OIDC** — only LDAP/AD and local bcrypt; modern B2B buyers expect SSO via SAML/OIDC, not just LDAP.
+- [ ] **No formal privacy/ToS/DPA** — standard procurement blockers for any B2B sale; irrelevant for personal use, required the moment this is pitched externally.
+- [ ] **Cloud-inference cost model undefined** — the "$0/month" pitch (`CLAUDE.md` Cost Summary) only holds for local Ollama on your own GPU; the moment `AI_PROVIDER=claude`/`gemini` becomes the default for other users, "zero cost" becomes "per-token cost per user," and nothing in the app tracks or caps that spend today.
