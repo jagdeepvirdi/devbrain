@@ -21,6 +21,14 @@ import { startEmbeddingHealthScheduler } from './services/embeddingHealthSnapsho
 
 const app = express()
 
+// Explicit `trust proxy` setting — required for req.ip (and the rate limiters below,
+// which key off it) to reflect the real client address instead of the reverse proxy's
+// address once one is in front of this app. Defaults to `false` (trust nothing, ignore
+// X-Forwarded-For) so a direct client can't spoof the header to bypass or target the
+// rate limiter; set TRUST_PROXY to the proxy hop count or an IP/CIDR when deployed
+// behind one. See TRUST_PROXY in server/lib/env.ts for accepted values.
+app.set('trust proxy', env.TRUST_PROXY)
+
 // HTTPS enforcement (set FORCE_HTTPS=true behind a reverse proxy)
 if (env.FORCE_HTTPS) {
   app.use((req, res, next) => {

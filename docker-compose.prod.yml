@@ -38,6 +38,7 @@ services:
       GEMINI_API_KEY:    ${GEMINI_API_KEY:-}
       GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-2.0-flash}
       FORCE_HTTPS:       true
+      TRUST_PROXY:       1
       NODE_ENV:          production
     extra_hosts:
       - "host.docker.internal:host-gateway"

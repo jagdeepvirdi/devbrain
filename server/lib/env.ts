@@ -19,6 +19,19 @@ const schema = z.object({
   GEMINI_CHAT_MODEL:  z.string().default('gemini-2.0-flash'),
   NODE_ENV:           z.enum(['development', 'production', 'test']).default('development'),
   FORCE_HTTPS:        z.enum(['true', 'false']).default('false').transform(v => v === 'true'),
+  // Controls Express's `trust proxy` setting, which governs how req.ip (and therefore
+  // rate limiting) is derived from X-Forwarded-For. Default 'false' means no proxy is
+  // trusted — X-Forwarded-For is ignored and req.ip is the direct socket address, so a
+  // client can't spoof the header to dodge/target rate limits. When this app runs behind
+  // a reverse proxy (Caddy, nginx, a cloud LB), set this to the hop count (e.g. "1" for a
+  // single proxy) or a specific IP/CIDR/"loopback" per Express's trust proxy docs — never
+  // "true", which trusts every hop in the chain and re-opens the spoofing hole.
+  TRUST_PROXY:        z.string().default('false').transform(v => {
+    if (v === 'true') return true
+    if (v === 'false') return false
+    if (/^\d+$/.test(v)) return Number(v)
+    return v
+  }),
   // Comma-separated allowlist of origins allowed to call the API cross-origin (e.g.
   // "https://app.example.com,https://admin.example.com"). Unset = same-origin only in
   // production (the client is served from this same Express process there anyway);

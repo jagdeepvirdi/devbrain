@@ -121,6 +121,7 @@ Optional:
 | `GEMINI_API_KEY` | Required when `AI_PROVIDER=gemini` (free tier: 1500 RPD, 1M TPM) |
 | `GEMINI_CHAT_MODEL` | Gemini model name (default: `gemini-2.0-flash`) |
 | `FORCE_HTTPS` | Set to `true` behind a reverse proxy to redirect HTTP → HTTPS |
+| `TRUST_PROXY` | Express `trust proxy` value — hop count or IP/CIDR when behind a reverse proxy, so `req.ip`/rate limiting see the real client address instead of a spoofable header. Default `false` (no proxy trusted). |
 
 ## API Reference
 
