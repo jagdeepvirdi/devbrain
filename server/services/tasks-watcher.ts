@@ -113,8 +113,12 @@ export async function readTaskTree(projectId: string, fsPath: string): Promise<T
 // ── SSE pub/sub ───────────────────────────────────────────────────────────────
 
 export function subscribe(projectId: string, res: Response): () => void {
-  if (!subscribers.has(projectId)) subscribers.set(projectId, new Set())
-  subscribers.get(projectId)!.add(res)
+  let subs = subscribers.get(projectId)
+  if (!subs) {
+    subs = new Set()
+    subscribers.set(projectId, subs)
+  }
+  subs.add(res)
 
   return () => {
     subscribers.get(projectId)?.delete(res)

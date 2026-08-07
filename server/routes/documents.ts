@@ -323,7 +323,7 @@ router.post('/', requireRole('member'), upload.single('file'), async (req, res) 
     }
 
     // Insert document
-    const { rows } = await pool.query(
+    const { rows } = await pool.query<{ id: string }>(
       `INSERT INTO documents (project_id, title, file_type, content, tags, component, source, content_hash, language)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
       [projectId ?? null, title, fileType, text, tags, component, req.file.originalname, hash, language ?? null]
@@ -336,7 +336,7 @@ router.post('/', requireRole('member'), upload.single('file'), async (req, res) 
     // (bulk re-embed, update-content, single re-embed) already does.
     let chunkCount = 0
     try {
-      chunkCount = await embedDocument(docId!, text, { title, language })
+      chunkCount = await embedDocument(docId, text, { title, language })
       await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [docId])
     } catch (embedErr) {
       console.error('Document embed failed:', embedErr)
@@ -490,7 +490,7 @@ router.post('/url', requireRole('member'), async (req, res) => {
       })
     }
 
-    const { rows } = await pool.query(
+    const { rows } = await pool.query<{ id: string }>(
       `INSERT INTO documents (project_id, title, file_type, content, tags, component, source, content_hash)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
       [projectId ?? null, title, fileType, text, tags, component?.trim() || null, url, hash]
@@ -500,7 +500,7 @@ router.post('/url', requireRole('member'), async (req, res) => {
     // Same non-destructive embed-failure handling as the file upload route above.
     let chunkCount = 0
     try {
-      chunkCount = await embedDocument(docId!, text, { title })
+      chunkCount = await embedDocument(docId, text, { title })
       await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [docId])
     } catch (embedErr) {
       console.error('Document embed failed:', embedErr)
@@ -541,7 +541,7 @@ router.post('/note', requireRole('member'), async (req, res) => {
   let docId: string | null = null
 
   try {
-    const { rows } = await pool.query(
+    const { rows } = await pool.query<{ id: string }>(
       `INSERT INTO documents (project_id, title, file_type, content, tags, component, language, source, content_hash)
        VALUES ($1, $2, 'note', $3, $4, $5, 'markdown', 'note', $6) RETURNING id`,
       [projectId, title, content, tags, component?.trim() || null, hash]
@@ -551,7 +551,7 @@ router.post('/note', requireRole('member'), async (req, res) => {
     // Same non-destructive embed-failure handling as the other creation routes above.
     let chunkCount = 0
     try {
-      chunkCount = await embedDocument(docId!, content, { title, language: 'markdown' })
+      chunkCount = await embedDocument(docId, content, { title, language: 'markdown' })
       await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [docId])
     } catch (embedErr) {
       console.error('Note embed failed:', embedErr)
@@ -916,6 +916,17 @@ router.post('/component-overview', requireRole('member'), async (req, res) => {
 const DUPLICATE_SHORTLIST_COSINE = 0.7  // phase 1: loose, recall-oriented — phase 2 does the real filtering
 const DUPLICATE_CONFIRM_MIN_SCORE = 0.5 // phase 2: floor for even showing a pair to the user
 const DUPLICATE_MAX_RESULTS = 50
+// Caps how much of each file's content phase 2 actually diffs — bounds the cost of any single
+// pair regardless of how large the tracked file is (e.g. an accidentally-tracked minified
+// bundle). Generous for real source files; a few hundred KB is already thousands of lines.
+const DUPLICATE_COMPARE_CHARS = 300_000
+// lineSimilarity() runs synchronously on the main thread — with many candidate pairs in one
+// request, back-to-back comparisons without a break add up to one long unbroken block of the
+// event loop (see TASKS.md Phase 39/Phase 34: this was flagging every other in-flight request,
+// not just this one). Yielding back to the event loop periodically lets other requests
+// interleave instead of queuing behind the whole scan.
+const DUPLICATE_YIELD_EVERY_N_PAIRS = 25
+const yieldToEventLoop = () => new Promise(resolve => setImmediate(resolve))
 
 const FindDuplicatesBody = z.object({
   projectId: z.string().nullable(),
@@ -968,13 +979,20 @@ router.post('/find-duplicates', requireRole('member'), async (req, res) => {
     }
 
     const results: { docA: { id: string; title: string }; docB: { id: string; title: string }; score: number }[] = []
+    let pairsProcessed = 0
     for (const [idA, idB] of candidatePairs.values()) {
-      const a = contentById.get(idA)!
-      const b = contentById.get(idB)!
-      const score = lineSimilarity(a.content, b.content)
-      if (score >= DUPLICATE_CONFIRM_MIN_SCORE) {
-        results.push({ docA: { id: idA, title: a.title }, docB: { id: idB, title: b.title }, score })
+      const a = contentById.get(idA)
+      const b = contentById.get(idB)
+      if (a && b) {
+        const score = lineSimilarity(
+          a.content.slice(0, DUPLICATE_COMPARE_CHARS),
+          b.content.slice(0, DUPLICATE_COMPARE_CHARS)
+        )
+        if (score >= DUPLICATE_CONFIRM_MIN_SCORE) {
+          results.push({ docA: { id: idA, title: a.title }, docB: { id: idB, title: b.title }, score })
+        }
       }
+      if (++pairsProcessed % DUPLICATE_YIELD_EVERY_N_PAIRS === 0) await yieldToEventLoop()
     }
     results.sort((x, y) => y.score - x.score)
 

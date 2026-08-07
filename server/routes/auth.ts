@@ -8,7 +8,7 @@ import { pool }        from '../db/pool.js'
 import { env }         from '../lib/env.js'
 import { decrypt }     from '../services/crypto.js'
 import { ldapAuth, type LdapConfig } from '../services/ldap.js'
-import { requireAuth, tryApiToken, API_TOKEN_PREFIX } from '../middleware/auth.js'
+import { requireAuth, requireUser, tryApiToken, API_TOKEN_PREFIX } from '../middleware/auth.js'
 import { logAudit }    from '../services/audit.js'
 import { serverError } from '../lib/errors.js'
 
@@ -101,16 +101,21 @@ router.post('/login', loginLimiter, async (req, res) => {
     id: string; username: string; role: string; is_active: boolean; password_hash: string | null
   }>('SELECT id, username, role, is_active, password_hash FROM users WHERE username = $1', [uname])
 
-  if (userRows.length && userRows[0].password_hash) {
+  if (userRows.length) {
     const u = userRows[0]
-    if (!u.is_active) { res.status(403).json({ error: 'Account is deactivated' }); return }
+    // Narrows on `u.password_hash` itself (not the `userRows[0]` expression checked above,
+    // which TS doesn't treat as the same value once re-read through `u`) so the compare
+    // below sees it as `string`, not `string | null`.
+    if (u.password_hash) {
+      if (!u.is_active) { res.status(403).json({ error: 'Account is deactivated' }); return }
 
-    const ok = await bcrypt.compare(password, u.password_hash!)
-    if (!ok) { res.status(401).json({ error: 'Invalid credentials' }); return }
-    const token = signToken(u.id, u.username, u.role)
-    res.cookie('devbrain_token', token, COOKIE_OPTS)
-    res.json({ data: { token, devMode: false, user: { id: u.id, username: u.username, role: u.role } } })
-    return
+      const ok = await bcrypt.compare(password, u.password_hash)
+      if (!ok) { res.status(401).json({ error: 'Invalid credentials' }); return }
+      const token = signToken(u.id, u.username, u.role)
+      res.cookie('devbrain_token', token, COOKIE_OPTS)
+      res.json({ data: { token, devMode: false, user: { id: u.id, username: u.username, role: u.role } } })
+      return
+    }
   }
 
   // User not found or LDAP-only — run dummy bcrypt to equalize response time
@@ -285,7 +290,8 @@ router.post('/change-password', requireAuth, async (req, res) => {
   }
   const { currentPassword, newPassword } = parsed.data
 
-  const userId = req.user!.id
+  const user = requireUser(req)
+  const userId = user.id
   if (userId === 'legacy' || userId === 'dev') {
     res.status(400).json({ error: 'Cannot change password in legacy/dev mode' })
     return
@@ -299,7 +305,7 @@ router.post('/change-password', requireAuth, async (req, res) => {
 
   const hash = await bcrypt.hash(newPassword, 10)
   await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, userId])
-  await logAudit(userId, req.user!.username, 'user', userId, req.user!.username, 'update', { changed: ['password_hash'] })
+  await logAudit(userId, user.username, 'user', userId, user.username, 'update', { changed: ['password_hash'] })
   res.json({ data: { ok: true } })
 })
 

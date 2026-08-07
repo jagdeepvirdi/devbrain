@@ -1,11 +1,12 @@
 import { Router } from 'express'
 import { pool } from '../db/pool.js'
+import { requireUser } from '../middleware/auth.js'
 
 const router = Router()
 
 // ── GET /api/notifications ──────────────────────────────────────────────────
 router.get('/', async (req, res) => {
-  const userId = req.user!.id
+  const userId = requireUser(req).id
   const limit  = Math.min(Number(req.query.limit  ?? 50), 200)
   const offset = Number(req.query.offset ?? 0)
 
@@ -42,7 +43,7 @@ router.get('/', async (req, res) => {
 
 // ── PATCH /api/notifications/read-all ──────────────────────────────────────
 router.patch('/read-all', async (req, res) => {
-  const userId = req.user!.id
+  const userId = requireUser(req).id
 
   try {
     await pool.query(
@@ -60,7 +61,7 @@ router.patch('/read-all', async (req, res) => {
 
 // ── PATCH /api/notifications/:id/read ──────────────────────────────────────
 router.patch('/:id/read', async (req, res) => {
-  const userId = req.user!.id
+  const userId = requireUser(req).id
   const { id } = req.params
 
   try {

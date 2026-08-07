@@ -2,7 +2,7 @@ import { Router }        from 'express'
 import { z }             from 'zod'
 import { aiEmbed, aiChat, aiChatStream } from '../services/ai.js'
 import { searchChunks, countTokens }     from '../services/embedder.js'
-import { requireRole } from '../middleware/auth.js'
+import { requireRole, requireUser } from '../middleware/auth.js'
 import { pool }        from '../db/pool.js'
 import { serverError } from '../lib/errors.js'
 
@@ -128,7 +128,7 @@ router.post('/', requireRole('viewer'), async (req, res) => {
   }
 
   const { question, sessionId, projectId, documentId, component } = parsed.data
-  const userId = req.user!.id
+  const userId = requireUser(req).id
 
   // Resolve the session before opening the SSE stream so a bad sessionId
   // can return a normal 404 instead of an SSE error event.
@@ -327,6 +327,7 @@ ${excerpts}`
 
 router.get('/sessions', async (req, res) => {
   const projectId = req.query.projectId as string | undefined
+  const userId = requireUser(req).id
   try {
     const { rows } = await pool.query(
       `SELECT s.id, s.project_id, s.component, s.title, s.created_at, s.updated_at,
@@ -334,7 +335,7 @@ router.get('/sessions', async (req, res) => {
          FROM chat_sessions s
         WHERE s.user_id = $1 ${projectId ? 'AND s.project_id = $2' : ''}
         ORDER BY s.updated_at DESC`,
-      projectId ? [req.user!.id, projectId] : [req.user!.id]
+      projectId ? [userId, projectId] : [userId]
     )
     res.json({ data: rows })
   } catch (err) {
@@ -346,7 +347,7 @@ router.get('/sessions', async (req, res) => {
 
 router.get('/sessions/:id/messages', async (req, res) => {
   try {
-    const owned = await pool.query('SELECT id FROM chat_sessions WHERE id = $1 AND user_id = $2', [req.params.id, req.user!.id])
+    const owned = await pool.query('SELECT id FROM chat_sessions WHERE id = $1 AND user_id = $2', [req.params.id, requireUser(req).id])
     if (!owned.rows.length) return res.status(404).json({ error: 'Chat session not found' })
 
     const { rows } = await pool.query(
@@ -368,7 +369,7 @@ router.delete('/sessions/:id', async (req, res) => {
   try {
     const { rows } = await pool.query(
       'DELETE FROM chat_sessions WHERE id = $1 AND user_id = $2 RETURNING id',
-      [req.params.id, req.user!.id]
+      [req.params.id, requireUser(req).id]
     )
     if (!rows.length) return res.status(404).json({ error: 'Chat session not found' })
     res.json({ data: { deleted: rows[0].id } })

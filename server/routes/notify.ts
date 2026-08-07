@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { pool } from '../db/pool.js'
 import { sendAppriseNotification } from '../services/notifier.js'
 import { getUsersToNotify } from '../services/notifications.js'
-import { requireAuth } from '../middleware/auth.js'
+import { requireAuth, requireUser } from '../middleware/auth.js'
 import { encrypt, decrypt } from '../services/crypto.js'
 
 const router = Router()
@@ -68,7 +68,7 @@ router.post('/send-digest', async (req, res) => {
 
 // ── GET /api/notify/log (Paginated log for external deliveries) ──────────────
 router.get('/log', requireAuth, async (req, res) => {
-  const userId = req.user!.id
+  const userId = requireUser(req).id
   const { project, level, channel, status, dateFrom, dateTo } = req.query as Record<string, string>
   const limit  = Math.min(Number(req.query.limit  ?? 50), 200)
   const offset = Number(req.query.offset ?? 0)
@@ -131,7 +131,7 @@ router.get('/log', requireAuth, async (req, res) => {
 
 // ── POST /api/notify/test (Test user's external delivery channels) ───────────
 router.post('/test', requireAuth, async (req, res) => {
-  const userId = req.user!.id
+  const userId = requireUser(req).id
   try {
     const results = await sendAppriseNotification({
       userId,
@@ -157,7 +157,7 @@ router.post('/test', requireAuth, async (req, res) => {
 
 // ── POST /api/notify/retry/:id (Retry failed notification) ───────────────────
 router.post('/retry/:id', requireAuth, async (req, res) => {
-  const userId = req.user!.id
+  const userId = requireUser(req).id
   const { id } = req.params
 
   try {
@@ -192,7 +192,7 @@ router.post('/retry/:id', requireAuth, async (req, res) => {
 
 // ── Apprise Channels CRUD ────────────────────────────────────────────────────
 router.get('/channels', requireAuth, async (req, res) => {
-  const userId = req.user!.id
+  const userId = requireUser(req).id
   try {
     const { rows } = await pool.query(
       `SELECT id, name, apprise_url, enabled, created_at 
@@ -228,7 +228,7 @@ const ChannelSchema = z.object({
 })
 
 router.post('/channels', requireAuth, async (req, res) => {
-  const userId = req.user!.id
+  const userId = requireUser(req).id
   const parsed = ChannelSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
@@ -249,7 +249,7 @@ router.post('/channels', requireAuth, async (req, res) => {
 })
 
 router.delete('/channels/:id', requireAuth, async (req, res) => {
-  const userId = req.user!.id
+  const userId = requireUser(req).id
   const { id } = req.params
   try {
     await pool.query(
@@ -263,7 +263,7 @@ router.delete('/channels/:id', requireAuth, async (req, res) => {
 })
 
 router.patch('/channels/:id', requireAuth, async (req, res) => {
-  const userId = req.user!.id
+  const userId = requireUser(req).id
   const { id } = req.params
   const { enabled } = req.body
   if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled boolean required' })

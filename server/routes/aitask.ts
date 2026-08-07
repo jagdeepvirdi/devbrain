@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { aiChat, aiChatStream } from '../services/ai.js'
-import { requireRole } from '../middleware/auth.js'
+import { requireRole, requireUser } from '../middleware/auth.js'
 import { pool } from '../db/pool.js'
 import { createNotification } from '../services/notifications.js'
 
@@ -56,6 +56,7 @@ router.post('/', requireRole('member'), async (req, res) => {
   const { task, format, stream } = parsed.data
   const formatInstruction = FORMAT_PROMPTS[format]
   const system = `${SYSTEM}\n\n${formatInstruction}`
+  const userId = requireUser(req).id
 
   if (stream) {
     res.setHeader('Content-Type', 'text/event-stream')
@@ -73,7 +74,7 @@ router.post('/', requireRole('member'), async (req, res) => {
         }
       )
       res.write('data: [DONE]\n\n')
-      handleAiTaskDoneNotification(req.user!.id, task).catch(() => {})
+      handleAiTaskDoneNotification(userId, task).catch(() => {})
     } catch (err) {
       res.write(`data: ${JSON.stringify({ error: (err as Error).message })}\n\n`)
     }
@@ -84,7 +85,7 @@ router.post('/', requireRole('member'), async (req, res) => {
 
   try {
     const result = await aiChat(task, system)
-    handleAiTaskDoneNotification(req.user!.id, task).catch(() => {})
+    handleAiTaskDoneNotification(userId, task).catch(() => {})
     res.json({ data: { result, format } })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })

@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { pool }   from '../db/pool.js'
 import { aiEmbed } from '../services/ai.js'
+import { requireUser } from '../middleware/auth.js'
 
 const router = Router()
 
@@ -15,13 +16,16 @@ router.get('/', async (req, res) => {
   // Per-table project filter fragment ($2 when pid set, nothing otherwise)
   const pf = (alias: string) => pid ? `AND ${alias}.project_id = $2` : ''
 
-  if (q && req.user?.id) {
+  // Captured as a stable const before the closure below — TS narrows a `const` through a
+  // closure, but not a property access re-evaluated each time (req.user?.id directly inside
+  // the IIFE wouldn't narrow), so this indirection is what actually removes the assertion.
+  const searchHistoryUserId = req.user?.id
+  if (q && searchHistoryUserId) {
     (async () => {
       try {
-        const userId = req.user!.id
         await pool.query(
           `INSERT INTO search_history (user_id, query) VALUES ($1, $2)`,
-          [userId, q]
+          [searchHistoryUserId, q]
         )
         await pool.query(
           `DELETE FROM search_history
@@ -31,7 +35,7 @@ router.get('/', async (req, res) => {
              ORDER BY created_at DESC
              LIMIT 50
            )`,
-          [userId]
+          [searchHistoryUserId]
         )
       } catch (err) {
         console.error('failed to update search history:', err)
@@ -259,7 +263,7 @@ router.get('/suggestions', async (req, res) => {
 // ── GET /api/search/history ──────────────────────────────────────────────────
 router.get('/history', async (req, res) => {
   try {
-    const userId = req.user!.id
+    const userId = requireUser(req).id
     const { rows } = await pool.query(
       `SELECT id, query, created_at
        FROM search_history
@@ -278,7 +282,7 @@ router.get('/history', async (req, res) => {
 // ── GET /api/search/filters ──────────────────────────────────────────────────
 router.get('/filters', async (req, res) => {
   try {
-    const userId = req.user!.id
+    const userId = requireUser(req).id
     const { rows } = await pool.query(
       `SELECT id, name, entity_type, filter_json, created_at
        FROM saved_filters
@@ -296,7 +300,7 @@ router.get('/filters', async (req, res) => {
 // ── POST /api/search/filters ─────────────────────────────────────────────────
 router.post('/filters', async (req, res) => {
   try {
-    const userId = req.user!.id
+    const userId = requireUser(req).id
     const { name, entity_type, filter_json } = req.body
     if (!name || typeof name !== 'string' || !entity_type || typeof entity_type !== 'string' || !filter_json) {
       return res.status(400).json({ error: 'Missing name, entity_type, or filter_json' })
@@ -317,7 +321,7 @@ router.post('/filters', async (req, res) => {
 // ── DELETE /api/search/filters/:id ───────────────────────────────────────────
 router.delete('/filters/:id', async (req, res) => {
   try {
-    const userId = req.user!.id
+    const userId = requireUser(req).id
     const { id } = req.params
     const { rowCount } = await pool.query(
       `DELETE FROM saved_filters WHERE id = $1 AND user_id = $2`,

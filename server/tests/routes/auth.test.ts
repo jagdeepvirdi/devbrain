@@ -22,6 +22,10 @@ vi.mock('../../middleware/auth.js', () => ({
   tryApiToken: vi.fn(),
   requireAuth: (_req: unknown, _res: unknown, next: () => void) => next(),
   requireRole: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  requireUser: (req: { user?: unknown }) => {
+    if (!req.user) throw new Error('requireUser() called without an authenticated request — requireAuth must run first')
+    return req.user
+  },
 }))
 
 vi.mock('bcrypt', () => ({

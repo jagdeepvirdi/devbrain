@@ -262,17 +262,50 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
 
 ### Tier 1 — Correctness & reliability (do first)
 
-- [ ] **Event Loop Blocking in Duplicate Document Line Similarity** *(from [[Phase 34]])* — `POST /api/documents/find-duplicates`
-      computes multiset Dice-similarity on full raw text synchronously on the main event thread. Add string
-      length caps or async yielding for large contents. **Why top priority**: this is the only item here that's
-      an active availability risk — a large-content duplicate scan blocks the entire single-threaded Node
-      process, stalling every other in-flight request (including DocChat/RAG) for its duration, not just the
-      requesting user.
-- [ ] **60 Non-null Assertion (`!`) Warnings in Server Routes** *(from [[Phase 34]])* — ESLint flags 60 instances
-      of `@typescript-eslint/no-non-null-assertion` across `aitask.ts`, `auth.ts`, `chat.ts`, `documents.ts`,
-      `users.ts`, `ai.ts`. Refactor to strict guards to prevent uncaught runtime type errors. **Why here**: two
-      of the six files (`auth.ts`, `ai.ts`) sit on core/every-request paths — an unchecked assertion there is a
-      live crash risk, not just a style nit.
+- [x] **Event Loop Blocking in Duplicate Document Line Similarity** *(from [[Phase 34]])* — fixed 2026-08-07 in
+      `server/routes/documents.ts`'s `POST /find-duplicates`: (1) `DUPLICATE_COMPARE_CHARS` (300,000) caps how
+      much of each file's content `lineSimilarity()` actually diffs, bounding the cost of any single pathological
+      pair; (2) the candidate-pairs loop now yields to the event loop via `setImmediate` every 25 pairs
+      (`DUPLICATE_YIELD_EVERY_N_PAIRS`) instead of scoring the whole shortlist in one unbroken synchronous
+      stretch. Also removed the `contentById.get(id)!` assertions in the same loop (swapped for an `if (a && b)`
+      guard) while in there. 2 new tests: one proves the char cap by constructing files that share an identical
+      >300K-char prefix and diverge only in the (uncompared) tail, asserting the score still comes out to
+      exactly 1; the other spies on `setImmediate` with 8 documents (28 candidate pairs) and confirms it's
+      actually invoked. All 10 tests in `documents_find_duplicates.test.ts` pass.
+- [x] **60 Non-null Assertion (`!`) Warnings in Server Routes** *(from [[Phase 34]])* — fixed 2026-08-07. Recount
+      at fix time was 58 (across 14 files, not the 6 originally listed — the 2026-07-24 audit's file list was
+      already stale). Zero remain (`npx eslint . | grep -c no-non-null-assertion` → 0). Two patterns covered
+      most of them:
+      - **`req.user!` (32 of 58, across `aitask.ts`, `auth.ts`, `chat.ts`, `integrations.ts`, `notifications.ts`,
+        `notify.ts`, `search.ts`, `users.ts`)** — added `requireUser(req)` to `middleware/auth.ts`: throws a clear
+        error if `req.user` is missing instead of silently trusting it. Verified per-file that the route is
+        actually reached only after `req.user` is set (either the app-wide `requireAuth` mounted before that
+        router in `index.ts`, or a route-level `requireAuth`/`requireRole` above `'viewer'`) before applying it —
+        this is a real invariant, not a blind assertion swap. `auth.test.ts`'s hand-rolled `middleware/auth.js`
+        mock needed `requireUser` added to match.
+      - **Everything else (26 instances, one-off per call site)** — no single shared fix; each was a case of
+        TypeScript's narrowing not surviving a specific boundary (a nested closure, a re-fetched `Map`/array
+        lookup, a separately-tracked boolean standing in for a nullable value) and was fixed at the root rather
+        than re-asserted: `documents.ts`'s `docId!` (3x) → typed `pool.query<{ id: string }>(...)` so the insert's
+        `RETURNING id` narrows the variable properly instead of losing type info through an untyped `rows[0].id`;
+        `settings.ts`'s `client!` (6x, zip-import) → branches on `client` truthiness itself instead of a separately-
+        tracked `isDryRun` boolean, so the compiler's own narrowing proves it; `search.ts`'s closure case →
+        captured `req.user?.id` into a stable `const` *before* entering the async IIFE that used it (narrowing
+        doesn't cross closure boundaries for re-evaluated property access, only for stable bindings);
+        `ldap.ts`'s `userDn!` → same closure-capture fix, one level deeper (nested inside `client.bind()`'s own
+        callback); `auth.ts`'s `u.password_hash!` → restructured so the truthy-check narrows `u.password_hash`
+        itself, not the differently-expressed `userRows[0].password_hash`; `ai.ts`'s `ANTHROPIC_API_KEY!` (2x) and
+        `res.body!` (3x) → explicit `if (!x) throw` guards, which happen to also be genuine defense-in-depth (the
+        API key's "required" invariant is enforced by env.ts startup validation, not the type system, and
+        `res.body` really can be null per the Fetch API's own types even after `res.ok`); `tasks-watcher.ts`'s
+        `subscribers.get(id)!` → rewritten as a standard get-or-create (`let subs = map.get(k); if (!subs) {...}`)
+        instead of a `.has()` check followed by a separate `.get()!`; `integrations.ts`'s `syncLinear`'s `token!`
+        → this one was a real (if unlikely) bug, not just a lint nit: `token` can genuinely be `null` when an
+        integration has no PAT configured, which would have sent a literal `"null"` Authorization header to
+        Linear's API instead of a clear local error.
+      All touched files' existing test suites re-run clean (server: 1222/1222 + 1 skipped, unrelated to this
+      item); no behavior changes intended anywhere — every fix is either a type-narrowing restructure or an
+      explicit guard on an invariant that was already true.
 
 ### Tier 2 — Code quality / maintainability
 

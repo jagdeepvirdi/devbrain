@@ -50,10 +50,15 @@ function toGeminiContents(messages: Message[]) {
  */
 export async function aiChat(prompt: string, system: string): Promise<string> {
   if (env.AI_PROVIDER === 'claude') {
+    // Guaranteed set by env.ts's startup validation (AI_PROVIDER=claude requires it, or the
+    // process never starts) — this re-check is defense in depth against that invariant ever
+    // being loosened, not a "this might actually be missing" case.
+    if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is required when AI_PROVIDER=claude')
+
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'x-api-key':         env.ANTHROPIC_API_KEY!,
+        'x-api-key':         env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
         'Content-Type':      'application/json',
       },
@@ -174,13 +179,16 @@ export async function aiChatStream(
   onChunk: (chunk: string) => void
 ): Promise<void> {
   if (env.AI_PROVIDER === 'claude') {
+    // Same startup-validated invariant as aiChat() above.
+    if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is required when AI_PROVIDER=claude')
+
     const system      = messages.find(m => m.role === 'system')?.content ?? ''
     const userMessages = messages.filter(m => m.role !== 'system')
 
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'x-api-key':         env.ANTHROPIC_API_KEY!,
+        'x-api-key':         env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
         'Content-Type':      'application/json',
       },
@@ -197,8 +205,9 @@ export async function aiChatStream(
       const body = await res.text()
       throw new Error(`Claude stream error ${res.status}: ${body}`)
     }
+    if (!res.body) throw new Error('Claude stream response had no body')
 
-    const reader  = res.body!.getReader()
+    const reader  = res.body.getReader()
     const decoder = new TextDecoder()
 
     while (true) {
@@ -242,8 +251,9 @@ export async function aiChatStream(
       const body = await res.text()
       throw new Error(`Gemini stream error ${res.status}: ${body}`)
     }
+    if (!res.body) throw new Error('Gemini stream response had no body')
 
-    const reader  = res.body!.getReader()
+    const reader  = res.body.getReader()
     const decoder = new TextDecoder()
 
     while (true) {
@@ -283,8 +293,9 @@ export async function aiChatStream(
       const body = await res.text()
       throw new Error(`Ollama stream error ${res.status}: ${body}`)
     }
+    if (!res.body) throw new Error('Ollama stream response had no body')
 
-    const reader  = res.body!.getReader()
+    const reader  = res.body.getReader()
     const decoder = new TextDecoder()
 
     while (true) {

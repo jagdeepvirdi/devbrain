@@ -639,15 +639,17 @@ router.post('/zip-import', requireRole('admin'), upload.single('file'), async (r
         const title = (fm.title as string | undefined) ?? filename.replace(/\.md$/, '')
 
         if (entityDir === 'documents') {
-          // Check duplicate: same title + project
-          const { rows: existing } = isDryRun
-            ? await pool.query('SELECT id FROM documents WHERE title = $1 AND project_id = $2', [title, projectId])
-            : await client!.query('SELECT id FROM documents WHERE title = $1 AND project_id = $2', [title, projectId])
+          // Check duplicate: same title + project. Branches on `client` itself (not `isDryRun`)
+          // so TypeScript's own null-narrowing proves client is non-null wherever it's used,
+          // rather than trusting a separately-tracked boolean to stay in sync with it.
+          const { rows: existing } = client
+            ? await client.query('SELECT id FROM documents WHERE title = $1 AND project_id = $2', [title, projectId])
+            : await pool.query('SELECT id FROM documents WHERE title = $1 AND project_id = $2', [title, projectId])
 
           if (existing.length > 0) {
             summary.documents.skipped++
-          } else if (!isDryRun) {
-            await client!.query(
+          } else if (client) {
+            await client.query(
               `INSERT INTO documents (project_id, title, file_type, tags, source, content, created_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7)`,
               [
@@ -665,14 +667,14 @@ router.post('/zip-import', requireRole('admin'), upload.single('file'), async (r
             summary.documents.created++
           }
         } else if (entityDir === 'issues') {
-          const { rows: existing } = isDryRun
-            ? await pool.query('SELECT id FROM issues WHERE title = $1 AND project_id = $2', [title, projectId])
-            : await client!.query('SELECT id FROM issues WHERE title = $1 AND project_id = $2', [title, projectId])
+          const { rows: existing } = client
+            ? await client.query('SELECT id FROM issues WHERE title = $1 AND project_id = $2', [title, projectId])
+            : await pool.query('SELECT id FROM issues WHERE title = $1 AND project_id = $2', [title, projectId])
 
           if (existing.length > 0) {
             summary.issues.skipped++
-          } else if (!isDryRun) {
-            await client!.query(
+          } else if (client) {
+            await client.query(
               `INSERT INTO issues (project_id, title, status, priority, tags, description, resolution, created_at, resolved_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
               [
@@ -692,9 +694,9 @@ router.post('/zip-import', requireRole('admin'), upload.single('file'), async (r
             summary.issues.created++
           }
         } else if (entityDir === 'commands') {
-          const { rows: existing } = isDryRun
-            ? await pool.query('SELECT id FROM commands WHERE title = $1 AND project_id = $2', [title, projectId])
-            : await client!.query('SELECT id FROM commands WHERE title = $1 AND project_id = $2', [title, projectId])
+          const { rows: existing } = client
+            ? await client.query('SELECT id FROM commands WHERE title = $1 AND project_id = $2', [title, projectId])
+            : await pool.query('SELECT id FROM commands WHERE title = $1 AND project_id = $2', [title, projectId])
 
           // Extract command from code block in body
           const cmdMatch = parsed.content.match(/```[^\n]*\n([\s\S]*?)```/)
@@ -702,8 +704,8 @@ router.post('/zip-import', requireRole('admin'), upload.single('file'), async (r
 
           if (existing.length > 0) {
             summary.commands.skipped++
-          } else if (!isDryRun) {
-            await client!.query(
+          } else if (client) {
+            await client.query(
               `INSERT INTO commands (project_id, title, command, language, description, tags, is_favorite, created_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
               [

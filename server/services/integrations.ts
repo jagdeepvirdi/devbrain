@@ -138,6 +138,10 @@ function mapJiraStatus(s: string): string {
 }
 
 export async function syncLinear(integration: SyncIntegration, token: string | null) {
+  // A missing token would otherwise reach fetch() as a literal "null" Authorization header —
+  // a confusing 401 from Linear instead of a clear local error about the actual problem.
+  if (!token) throw new Error('Linear sync requires an API token — none is configured for this integration')
+
   const teamKey = integration.external_project_id
   const query = `
     query($teamKey: String!, $first: Int!) {
@@ -148,7 +152,7 @@ export async function syncLinear(integration: SyncIntegration, token: string | n
 
   const res = await fetch('https://api.linear.app/graphql', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': token! },
+    headers: { 'Content-Type': 'application/json', 'Authorization': token },
     body: JSON.stringify({ query, variables: { teamKey, first: 100 } })
   })
   if (!res.ok) throw new Error(`Linear API error: ${res.status}`)

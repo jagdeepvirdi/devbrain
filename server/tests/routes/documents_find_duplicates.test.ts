@@ -163,4 +163,44 @@ describe('POST /api/documents/find-duplicates', () => {
     await getHandler('/find-duplicates')(req, res, () => {})
     expect(res.status).toHaveBeenCalledWith(500)
   })
+
+  it('caps how much of each file is actually diffed, so a divergent tail past the cap never affects the score', async () => {
+    // Both files share an identical block well past the 300,000-char compare cap, then diverge
+    // completely. If the cap weren't applied, the differing tails would pull the score below 1;
+    // scoring exactly 1 proves only the (identical) truncated prefix was ever compared.
+    const sharedLine  = 'x'.repeat(100)
+    const sharedBlock = Array(3100).fill(sharedLine).join('\n') // > 300,000 chars on its own
+    const contentA = `${sharedBlock}\nUNIQUE_TAIL_A_UNIQUE_TAIL_A`
+    const contentB = `${sharedBlock}\nUNIQUE_TAIL_B_UNIQUE_TAIL_B`
+
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'doc-1', title: 'a.ts', content: contentA }, { id: 'doc-2', title: 'b.ts', content: contentB }] } as any)
+      .mockResolvedValueOnce({ rows: [] } as any) // neither has a summary embedding -> all-pairs fallback
+
+    const req: any = { body: { projectId: null } }
+    const res = fakeRes()
+    await getHandler('/find-duplicates')(req, res, () => {})
+
+    expect(res.json).toHaveBeenCalledWith({
+      data: [{ docA: { id: 'doc-1', title: 'a.ts' }, docB: { id: 'doc-2', title: 'b.ts' }, score: 1 }],
+    })
+  })
+
+  it('yields to the event loop periodically instead of scoring every candidate pair in one unbroken stretch', async () => {
+    const setImmediateSpy = vi.spyOn(global, 'setImmediate')
+
+    // 8 documents, all lacking a summary embedding, fall back to comparing every pair directly —
+    // C(8,2) = 28 pairs, crossing the 25-pairs-per-yield threshold at least once.
+    const docs = Array.from({ length: 8 }, (_, i) => ({ id: `doc-${i}`, title: `f${i}.ts`, content: `line-${i}` }))
+    mockQuery
+      .mockResolvedValueOnce({ rows: docs } as any)
+      .mockResolvedValueOnce({ rows: [] } as any) // no summary embeddings at all -> full cross-product fallback
+
+    const req: any = { body: { projectId: null } }
+    const res = fakeRes()
+    await getHandler('/find-duplicates')(req, res, () => {})
+
+    expect(setImmediateSpy).toHaveBeenCalled()
+    expect(res.json).toHaveBeenCalled() // still completes and responds normally
+  })
 })

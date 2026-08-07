@@ -76,20 +76,24 @@ export async function ldapAuth(username: string, password: string, config: LdapC
         })
 
         res.on('end', () => {
-          if (!userDn) { 
+          if (!userDn) {
             client.destroy()
             resolve(null)
-            return 
+            return
           }
+          // Captured as a stable const — `userDn` is a mutable `let` reassigned from a
+          // sibling callback, so TS won't carry the truthy-narrowing above into the nested
+          // client.bind() callback below without this.
+          const dn = userDn
 
-          client.bind(userDn, password, (bindErr) => {
+          client.bind(dn, password, (bindErr) => {
             client.destroy()
-            if (bindErr) { 
+            if (bindErr) {
               console.warn('LDAP user bind failed:', bindErr.message)
               resolve(null)
-              return 
+              return
             }
-            resolve({ username, email, dn: userDn! })
+            resolve({ username, email, dn })
           })
         })
       })

@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { z }      from 'zod'
 import { pool }   from '../db/pool.js'
 import { encrypt, decrypt } from '../services/crypto.js'
-import { requireRole } from '../middleware/auth.js'
+import { requireRole, requireUser } from '../middleware/auth.js'
 import { syncGitHub, syncJira, syncLinear } from '../services/integrations.js'
 import { createNotification } from '../services/notifications.js'
 
@@ -95,7 +95,7 @@ router.post('/:id/sync', requireRole('member'), async (req, res) => {
       const { rows: settingsRows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'notification_rules'`)
       const rules = settingsRows[0]?.value ?? {}
       if (rules.sync_alerts_enabled !== false) {
-        await createNotification(req.user!.id, {
+        await createNotification(requireUser(req).id, {
           type: 'sync_complete',
           title: `Sync Complete: ${integration.provider}`,
           body: `Successfully imported ${result.created} new issues from ${integration.provider}.`,

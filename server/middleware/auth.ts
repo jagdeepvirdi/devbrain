@@ -101,6 +101,19 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   }
 }
 
+// `req.user` is typed optional because requireAuth is what actually sets it — nothing at the
+// type level ties a route to having that middleware run first. In practice, any route guarded
+// by requireRole(role) above 'viewer' can only reach its handler with req.user set (requireRole
+// treats a missing req.user as 'viewer' rank, which fails every check stricter than 'viewer'),
+// so `req.user!` at those call sites is safe today — but it's an assertion of a cross-file
+// invariant the compiler can't check, and silently wrong if that invariant ever breaks (a new
+// route added without requireAuth wired up). This turns that into a loud, caught-by-the-route's-
+// own-try/catch 500 instead of a cryptic "Cannot read properties of undefined" TypeError.
+export function requireUser(req: Request): AuthUser {
+  if (!req.user) throw new Error('requireUser() called without an authenticated request — requireAuth must run first')
+  return req.user
+}
+
 export function requireRole(minRole: UserRole) {
   return (req: Request, res: Response, next: NextFunction) => {
     const role = req.user?.role ?? 'viewer'
