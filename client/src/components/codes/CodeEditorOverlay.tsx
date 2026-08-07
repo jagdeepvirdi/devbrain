@@ -138,6 +138,9 @@ export function CodeEditorOverlay({ doc, onClose, onSaved }: CodeEditorOverlayPr
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'var(--bg)', zIndex: 900, display: 'flex', flexDirection: 'column' }}>
       <div style={{ padding: '10px 18px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+        <button onClick={handleCloseClick} style={{ color: 'var(--accent-2)', cursor: 'default', fontSize: 12, flexShrink: 0 }}>
+          ← Codes
+        </button>
         {doc.language && (
           <span style={{ height: 20, padding: '0 6px', borderRadius: 4, fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-mono)', color: langColor(doc.language), background: 'var(--bg-elev-2)', border: `1px solid ${langColor(doc.language)}40`, display: 'inline-flex', alignItems: 'center' }}>
             {doc.language}
@@ -190,8 +193,6 @@ export function CodeEditorOverlay({ doc, onClose, onSaved }: CodeEditorOverlayPr
             Edit
           </button>
         )}
-
-        <button onClick={handleCloseClick} style={{ color: 'var(--fg-3)', fontSize: 14, padding: '2px 6px', borderRadius: 'var(--radius)' }}>✕</button>
       </div>
 
       {draftBanner && (

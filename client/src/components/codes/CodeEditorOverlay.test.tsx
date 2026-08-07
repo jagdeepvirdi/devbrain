@@ -116,6 +116,24 @@ describe('CodeEditorOverlay', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
+  it('the ← Codes back button closes immediately while read-only', () => {
+    const onClose = vi.fn()
+    render(<CodeEditorOverlay doc={baseDoc} onClose={onClose} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByText('← Codes'))
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('the ← Codes back button asks for confirmation when there are unsaved changes', () => {
+    const onClose = vi.fn()
+    render(<CodeEditorOverlay doc={baseDoc} onClose={onClose} onSaved={vi.fn()} />)
+    enterEditMode()
+    fireEvent.change(screen.getByLabelText('code'), { target: { value: 'dirty' } })
+
+    fireEvent.click(screen.getByText('← Codes'))
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByText('Discard unsaved changes?')).toBeInTheDocument()
+  })
+
   it('asks for confirmation on Escape when there are unsaved changes, and only closes once confirmed', () => {
     const onClose = vi.fn()
     render(<CodeEditorOverlay doc={baseDoc} onClose={onClose} onSaved={vi.fn()} />)

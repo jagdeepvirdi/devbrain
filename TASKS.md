@@ -121,6 +121,10 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
   Codes-tab trigger button reads "Open" (was "Edit"), and the overlay itself shows a "read-only" badge + an
   "Edit" button in the header. Clicking it flips the editor writable and swaps in the Save/autosave controls —
   so browsing a file never risks an accidental edit, and only clicking Edit switches into the mutation path.
+- Explicit "← Codes" back-link in the header (top-left, same convention as `IssueDetail.tsx`'s "← Issues"),
+  added after user feedback that the original small "✕" close button in a control-heavy header wasn't
+  discoverable. Replaces the "✕" outright rather than sitting alongside it; routes through the same
+  confirm-if-dirty close path as Escape.
 
 ### Tasks
 - [x] `PATCH /api/documents/:id/content` — Zod-validated `{ content }`, `requireRole('member')`; text-based
@@ -131,16 +135,16 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
       matched language from `@codemirror/language-data` off `doc.language`; applies the GitHub-dark theme
       to match the app theme. `LANGUAGE_COLOR`/`langColor` moved out of `Codes.tsx` into `client/src/lib/language.ts`
       so both the list view and the editor share one source instead of drifting.
-- [x] `client/src/components/codes/CodeEditorOverlay.tsx` — full-screen modal, opens read-only: filename/
-      language badge, dirty indicator, read-only badge + Edit button (view mode) that swaps to autosave toggle
-      + Save button (edit mode), Ctrl+S / Escape (confirm-if-dirty), draft-restore banner (restoring a draft
-      also enters edit mode), localStorage draft persistence keyed `devbrain:draft:<docId>`.
+- [x] `client/src/components/codes/CodeEditorOverlay.tsx` — full-screen modal, opens read-only: "← Codes" back
+      link, filename/language badge, dirty indicator, read-only badge + Edit button (view mode) that swaps to
+      autosave toggle + Save button (edit mode), Ctrl+S / Escape / back-link (all confirm-if-dirty), draft-restore
+      banner (restoring a draft also enters edit mode), localStorage draft persistence keyed `devbrain:draft:<docId>`.
 - [x] Wire into `Codes.tsx` — "Open" action on the preview panel launches the overlay (read-only); existing
       AI/metadata panel (explain, diagram, linked items, reembed, replace-file) stays as-is, unrelated concern.
-- [x] Client tests for `CodeEditorOverlay` (12 tests: opens read-only, Edit switches to writable + reveals Save
-      controls, dirty-tracking, save via button/Ctrl+S, Escape confirm-close, draft restore/discard, autosave
-      on/off) — `CodeEditor` itself is mocked with a `forwardRef` textarea (readOnly forwarded through) so these
-      exercise the overlay's own logic without mounting real CodeMirror in jsdom.
+- [x] Client tests for `CodeEditorOverlay` (14 tests: opens read-only, Edit switches to writable + reveals Save
+      controls, dirty-tracking, save via button/Ctrl+S, Escape/back-link confirm-close, draft restore/discard,
+      autosave on/off) — `CodeEditor` itself is mocked with a `forwardRef` textarea (readOnly forwarded through)
+      so these exercise the overlay's own logic without mounting real CodeMirror in jsdom.
 - [x] Server test for the new `PATCH .../content` endpoint (5 tests: empty/missing content 400s, 404, happy
       path leaves `file_type`/`language` untouched + re-embeds, failure marks `embedding_status = 'failed'`),
       mirroring existing `update-content` coverage.
