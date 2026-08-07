@@ -309,7 +309,7 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
 
 ### Tier 2 — Code quality / maintainability
 
-- [~] **God-file splitting** *(merged from [[Phase 33]] and [[Phase 34]], which each listed an overlapping
+- [x] **God-file splitting** *(merged from [[Phase 33]] and [[Phase 34]], which each listed an overlapping
       subset)* — `client/src/pages/Settings.tsx` (3,002 lines), `server/routes/documents.ts` (942),
       `server/routes/settings.ts` (826), `server/routes/issues.ts` (764), `client/src/pages/Commands.tsx`
       (1,221) are still single-responsibility violations waiting to cause a bad merge. Originally deferred
@@ -341,12 +341,32 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
         segments or a POST-only bare route with no colliding GET/PUT/DELETE `/:id`-shaped route in the parent
         or sibling router. Verified via `tsc --noEmit`, full `vitest run`, and `eslint .` after each split —
         all clean.
-      **Client-side (2 of 5) still not started** — `Settings.tsx` and `Commands.tsx` remain at 0% dedicated
-      test coverage; this session's new client suites (`CodeEditorOverlay`, `Notes`, `FilesTab`,
-      `ProjectFileEditorOverlay`, ~40 tests) established a working test pattern for interactive components but
-      don't cover either file. Splitting them now would mean doing it against effectively untested code —
-      still blocked on writing regression tests for the specific file being split first, not a general
-      "coverage improved" green light. Treat as a distinct, larger follow-up.
+      **Client-side (2 of 5) done 2026-08-07** — wrote regression tests first (per the precondition recorded
+      above), then split, matching the "test before touching untested code" rule:
+      - `Commands.tsx` (1,221→590 lines) → `components/commands/highlighter.ts` (Shiki singleton, lang
+        colors/date fmt), `CodeBlock.tsx` (+ `LangBadge`), `CommandCard.tsx`, `CommandDetail.tsx`,
+        `NewCommandModal.tsx`, `CommandPalette.tsx`. New `Commands.test.tsx` (13 tests) written first against
+        the still-monolithic file — list/search/filter, favorite toggle, create/validate, inline edit, delete
+        confirm, bulk select/tag/favorite/delete, shell-file import, and the command palette's search→copy
+        flow (mocking `shiki`'s `createHighlighter` and `navigator.clipboard`) — then kept green through the
+        extraction unchanged.
+      - `Settings.tsx` (3,002→384 lines) → 15 new files under `components/settings/`: `shared.tsx` (`Row`,
+        `Section`), `constants.ts` (`ROLE_COLOR` — kept out of `shared.tsx` to avoid a
+        `react-refresh/only-export-components` warning from mixing a constant into a components-only file),
+        `UserManagement.tsx`, `AuditLog.tsx`, `ApiTokensSection.tsx`, `IntegrationsSection.tsx`,
+        `LdapConfigurationSection.tsx`, `CandidateRow.tsx` (shared by both integration scanners),
+        `ClaudeIntegrationSection.tsx`, `AntigravityIntegrationSection.tsx`, `ExportSection.tsx`,
+        `ScheduledBackupSection.tsx`, `NotificationRulesSection.tsx`, `ZipImportSection.tsx`,
+        `NotificationHubSection.tsx`, `TemplatesSection.tsx`. `Settings.tsx` keeps only the tab shell plus the
+        General/Account/Data-backup/Danger-Zone blocks that were never factored into their own components.
+        New `Settings.test.tsx` (18 tests, one `describe` per sidebar tab) written first against the
+        monolithic page, mocking the full `lib/api` surface it touches — covers the primary data-fetch and
+        one create/save action per tab, plus a non-admin-hides-admin-tabs check — then kept green through the
+        extraction.
+      - Both splits verified via `tsc --noEmit`, full `vitest run` (84/84 passing — the 66 pre-existing plus
+        the 18 new Settings tests; Commands' 13 were already counted in the 66), and `eslint .` (0 errors,
+        warning count unchanged from the pre-split baseline — confirmed by diffing against the original files'
+        own lint output, not just eyeballing).
 
 ### Tier 3 — Feature enhancements
 
