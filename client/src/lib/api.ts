@@ -1269,6 +1269,22 @@ export const gitApi = {
     request<{ commits: string; count: number }>(`/git/${projectId}/compare?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}`),
 }
 
+// ── Project files (real on-disk files under a project's linked fs_path) ────
+
+export type ProjectFileEntry = { name: string; type: 'file' | 'dir'; size?: number }
+
+export const projectFilesApi = {
+  list: (projectId: string, dirPath = '') =>
+    request<{ path: string; items: ProjectFileEntry[] }>(`/project-files/${projectId}?path=${encodeURIComponent(dirPath)}`),
+  getContent: (projectId: string, filePath: string) =>
+    request<{ path: string; content: string; size: number }>(`/project-files/${projectId}/content?path=${encodeURIComponent(filePath)}`),
+  writeContent: (projectId: string, filePath: string, content: string) =>
+    request<{ path: string; size: number }>(`/project-files/${projectId}/content?path=${encodeURIComponent(filePath)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    }),
+}
+
 // ── Integrations ──────────────────────────────────────────────────────────
 
 export type Integration = {

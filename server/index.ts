@@ -190,6 +190,8 @@ import auditRouter from './routes/audit.js'
 app.use('/api/audit',     auditRouter)
 import gitRouter          from './routes/git.js'
 app.use('/api/git',           gitRouter)
+import projectFilesRouter from './routes/project-files.js'
+app.use('/api/project-files', projectFilesRouter)
 import integrationsRouter from './routes/integrations.js'
 app.use('/api/integrations',  integrationsRouter)
 import notificationsRouter from './routes/notifications.js'

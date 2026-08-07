@@ -21,10 +21,16 @@ const theme = githubDarkInit({
   settings: { fontFamily: 'var(--font-mono), monospace', background: 'transparent', gutterBackground: 'transparent' },
 })
 
-async function loadLanguageExtension(language: string | null): Promise<LanguageSupport | null> {
-  if (!language) return null
-  const name = CM_LANGUAGE_NAME[language] ?? language
-  const desc = LanguageDescription.matchLanguageName(languages, name, true)
+// `language` (DevBrain's internal short code, e.g. from documents.language) is tried first;
+// `filename` (a real path/basename, for the Phase 37 on-disk file editor which has no
+// stored language column) is the fallback, matched via CodeMirror's own filename→grammar
+// table. Exactly one of the two is expected to be meaningful for any given caller.
+async function loadLanguageExtension(language: string | null, filename?: string): Promise<LanguageSupport | null> {
+  const desc = language
+    ? LanguageDescription.matchLanguageName(languages, CM_LANGUAGE_NAME[language] ?? language, true)
+    : filename
+    ? LanguageDescription.matchFilename(languages, filename)
+    : null
   if (!desc) return null
   try {
     return await desc.load()
@@ -35,23 +41,24 @@ async function loadLanguageExtension(language: string | null): Promise<LanguageS
 
 type CodeEditorProps = {
   value:      string
-  language:   string | null
+  language?:  string | null
+  filename?:  string
   onChange:   (value: string) => void
   readOnly?:  boolean
   autoFocus?: boolean
 }
 
 export const CodeEditor = forwardRef<ReactCodeMirrorRef, CodeEditorProps>(function CodeEditor(
-  { value, language, onChange, readOnly, autoFocus }, ref
+  { value, language, filename, onChange, readOnly, autoFocus }, ref
 ) {
   const [langExt, setLangExt] = useState<LanguageSupport | null>(null)
 
   useEffect(() => {
     let cancelled = false
     setLangExt(null)
-    loadLanguageExtension(language).then(ext => { if (!cancelled) setLangExt(ext) })
+    loadLanguageExtension(language ?? null, filename).then(ext => { if (!cancelled) setLangExt(ext) })
     return () => { cancelled = true }
-  }, [language])
+  }, [language, filename])
 
   const extensions = useMemo<Extension[]>(() => (langExt ? [langExt] : []), [langExt])
 

@@ -151,23 +151,64 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
 
 ---
 
-## Phase 37 — In-App Code Editor: Real On-Disk File Editor (project `fs_path`), later
+## Phase 37 — In-App Code Editor: Real On-Disk File Editor (project `fs_path`) (2026-08-07)
 
 > Follow-up to [[Phase 36]] — reuses its `CodeEditor` component and "Decided" choices (CodeMirror 6, in-app
 > overlay, manual save + autosave toggle). This is the phase that actually replaces EditPlus/Notepad for live
 > files, since Phase 36 only edits a DB-tracked snapshot with no link back to disk.
 
+### Decided
+- No existing path-containment precedent anywhere in the codebase (`git.ts` only ever passes `fs_path` itself
+  as a whole-repo `cwd`, never combined with a user-supplied sub-path) — wrote `resolveSafePath()` from
+  scratch: resolve the candidate against the project root and verify via `path.relative` (catches `..`
+  escapes), **then** re-resolve both root and candidate through `fs.realpath` (walking up to the nearest
+  existing ancestor for a not-yet-existing write target) and re-verify containment on the *real* paths —
+  catches a symlink planted inside the tree that points outside it, which the first check alone would miss.
+- `.gitignore` handling is root-level only, no cascading per-subdirectory resolution — a deliberate v1
+  simplification (`ignore` package added as a real dependency; it previously only existed as an eslint
+  transitive dep, unusable from server code). `.git` itself is always excluded regardless of `.gitignore`.
+- Binary-file detection: null-byte heuristic (same approach git itself uses) — no mime/binary-sniffing library
+  existed in the codebase to reuse.
+- File size cap: 2MB (`MAX_FILE_BYTES`), both read and write — generous for source files, well below the 50MB
+  document-upload multer limit (that's for bulk ingestion, not a live in-browser editor buffer).
+- **Additional scope-narrowing decision beyond the original plan**: writes only overwrite a file that already
+  exists — creating brand-new files/directories from the browser is out of scope for v1. Keeps the risk
+  surface to "edit what's already there" rather than "silently add new files a `git status` wouldn't expect."
+- No separate first-use-per-session write confirmation dialog: [[Phase 36]]'s already-established read-only-
+  by-default + explicit "Edit" click *is* the confirmation step (you have to consciously choose to make a file
+  writable), so a second modal on top would just be redundant friction, not extra safety.
+- UI lives inside the existing per-project panel in `Projects.tsx` (new "Files" tab, alongside Tasks/Sessions/
+  Git/Members — gated behind `isLinked` i.e. `!!project.fs_path`, same as Git already is), not a new top-level
+  nav item — unlike Notes/Codes (cross-project entities), a file browser is inherently scoped to one project's
+  linked folder.
+- `CodeEditorOverlay` (Codes/Notes) was **not** generalized to share code with the new file editor — genuinely
+  different data sources (a `documents` row + `documentsApi` vs. a raw file path + `projectFilesApi`) would
+  have forced an awkward shared interface. Built a separate `ProjectFileEditorOverlay` that mirrors its UX
+  instead. `CodeEditor` itself *was* extended (backwards-compatibly) with an optional `filename` prop, using
+  CodeMirror's own `LanguageDescription.matchFilename` for syntax highlighting — real files have no stored
+  `language` column to key off, unlike Codes/Notes documents.
+
 ### Tasks
-- [ ] `server/routes/project-files.ts`: list/read/write files under a project's linked `fs_path`.
-      **Security-critical**: every call must resolve the requested path against `fs_path` and strictly verify
-      containment (reject `..`, symlink escape) before touching the filesystem — same rigor category as the
-      existing SSRF guard on URL import.
-- [ ] Respect `.gitignore` at listing time; size cap + binary-file sniff on read.
-- [ ] Reuses `CodeEditor` from [[Phase 36]] verbatim; save path here is a real disk write — does not touch
-      `documents`/embeddings (explicitly separate from the Codes-tab snapshot; no auto-sync between the two
-      in v1).
-- [ ] Decide (before starting): file size/type allowlist, whether writes need a first-use-per-session
-      confirmation step, and that this is inert for any project without `fs_path` set.
+- [x] `server/routes/project-files.ts`: list/read/write files under a project's linked `fs_path`, mounted at
+      `/api/project-files`. **Security-critical**: every call resolves the requested path against `fs_path`
+      and strictly verifies containment (rejects `..` and symlink escapes) before touching the filesystem —
+      same rigor category as the existing SSRF guard on URL import. 14 server tests (1 skipped: symlink-escape
+      test, conditional on the OS actually allowing symlink creation — this Windows box lacks Developer Mode)
+      run against a **real** temp directory rather than mocked `fs`, since mocking the filesystem would let a
+      broken containment check pass trivially.
+- [x] Respects `.gitignore` at listing time (root-level); size cap (2MB) + binary-file sniff (null-byte
+      heuristic) on read/write.
+- [x] Reuses `CodeEditor` from [[Phase 36]]; new `ProjectFileEditorOverlay` component (mirrors
+      `CodeEditorOverlay`'s read-only-first/Edit/Ctrl+S/autosave/draft-safety-net/confirm-close UX) wires it to
+      `projectFilesApi` instead of `documentsApi` — a real disk write, does not touch `documents`/embeddings
+      (no auto-sync between a Codes-tracked snapshot and the real file in v1).
+- [x] New "Files" tab in the `Projects.tsx` per-project panel (`FilesTab.tsx`): directory-at-a-time browser
+      with breadcrumbs, folder descent, click-a-file-to-open. 5 client tests for `FilesTab`, 10 for
+      `ProjectFileEditorOverlay`.
+- [x] Found and fixed a real bug during testing: `getFsRoot()` originally returned `null` for **both**
+      "project doesn't exist" and "project exists but has no linked path," making the 400 branch dead code —
+      every request to a nonexistent project or one with no `fs_path` was 404ing instead of the intended
+      404/400 split. Fixed by distinguishing `undefined` (not found) from `null` (no path) as the sentinel.
 
 ---
 
