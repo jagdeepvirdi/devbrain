@@ -18,7 +18,7 @@ vi.mock('../../services/ai.js', () => ({
   aiChat: vi.fn(),
 }))
 
-import documentsRouter from '../../routes/documents.js'
+import documentsAiRouter from '../../routes/documents-ai.js'
 import { pool } from '../../db/pool.js'
 import { embedDocument } from '../../services/embedder.js'
 
@@ -26,7 +26,7 @@ const mockQuery = vi.mocked(pool.query)
 const mockEmbed = vi.mocked(embedDocument)
 
 function getHandler(routePath: string, method: 'get' | 'post' | 'patch' | 'delete') {
-  const layer = (documentsRouter as any).stack.find(
+  const layer = (documentsAiRouter as any).stack.find(
     (s: any) => s.route?.path === routePath && s.route.methods[method]
   )
   return layer.route.stack[layer.route.stack.length - 1].handle
@@ -146,56 +146,5 @@ describe('POST /api/documents/:id/save-explanation', () => {
 
     const insertCall = mockQuery.mock.calls[2]
     expect(insertCall[1][3]).toEqual(['code-explanation'])
-  })
-})
-
-describe('GET /api/documents/:id — reports a linked explanation doc, if one exists', () => {
-  beforeEach(() => vi.clearAllMocks())
-
-  it('includes linked_explanation_id/title in the query so the client knows without a round-trip', async () => {
-    mockQuery.mockResolvedValueOnce({
-      rows: [{ id: 'doc-3', title: 'index.ts', linked_explanation_id: 'linked-doc-1', linked_explanation_title: 'index.ts — Explained' }],
-    } as any)
-
-    const req: any = { params: { id: 'doc-3' } }
-    const res = fakeRes()
-
-    await getHandler('/:id', 'get')(req, res, () => {})
-
-    expect(mockQuery.mock.calls[0][0]).toContain('linked_explanation_id')
-    expect(mockQuery.mock.calls[0][0]).toContain('linked_explanation_title')
-    expect(res.json).toHaveBeenCalledWith({
-      data: expect.objectContaining({ linked_explanation_id: 'linked-doc-1', linked_explanation_title: 'index.ts — Explained' }),
-    })
-  })
-
-  it('includes the explanation_stale computed column in the query', async () => {
-    mockQuery.mockResolvedValueOnce({
-      rows: [{ id: 'doc-4', title: 'index.ts', explanation_stale: true }],
-    } as any)
-
-    const req: any = { params: { id: 'doc-4' } }
-    const res = fakeRes()
-
-    await getHandler('/:id', 'get')(req, res, () => {})
-
-    expect(mockQuery.mock.calls[0][0]).toContain('explanation_stale')
-    expect(mockQuery.mock.calls[0][0]).toContain('explanation_hash <> d.content_hash')
-    expect(res.json).toHaveBeenCalledWith({ data: expect.objectContaining({ explanation_stale: true }) })
-  })
-
-  it('includes the diagram_stale computed column in the query', async () => {
-    mockQuery.mockResolvedValueOnce({
-      rows: [{ id: 'doc-5', title: 'index.ts', diagram_stale: true }],
-    } as any)
-
-    const req: any = { params: { id: 'doc-5' } }
-    const res = fakeRes()
-
-    await getHandler('/:id', 'get')(req, res, () => {})
-
-    expect(mockQuery.mock.calls[0][0]).toContain('diagram_stale')
-    expect(mockQuery.mock.calls[0][0]).toContain('diagram_hash <> d.content_hash')
-    expect(res.json).toHaveBeenCalledWith({ data: expect.objectContaining({ diagram_stale: true }) })
   })
 })

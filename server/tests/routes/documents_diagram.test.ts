@@ -18,7 +18,7 @@ vi.mock('../../services/ai.js', () => ({
   aiChat: vi.fn(),
 }))
 
-import documentsRouter from '../../routes/documents.js'
+import documentsAiRouter from '../../routes/documents-ai.js'
 import { pool } from '../../db/pool.js'
 import { aiChat } from '../../services/ai.js'
 
@@ -26,7 +26,7 @@ const mockQuery  = vi.mocked(pool.query)
 const mockAiChat = vi.mocked(aiChat)
 
 function getHandler(routePath: string, method: 'get' | 'post' | 'patch' | 'delete') {
-  const layer = (documentsRouter as any).stack.find(
+  const layer = (documentsAiRouter as any).stack.find(
     (s: any) => s.route?.path === routePath && s.route.methods[method]
   )
   return layer.route.stack[layer.route.stack.length - 1].handle

@@ -22,13 +22,13 @@ vi.mock('../../services/parser.js', () => ({
   parseUrl:  vi.fn(),
 }))
 
-import documentsRouter from '../../routes/documents.js'
+import documentsAiRouter from '../../routes/documents-ai.js'
 import { pool } from '../../db/pool.js'
 
 const mockQuery = vi.mocked(pool.query)
 
 function getHandler(routePath: string) {
-  const layer = (documentsRouter as any).stack.find(
+  const layer = (documentsAiRouter as any).stack.find(
     (s: any) => s.route?.path === routePath && s.route.methods.post
   )
   return layer.route.stack[layer.route.stack.length - 1].handle

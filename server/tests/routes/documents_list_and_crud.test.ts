@@ -19,10 +19,6 @@ vi.mock('../../services/links.js', () => ({
   deleteLinksFor: vi.fn(),
 }))
 
-vi.mock('../../services/ai.js', () => ({
-  aiChat: vi.fn(),
-}))
-
 vi.mock('node:dns/promises', () => ({
   default: { lookup: vi.fn() },
 }))
@@ -32,7 +28,6 @@ import { pool } from '../../db/pool.js'
 import { parseFile, parseUrl } from '../../services/parser.js'
 import { embedDocument } from '../../services/embedder.js'
 import { deleteLinksFor } from '../../services/links.js'
-import { aiChat } from '../../services/ai.js'
 import dns from 'node:dns/promises'
 
 const mockQuery      = vi.mocked(pool.query)
@@ -41,7 +36,6 @@ const mockParseFile  = vi.mocked(parseFile)
 const mockParseUrl   = vi.mocked(parseUrl)
 const mockEmbed      = vi.mocked(embedDocument)
 const mockDeleteLinksFor = vi.mocked(deleteLinksFor)
-const mockAiChat     = vi.mocked(aiChat)
 const mockDnsLookup  = vi.mocked(dns.lookup)
 
 type RouteLayer = { route?: { path: string; methods: Record<string, boolean>; stack: { handle: (...args: unknown[]) => unknown }[] } }
@@ -552,32 +546,45 @@ describe('POST /api/documents/:id/reembed', () => {
   })
 })
 
-describe('POST /api/documents/suggest-tags', () => {
-  it('400s when title and hint are both empty', async () => {
+describe('GET /api/documents/:id — reports a linked explanation doc, if one exists', () => {
+  it('includes linked_explanation_id/title in the query so the client knows without a round-trip', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ id: 'doc-3', title: 'index.ts', linked_explanation_id: 'linked-doc-1', linked_explanation_title: 'index.ts — Explained' }],
+    } as never)
+
     const res = fakeRes()
-    await getHandler('/suggest-tags', 'post')({ body: {} }, res, () => {})
-    expect(res.status).toHaveBeenCalledWith(400)
-    expect(mockAiChat).not.toHaveBeenCalled()
+    await getHandler('/:id', 'get')({ params: { id: 'doc-3' } }, res, () => {})
+
+    expect(mockQuery.mock.calls[0][0]).toContain('linked_explanation_id')
+    expect(mockQuery.mock.calls[0][0]).toContain('linked_explanation_title')
+    expect(res.json).toHaveBeenCalledWith({
+      data: expect.objectContaining({ linked_explanation_id: 'linked-doc-1', linked_explanation_title: 'index.ts — Explained' }),
+    })
   })
 
-  it('extracts and caps the suggested tags to 5', async () => {
-    mockAiChat.mockResolvedValueOnce('```json\n["a","b","c","d","e","f"]\n```')
+  it('includes the explanation_stale computed column in the query', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ id: 'doc-4', title: 'index.ts', explanation_stale: true }],
+    } as never)
+
     const res = fakeRes()
-    await getHandler('/suggest-tags', 'post')({ body: { title: 'Setup guide', hint: 'docker postgres' } }, res, () => {})
-    expect(res.json).toHaveBeenCalledWith({ data: { tags: ['a', 'b', 'c', 'd', 'e'] } })
+    await getHandler('/:id', 'get')({ params: { id: 'doc-4' } }, res, () => {})
+
+    expect(mockQuery.mock.calls[0][0]).toContain('explanation_stale')
+    expect(mockQuery.mock.calls[0][0]).toContain('explanation_hash <> d.content_hash')
+    expect(res.json).toHaveBeenCalledWith({ data: expect.objectContaining({ explanation_stale: true }) })
   })
 
-  it('returns an empty tags array when the AI response has no JSON array', async () => {
-    mockAiChat.mockResolvedValueOnce('no array here')
-    const res = fakeRes()
-    await getHandler('/suggest-tags', 'post')({ body: { title: 'X' } }, res, () => {})
-    expect(res.json).toHaveBeenCalledWith({ data: { tags: [] } })
-  })
+  it('includes the diagram_stale computed column in the query', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ id: 'doc-5', title: 'index.ts', diagram_stale: true }],
+    } as never)
 
-  it('responds 500 on a failure', async () => {
-    mockAiChat.mockRejectedValueOnce(new Error('ollama down'))
     const res = fakeRes()
-    await getHandler('/suggest-tags', 'post')({ body: { title: 'X' } }, res, () => {})
-    expect(res.status).toHaveBeenCalledWith(500)
+    await getHandler('/:id', 'get')({ params: { id: 'doc-5' } }, res, () => {})
+
+    expect(mockQuery.mock.calls[0][0]).toContain('diagram_stale')
+    expect(mockQuery.mock.calls[0][0]).toContain('diagram_hash <> d.content_hash')
+    expect(res.json).toHaveBeenCalledWith({ data: expect.objectContaining({ diagram_stale: true }) })
   })
 })

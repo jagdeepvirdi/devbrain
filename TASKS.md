@@ -309,16 +309,44 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
 
 ### Tier 2 — Code quality / maintainability
 
-- [ ] **God-file splitting** *(merged from [[Phase 33]] and [[Phase 34]], which each listed an overlapping
+- [~] **God-file splitting** *(merged from [[Phase 33]] and [[Phase 34]], which each listed an overlapping
       subset)* — `client/src/pages/Settings.tsx` (3,002 lines), `server/routes/documents.ts` (942),
       `server/routes/settings.ts` (826), `server/routes/issues.ts` (764), `client/src/pages/Commands.tsx`
       (1,221) are still single-responsibility violations waiting to cause a bad merge. Originally deferred
-      2026-07-24 pending better client test coverage. Status as of 2026-08-07: real progress on that front, but
-      indirect — this session added substantial new client test suites (`CodeEditorOverlay`, `Notes`,
-      `FilesTab`, `ProjectFileEditorOverlay`, ~40 tests total) establishing a working test pattern for
-      interactive components, but none of them cover `Settings.tsx` or `Commands.tsx` themselves. Splitting
-      either still means doing it against effectively untested code — revisit only after adding regression
-      tests for the specific file being split, not a general "coverage improved" green light.
+      2026-07-24 pending better client test coverage.
+      **Server-side (3 of 5) done 2026-08-07** — these already had 99%+ test coverage, so the precondition
+      didn't apply; split via `router.use(subRouter)` composition under the original mount point in `index.ts`
+      so the external API surface (paths, method, `export default router`) is unchanged:
+      - `issues.ts` (764→445 lines) → `routes/issues-notes.ts` (notes/commits CRUD) +
+        `routes/issues-ai.ts` (related-commands, suggest-steps, related-docs, summarize, reembed, suggest-tags),
+        with shared SQL fragments/embed helper pulled into `services/issuesShared.ts` to avoid a circular
+        import. Tests split into `issues.test.ts` / `issues_notes.test.ts` / `issues_ai.test.ts` (80 tests,
+        exact parity).
+      - `settings.ts` (828→201 lines) → `routes/settings-backup.ts` (backup/import/backup-config/backup-now/
+        test-remote/zip-import, own `multer` instance) + `routes/settings-notifications.ts`
+        (notifications/digest). Tests split into `settings.test.ts` / `settings_backup.test.ts` /
+        `settings_notifications.test.ts` (81 tests, exact parity).
+      - `documents.ts` (1057→651 lines) → `routes/documents-ai.ts` (explain, diagram, save-explanation,
+        component-overview, find-duplicates, suggest-tags, suggest-tags-from-file; own `multer` instance +
+        duplicated `sha256()` helper, same precedent as `settings-backup.ts`). Of the 13 pre-existing
+        `documents_*.test.ts` files: 5 needed only a router-import swap to `documentsAiRouter`
+        (`documents_explain`, `documents_diagram`, `documents_component_overview`, `documents_find_duplicates`,
+        and the renamed `documents_suggest_tags.test.ts` which now also covers the plain `/suggest-tags` route
+        that was previously tested inside `documents_list_and_crud.test.ts`); `documents_list_and_crud.test.ts`
+        had its moved `suggest-tags` describe block removed and gained the "linked explanation doc" GET `/:id`
+        block moved in from `documents_save_explanation.test.ts`, which in turn kept only the
+        `save-explanation` block. 7 files needed no change. Full suite: 1222 passed/1 skipped — exact parity
+        with pre-split baseline.
+      - In every case, mount order of the sub-routers doesn't matter: each moved route is either 2+ path
+        segments or a POST-only bare route with no colliding GET/PUT/DELETE `/:id`-shaped route in the parent
+        or sibling router. Verified via `tsc --noEmit`, full `vitest run`, and `eslint .` after each split —
+        all clean.
+      **Client-side (2 of 5) still not started** — `Settings.tsx` and `Commands.tsx` remain at 0% dedicated
+      test coverage; this session's new client suites (`CodeEditorOverlay`, `Notes`, `FilesTab`,
+      `ProjectFileEditorOverlay`, ~40 tests) established a working test pattern for interactive components but
+      don't cover either file. Splitting them now would mean doing it against effectively untested code —
+      still blocked on writing regression tests for the specific file being split first, not a general
+      "coverage improved" green light. Treat as a distinct, larger follow-up.
 
 ### Tier 3 — Feature enhancements
 
