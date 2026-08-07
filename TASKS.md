@@ -89,7 +89,78 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
 
 > Audit findings across security, architecture, performance, and code quality. Action items prioritized for review.
 
-- [ ] **Rate Limiter IP Spoofing via Unconfigured `trust proxy`** — `server/index.ts` does not set `app.set('trust proxy', ...)`, allowing spoofed `X-Forwarded-For` headers behind reverse proxies to bypass rate limiting or trigger shared IP denial of service.
+- [x] **Rate Limiter IP Spoofing via Unconfigured `trust proxy`** — fixed 2026-08-07: added `TRUST_PROXY` env var (`server/lib/env.ts`) wired via `app.set('trust proxy', env.TRUST_PROXY)` in `server/index.ts`, defaulting to `false` (no proxy trusted, `X-Forwarded-For` ignored). `docker-compose.prod.yml` sets `TRUST_PROXY: 1` for its bundled Caddy reverse-proxy hop; documented in `.env.example` and `CONTRIBUTING.md`.
 - [ ] **60 Non-null Assertion (`!`) Warnings in Server Routes** — ESLint flags 60 instances of `@typescript-eslint/no-non-null-assertion` across `aitask.ts`, `auth.ts`, `chat.ts`, `documents.ts`, `users.ts`, `ai.ts`. Refactor to strict guards to prevent uncaught runtime type errors.
 - [ ] **Event Loop Blocking in Duplicate Document Line Similarity** — `POST /api/documents/find-duplicates` computes multiset Dice-similarity on full raw text synchronously on the main event thread. Add string length caps or async yielding for large contents.
 - [ ] **God-File Modularization (`documents.ts`, `Settings.tsx`, `settings.ts`)** — Split monolithic route and page files into isolated domain modules and sub-controllers now that baseline test coverage exists.
+
+---
+
+## Phase 36 — In-App Code Editor: Codes Tab (CodeMirror, DB Snapshot) (2026-08-07)
+
+> Replaces external EditPlus/Notepad usage for viewing and editing tracked code with a real syntax-highlighted
+> editor inside DevBrain. Library choice researched against massCode, Trilium Notes, and Gitea's own
+> Monaco→CodeMirror migration (same bundle-size/consistency tradeoff). Targets the existing Codes tab
+> (DB-stored snapshot, no filesystem access). [[Phase 37]] (separate, later) extends the same editor component
+> to real on-disk files via a project's linked `fs_path`.
+
+### Decided
+- Engine: **CodeMirror 6** via `@uiw/react-codemirror`, not Monaco (Monaco is 2–5MB and can't lazy-load; CM6 is
+  ~50KB core with per-language lazy loading, matching how Shiki already lazy-loads grammars in this codebase).
+  Theme: `@uiw/codemirror-theme-github`'s `githubDarkInit` (font family overridden to `var(--font-mono)`) —
+  matches the existing Shiki `github-dark` theme already used in `Commands.tsx`. `githubLight` wasn't wired up:
+  DevBrain has no light-mode toggle anywhere in the app (confirmed via `Mermaid.initialize({ theme: 'dark' })`
+  being hardcoded too), so there's no app state to switch on yet. Languages: `@codemirror/language-data`
+  (confirmed via the CM6 source to cover everything in `LANGUAGE_COLOR` except Svelte, which falls back to
+  plain text — no dedicated grammar available upstream).
+- Window style: in-app full-screen overlay (not a real OS popup window) for v1.
+- Save: manual (Ctrl+S / button) by default, with a per-session autosave toggle (debounced). A localStorage
+  draft safety net persists in-progress edits regardless of autosave state, so nothing is lost on an accidental
+  close — offered back as "restore unsaved draft?" on reopen, cleared on a successful server save.
+- Opens read-only, not straight into edit mode (changed after initial implementation, per user feedback): the
+  Codes-tab trigger button reads "Open" (was "Edit"), and the overlay itself shows a "read-only" badge + an
+  "Edit" button in the header. Clicking it flips the editor writable and swaps in the Save/autosave controls —
+  so browsing a file never risks an accidental edit, and only clicking Edit switches into the mutation path.
+
+### Tasks
+- [x] `PATCH /api/documents/:id/content` — Zod-validated `{ content }`, `requireRole('member')`; text-based
+      sibling to the existing file-upload `update-content` route (same content/content_hash/embedding_status
+      update pattern, re-embeds via `embedDocument()`, leaves title/tags/component/project untouched).
+- [x] `client/src/components/codes/CodeEditor.tsx` — `@uiw/react-codemirror` wrapper (`forwardRef`, exposing
+      `view.focus()` so the overlay can focus it when switching into edit mode); dynamically imports the
+      matched language from `@codemirror/language-data` off `doc.language`; applies the GitHub-dark theme
+      to match the app theme. `LANGUAGE_COLOR`/`langColor` moved out of `Codes.tsx` into `client/src/lib/language.ts`
+      so both the list view and the editor share one source instead of drifting.
+- [x] `client/src/components/codes/CodeEditorOverlay.tsx` — full-screen modal, opens read-only: filename/
+      language badge, dirty indicator, read-only badge + Edit button (view mode) that swaps to autosave toggle
+      + Save button (edit mode), Ctrl+S / Escape (confirm-if-dirty), draft-restore banner (restoring a draft
+      also enters edit mode), localStorage draft persistence keyed `devbrain:draft:<docId>`.
+- [x] Wire into `Codes.tsx` — "Open" action on the preview panel launches the overlay (read-only); existing
+      AI/metadata panel (explain, diagram, linked items, reembed, replace-file) stays as-is, unrelated concern.
+- [x] Client tests for `CodeEditorOverlay` (12 tests: opens read-only, Edit switches to writable + reveals Save
+      controls, dirty-tracking, save via button/Ctrl+S, Escape confirm-close, draft restore/discard, autosave
+      on/off) — `CodeEditor` itself is mocked with a `forwardRef` textarea (readOnly forwarded through) so these
+      exercise the overlay's own logic without mounting real CodeMirror in jsdom.
+- [x] Server test for the new `PATCH .../content` endpoint (5 tests: empty/missing content 400s, 404, happy
+      path leaves `file_type`/`language` untouched + re-embeds, failure marks `embedding_status = 'failed'`),
+      mirroring existing `update-content` coverage.
+
+---
+
+## Phase 37 — In-App Code Editor: Real On-Disk File Editor (project `fs_path`), later
+
+> Follow-up to [[Phase 36]] — reuses its `CodeEditor` component and "Decided" choices (CodeMirror 6, in-app
+> overlay, manual save + autosave toggle). This is the phase that actually replaces EditPlus/Notepad for live
+> files, since Phase 36 only edits a DB-tracked snapshot with no link back to disk.
+
+### Tasks
+- [ ] `server/routes/project-files.ts`: list/read/write files under a project's linked `fs_path`.
+      **Security-critical**: every call must resolve the requested path against `fs_path` and strictly verify
+      containment (reject `..`, symlink escape) before touching the filesystem — same rigor category as the
+      existing SSRF guard on URL import.
+- [ ] Respect `.gitignore` at listing time; size cap + binary-file sniff on read.
+- [ ] Reuses `CodeEditor` from [[Phase 36]] verbatim; save path here is a real disk write — does not touch
+      `documents`/embeddings (explicitly separate from the Codes-tab snapshot; no auto-sync between the two
+      in v1).
+- [ ] Decide (before starting): file size/type allowlist, whether writes need a first-use-per-session
+      confirmation step, and that this is inert for any project without `fs_path` set.

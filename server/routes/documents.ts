@@ -409,6 +409,52 @@ router.post('/:id/update-content', requireRole('member'), upload.single('file'),
   }
 })
 
+// ── PATCH /api/documents/:id/content ────────────────────────────────────
+// Text-based sibling to POST /:id/update-content above — same content/hash/
+// embedding-status update and re-embed, but for in-app editor saves (Codes
+// tab), not a file re-upload. Unlike update-content, file_type/language/
+// source are left untouched: this is editing the same tracked file in place,
+// not replacing it with a different one, so re-detecting them would be wrong.
+
+const ContentBody = z.object({
+  content: z.string().min(1, 'Content cannot be empty'),
+})
+
+router.patch('/:id/content', requireRole('member'), async (req, res) => {
+  const parsed = ContentBody.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
+
+  const id = req.params.id as string
+  const { content } = parsed.data
+  const hash = sha256(content)
+
+  try {
+    const { rows: existingRows } = await pool.query('SELECT title, language FROM documents WHERE id = $1', [id])
+    if (!existingRows.length) return res.status(404).json({ error: 'Document not found' })
+    const { title, language } = existingRows[0] as { title: string; language: string | null }
+
+    await pool.query(
+      `UPDATE documents SET content = $2, content_hash = $3, embedding_status = 'processing' WHERE id = $1`,
+      [id, content, hash]
+    )
+
+    const chunkCount = await embedDocument(id, content, { title, language })
+    await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [id])
+
+    const { rows: final } = await pool.query(
+      `SELECT *,
+         (explanation IS NOT NULL AND explanation_hash IS NOT NULL AND explanation_hash <> content_hash) AS explanation_stale,
+         (diagram IS NOT NULL AND diagram_hash IS NOT NULL AND diagram_hash <> content_hash) AS diagram_stale
+       FROM documents WHERE id = $1`,
+      [id]
+    )
+    res.json({ data: { ...final[0], chunk_count: chunkCount } })
+  } catch (err) {
+    await pool.query(`UPDATE documents SET embedding_status = 'failed' WHERE id = $1`, [id]).catch(() => {})
+    serverError(res, err)
+  }
+})
+
 // ── POST /api/documents/url ───────────────────────────────────────────────
 
 const UrlBody = z.object({

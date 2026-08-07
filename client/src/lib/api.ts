@@ -573,6 +573,9 @@ export const documentsApi = {
     return json.data!
   },
 
+  updateContentText: (id: string, content: string) =>
+    request<DocDetail>(`/documents/${id}/content`, { method: 'PATCH', body: JSON.stringify({ content }) }),
+
   explain: (id: string) =>
     request<{ explanation: string }>(`/documents/${id}/explain`, { method: 'POST' }),
 

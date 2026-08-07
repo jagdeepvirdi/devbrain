@@ -6,20 +6,10 @@ import { useToast } from '../components/Toast'
 import { SkeletonRow } from '../components/Skeleton'
 import { LinkedItems } from '../components/LinkedItems'
 import { MermaidDiagram } from '../components/MermaidDiagram'
+import { langColor } from '../lib/language'
+import { CodeEditorOverlay } from '../components/codes/CodeEditorOverlay'
 
 // ── Helpers ───────────────────────────────────────────────────────────────
-
-const LANGUAGE_COLOR: Record<string, string> = {
-  typescript: '#3178C6', javascript: '#F1C40F', python: '#3776AB', dart: '#0175C2',
-  java: '#EA6B23', kotlin: '#7F52FF', go: '#00ADD8', rust: '#DE7A22', ruby: '#CC342D',
-  php: '#787CB5', swift: '#FA7343', c: '#93C5FD', cpp: '#93C5FD', csharp: '#68217A',
-  bash: '#89E051', powershell: '#5391FE', vue: '#41B883', svelte: '#FF3E00',
-  perl: '#39457E', sql: '#E38C00', plsql: '#F80000',
-}
-
-function langColor(lang: string | null) {
-  return LANGUAGE_COLOR[lang ?? ''] ?? 'var(--fg-3)'
-}
 
 function fmtSize(chars: number) {
   if (chars < 1000) return `${chars} ch`
@@ -118,6 +108,7 @@ function CodePreviewPanel({ docId, onClose, onReembedSuccess, onNavigate }: { do
   const [updating,    setUpdating]    = useState(false)
   const [diagramming, setDiagramming] = useState(false)
   const [diagram,     setDiagram]     = useState<string | null>(null)
+  const [showEditor,  setShowEditor]  = useState(false)
   const updateFileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -202,6 +193,11 @@ function CodePreviewPanel({ docId, onClose, onReembedSuccess, onNavigate }: { do
     }
   }
 
+  function handleEditorSaved(updated: DocDetail) {
+    setDoc(updated)
+    onReembedSuccess(updated.id, updated.embedding_status)
+  }
+
   return (
     <div style={{ borderLeft: '1px solid var(--line)', background: 'var(--panel)', display: 'flex', flexDirection: 'column', overflow: 'hidden', width: 460, flexShrink: 0 }}>
       <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -213,8 +209,22 @@ function CodePreviewPanel({ docId, onClose, onReembedSuccess, onNavigate }: { do
         <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>
           {loading ? 'Loading…' : doc?.title}
         </span>
+        {doc && (
+          <button
+            onClick={() => setShowEditor(true)}
+            title="Open in editor"
+            style={{ fontSize: 11, padding: '3px 9px', borderRadius: 5, border: '1px solid var(--accent-line)', background: 'var(--accent-dim)', color: 'var(--accent-2)', cursor: 'default', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+          >
+            <span style={{ fontSize: 10 }}>⤢</span>
+            Open
+          </button>
+        )}
         <button onClick={onClose} style={{ color: 'var(--fg-3)', fontSize: 13, padding: '2px 6px', borderRadius: 'var(--radius)' }}>✕</button>
       </div>
+
+      {showEditor && doc && (
+        <CodeEditorOverlay doc={doc} onClose={() => setShowEditor(false)} onSaved={handleEditorSaved} />
+      )}
       <div style={{ flex: 1, overflow: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
         {/* AI Explain */}
         {doc && (
