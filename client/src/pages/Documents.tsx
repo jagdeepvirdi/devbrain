@@ -10,10 +10,10 @@ import { LinkedItems } from '../components/LinkedItems'
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-// Code files (file_type 'code') live on the Codes page, not here — the
-// Documents filter UI doesn't even offer 'code' as an option. When the user
-// hasn't picked a type filter, explicitly request these non-code types so
-// code rows don't leak into the "all types" default view.
+// Code files (file_type 'code') and notes (file_type 'note') live on the Codes and Notes
+// pages, not here — the Documents filter UI doesn't offer either as an option. When the
+// user hasn't picked a type filter, explicitly request these other types so code/note
+// rows don't leak into the "all types" default view.
 const NON_CODE_FILE_TYPES = ['pdf', 'docx', 'md', 'txt', 'xlsx', 'url']
 
 const TYPE_STYLE: Record<string, { label: string; color: string; bg: string; border: string }> = {

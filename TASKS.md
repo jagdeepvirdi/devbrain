@@ -168,3 +168,60 @@ Active development resumes at **v1.x backlog** items at the bottom of this file.
       in v1).
 - [ ] Decide (before starting): file size/type allowlist, whether writes need a first-use-per-session
       confirmation step, and that this is inert for any project without `fs_path` set.
+
+---
+
+## Phase 38 — Notes (2026-08-07)
+
+> Freeform, taggable notes that connect to everything else in DevBrain (issues, tasks, releases, commands,
+> other documents/codes) — requested as an alternative to jamming notes into the structured Tasks tab
+> (status/priority/due-date fields don't fit freeform content).
+
+### Decided
+- Storage: no new table. Notes are `documents` rows with a new `file_type = 'note'` — exact precedent: this is
+  how the Codes tab already works (`file_type = 'code'` on the same table). One migration
+  (`add_note_file_type.ts`, mirroring the existing `add_code_file_type.ts`) widens the `documents_file_type_check`
+  CHECK constraint to add `'note'`.
+- Notes get `language = 'markdown'` set at creation — the same column code files use for `'typescript'`/
+  `'python'`/etc. Since `CodeEditor` ([[Phase 36]]) picks its syntax highlighting off that column, notes get
+  markdown highlighting with **zero editor code changes** (`@codemirror/language-data` already includes
+  Markdown).
+- RAG: notes ARE embedded via `embedDocument()`, same as every other document — searchable/answerable through
+  Ask AI, not kept as a separate un-embedded scratch space.
+- Editor UX: reuses `CodeEditorOverlay`'s read-only-by-default flow for *opening an existing* note (same
+  no-accidental-edit safety as Codes). A **freshly created** note skips that and opens straight into edit mode
+  via a new `startInEditMode` prop, since composing is the entire point right after creation.
+- Tagging/linking: **zero new code**. Documents are already a linkable `entity_links` type with a working tags
+  column and `FilterBar` — notes are connectable to issues/tasks/releases/commands/other documents the moment
+  this ships, with no changes to `LinkedItems.tsx` or the `entity_links` schema.
+- Nav: new standalone "Notes" tab/page/route (not folded into the Documents page) — matches the Codes-tab
+  precedent of a dedicated, purpose-built UI over the same underlying table.
+
+### Tasks
+- [x] `server/db/migrations/add_note_file_type.ts` — mirrors `add_code_file_type.ts`: widens
+      `documents_file_type_check` to add `'note'` (no new column — `language` already exists). Also run against
+      the local dev DB and mirrored into `schema.sql` for fresh installs.
+- [x] `POST /api/documents/note` — Zod-validated `{ title, content, projectId?, tags?, component? }` (`content`
+      may be empty — a brand-new note can start blank); inserts with `file_type='note'`, `language='markdown'`,
+      hashes content, embeds via `embedDocument()`. Modeled directly on the existing `POST /api/documents/url`
+      route (typed-content insert + embed, no file upload/parsing, no duplicate-content 409).
+- [x] `documentsApi.createNote(...)` in `client/src/lib/api.ts`.
+- [x] `CodeEditorOverlay`: added an optional `startInEditMode` prop so a newly created note opens straight into
+      edit mode instead of the read-only-first flow.
+- [x] `client/src/pages/Notes.tsx` — mirrors `Codes.tsx`'s list+preview layout, minus the code-specific columns
+      (language/chunks/size — not meaningful for notes); "New note" button opens a small title+tags modal that
+      calls `createNote` then immediately opens `CodeEditorOverlay` in edit mode. Row click reuses the existing
+      read-only→Edit overlay flow as-is.
+- [x] Wired `LinkedItems` into the note preview panel exactly as `Codes.tsx` already does (`entityType="document"`)
+      — no changes needed to `LinkedItems.tsx` itself.
+- [x] Added "Notes" to the sidebar nav + route in `App.tsx` (between Documents and Codes).
+- [x] Added a `markdown` entry to `LANGUAGE_COLOR` in `client/src/lib/language.ts`.
+- [x] Tests: 5 server tests for `POST /api/documents/note` (`documents_create_note.test.ts`), 4 client tests for
+      the note-creation flow (`Notes.test.tsx`) + 1 for `CodeEditorOverlay`'s `startInEditMode` prop. Also fixed
+      a real bug this surfaced: the client `DocMeta.file_type` union in `api.ts` was missing `'note'` — caught by
+      `tsc -b` (the build) but not plain `tsc --noEmit`, since Vitest doesn't type-check.
+
+> Implemented 2026-08-07: server (1206/1206) and client (38/38) test suites pass, full typecheck/lint clean,
+> production build succeeds. Not yet verified by clicking through in a browser — this instance has
+> `AUTH_PASSWORD` set, so an automated Playwright pass couldn't get past the login gate; still pending manual
+> confirmation.

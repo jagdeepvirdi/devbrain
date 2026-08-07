@@ -34,18 +34,23 @@ function clearDraft(docId: string) {
 }
 
 type CodeEditorOverlayProps = {
-  doc:     DocDetail
-  onClose: () => void
-  onSaved: (updated: DocDetail) => void
+  doc:              DocDetail
+  onClose:          () => void
+  onSaved:          (updated: DocDetail) => void
+  // Skips the read-only-first flow and opens straight into edit mode, focused — for a
+  // document just created for the purpose of writing into it (e.g. a brand-new note),
+  // where the read-only step would just be an extra click before the point of opening it.
+  startInEditMode?: boolean
 }
 
-// Full-screen in-app editor for a tracked code document (Codes tab). Edits a DB
-// snapshot only — see TASKS.md Phase 37 for the separate real-on-disk-file editor.
-export function CodeEditorOverlay({ doc, onClose, onSaved }: CodeEditorOverlayProps) {
+// Full-screen in-app editor for a tracked document's content (Codes tab code files, Notes
+// tab notes). Edits a DB snapshot only — see TASKS.md Phase 37 for the separate
+// real-on-disk-file editor.
+export function CodeEditorOverlay({ doc, onClose, onSaved, startInEditMode }: CodeEditorOverlayProps) {
   const { toast } = useToast()
   const [value,        setValue]        = useState(doc.content)
   const [savedValue,   setSavedValue]   = useState(doc.content)
-  const [editing,      setEditing]      = useState(false)
+  const [editing,      setEditing]      = useState(!!startInEditMode)
   const [saving,       setSaving]       = useState(false)
   const [autosave,     setAutosave]     = useState(false)
   const [confirmClose, setConfirmClose] = useState(false)
@@ -62,6 +67,12 @@ export function CodeEditorOverlay({ doc, onClose, onSaved }: CodeEditorOverlayPr
     // Editor is already mounted (read-only) — focus it once it becomes editable.
     setTimeout(() => editorRef.current?.view?.focus(), 0)
   }
+
+  // Same focus as startEditing(), for the case where we mounted already-editable.
+  useEffect(() => {
+    if (startInEditMode) setTimeout(() => editorRef.current?.view?.focus(), 0)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Offer to restore a local draft left over from a previous session — once, on open.
   useEffect(() => {

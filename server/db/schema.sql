@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS documents (
   project_id       TEXT        REFERENCES projects(id) ON DELETE CASCADE,
   title            TEXT        NOT NULL,
   file_type        TEXT        NOT NULL
-                     CHECK (file_type IN ('pdf', 'docx', 'md', 'txt', 'xlsx', 'url', 'code')),
+                     CHECK (file_type IN ('pdf', 'docx', 'md', 'txt', 'xlsx', 'url', 'code', 'note')),
   content          TEXT        NOT NULL DEFAULT '',
   tags             TEXT[]      NOT NULL DEFAULT '{}',
   -- Single-select feature/module grouping, e.g. 'SAP', 'BPP', 'Payment' — distinct from tags (multi-select).

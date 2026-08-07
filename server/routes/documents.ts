@@ -516,6 +516,57 @@ router.post('/url', requireRole('member'), async (req, res) => {
   }
 })
 
+// ── POST /api/documents/note ────────────────────────────────────────────
+// Typed-content creation for the Notes tab — no file upload, no URL fetch.
+// Modeled on POST /url above, minus the fetch step and minus its duplicate-
+// content 409: a note's content is freeform and short-lived, so two notes
+// legitimately sharing text (most obviously two blank ones) isn't a conflict
+// the way two uploads of the same file would be.
+
+const NoteBody = z.object({
+  title:     z.string().min(1).max(200),
+  content:   z.string().default(''),
+  projectId: z.string().optional(),
+  tags:      z.array(z.string()).default([]),
+  component: z.string().optional(),
+})
+
+router.post('/note', requireRole('member'), async (req, res) => {
+  const parsed = NoteBody.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
+
+  const { title, content, projectId = null, tags, component } = parsed.data
+  const hash = sha256(content)
+
+  let docId: string | null = null
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO documents (project_id, title, file_type, content, tags, component, language, source, content_hash)
+       VALUES ($1, $2, 'note', $3, $4, $5, 'markdown', 'note', $6) RETURNING id`,
+      [projectId, title, content, tags, component?.trim() || null, hash]
+    )
+    docId = rows[0].id
+
+    // Same non-destructive embed-failure handling as the other creation routes above.
+    let chunkCount = 0
+    try {
+      chunkCount = await embedDocument(docId!, content, { title, language: 'markdown' })
+      await pool.query(`UPDATE documents SET embedding_status = 'done' WHERE id = $1`, [docId])
+    } catch (embedErr) {
+      console.error('Note embed failed:', embedErr)
+      await pool.query(`UPDATE documents SET embedding_status = 'failed' WHERE id = $1`, [docId])
+    }
+
+    const { rows: doc } = await pool.query('SELECT * FROM documents WHERE id = $1', [docId])
+
+    res.status(201).json({ data: { ...doc[0], chunk_count: chunkCount } })
+  } catch (err) {
+    if (docId) await pool.query('DELETE FROM documents WHERE id = $1', [docId]).catch(() => {})
+    serverError(res, err)
+  }
+})
+
 // ── PATCH /api/documents/:id  (update tags / title / project) ─────────────
 
 const PatchBody = z.object({

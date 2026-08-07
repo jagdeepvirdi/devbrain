@@ -64,6 +64,16 @@ describe('CodeEditorOverlay', () => {
     expect(screen.queryByLabelText(/autosave/i)).not.toBeInTheDocument()
   })
 
+  it('startInEditMode opens straight into edit mode, skipping the read-only step', () => {
+    render(<CodeEditorOverlay doc={baseDoc} onClose={vi.fn()} onSaved={vi.fn()} startInEditMode />)
+
+    expect(screen.queryByText('read-only')).not.toBeInTheDocument()
+    expect(screen.queryByText('Edit')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('code')).not.toHaveAttribute('readonly')
+    expect(screen.getByText('Saved')).toBeInTheDocument()
+    expect(screen.getByLabelText(/autosave/i)).toBeInTheDocument()
+  })
+
   it('clicking Edit switches to edit mode: textarea becomes writable and Save controls appear', () => {
     render(<CodeEditorOverlay doc={baseDoc} onClose={vi.fn()} onSaved={vi.fn()} />)
 

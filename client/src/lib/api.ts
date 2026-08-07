@@ -461,7 +461,7 @@ export type DocMeta = {
   id:               string
   project_id:       string | null
   title:            string
-  file_type:        'pdf' | 'docx' | 'md' | 'txt' | 'xlsx' | 'url' | 'code'
+  file_type:        'pdf' | 'docx' | 'md' | 'txt' | 'xlsx' | 'url' | 'code' | 'note'
   tags:             string[]
   component:        string | null
   language:         string | null
@@ -545,6 +545,12 @@ export const documentsApi = {
     request<DocMeta>('/documents/url', {
       method: 'POST',
       body: JSON.stringify({ url, projectId: projectId ?? null, tags, component }),
+    }),
+
+  createNote: (title: string, content = '', projectId?: string, tags: string[] = [], component?: string) =>
+    request<DocDetail>('/documents/note', {
+      method: 'POST',
+      body: JSON.stringify({ title, content, projectId, tags, component }),
     }),
 
   patch: (id: string, body: { title?: string; tags?: string[]; component?: string | null; projectId?: string | null }) =>

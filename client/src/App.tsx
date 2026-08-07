@@ -7,6 +7,7 @@ import { ProjectSwitcher } from './components/projects/ProjectSwitcher'
 import { ProjectsPage }   from './pages/Projects'
 import { AiTaskPage }     from './pages/AiTask'
 import { DocumentsPage }  from './pages/Documents'
+import { NotesPage }      from './pages/Notes'
 import { CodesPage }      from './pages/Codes'
 import { DocChatPage }    from './pages/DocChat'
 import { IssuesPage }    from './pages/Issues'
@@ -24,7 +25,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { NotificationsPanel } from './components/NotificationsPanel'
 
 
-type RouteId = 'dashboard' | 'docs' | 'codes' | 'chat' | 'issues' | 'tasks' | 'commands' | 'releases' | 'runbooks' | 'graph' | 'projects' | 'aitask' | 'settings' | 'notificationLog'
+type RouteId = 'dashboard' | 'docs' | 'notes' | 'codes' | 'chat' | 'issues' | 'tasks' | 'commands' | 'releases' | 'runbooks' | 'graph' | 'projects' | 'aitask' | 'settings' | 'notificationLog'
 
 const SIDEBAR_DEFAULT = 220
 const SIDEBAR_MIN     = 180
@@ -38,6 +39,7 @@ type Tint    = 'cool' | 'black' | 'warm'
 const ROUTE_PATHS: Record<RouteId, string> = {
   dashboard: '/',
   docs:      '/docs',
+  notes:     '/notes',
   codes:     '/codes',
   chat:      '/chat',
   issues:    '/issues',
@@ -60,6 +62,7 @@ function pathToRoute(pathname: string): RouteId {
 const NAV_ITEMS: { id: RouteId; label: string; icon: string; dividerBefore?: boolean }[] = [
   { id: 'dashboard', label: 'Dashboard',  icon: '⊞' },
   { id: 'docs',      label: 'Documents',  icon: '📄' },
+  { id: 'notes',     label: 'Notes',      icon: '📝' },
   { id: 'codes',     label: 'Codes',      icon: '{}' },
   { id: 'chat',      label: 'Ask AI',     icon: '◆' },
   { id: 'issues',    label: 'Issues',     icon: '⚠' },
@@ -238,6 +241,7 @@ export default function App() {
       case 'projects':  return wrap('projects',  <ProjectsPage />)
       case 'aitask':    return wrap('aitask',    <AiTaskPage />)
       case 'docs':      return wrap('docs',      <DocumentsPage />)
+      case 'notes':     return wrap('notes',     <NotesPage />)
       case 'codes':     return wrap('codes',     <CodesPage />)
       case 'chat':      return wrap('chat',      <DocChatPage />)
       case 'issues':    return wrap('issues',    <IssuesPage />)
