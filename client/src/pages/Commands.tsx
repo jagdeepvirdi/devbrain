@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { commandsApi, type Command, type CommandInput } from '../lib/api'
+import { commandsApi, type Command, type CommandInput, type CommandFacets } from '../lib/api'
 import { useProjectStore } from '../store/projectStore'
 import { useToast } from '../components/Toast'
 import { SkeletonRow } from '../components/Skeleton'
@@ -55,8 +55,10 @@ export function CommandsPage() {
   const [selectedId,    setSelectedId]    = useState<string | null>(searchParams.get('open'))
   const [search,        setSearch]        = useState('')
   const [langFilter,    setLangFilter]    = useState<string | null>(null)
+  const [tagFilter,     setTagFilter]     = useState<string | null>(null)
   const [favFilter,     setFavFilter]     = useState(false)
   const [nsFilter,      setNsFilter]      = useState<'all' | 'personal' | 'team'>('all')
+  const [facets,        setFacets]        = useState<CommandFacets>({ languages: [], tags: [] })
   const [showNew,       setShowNew]       = useState(false)
   const [paletteOpen,   setPaletteOpen]   = useState(false)
   const [importing,     setImporting]     = useState(false)
@@ -165,6 +167,7 @@ export function CommandsPage() {
         projectId: proj?.id,
         search:    search || undefined,
         language:  langFilter ?? undefined,
+        tag:       tagFilter ?? undefined,
         favorite:  favFilter || undefined,
         namespace: nsFilter !== 'all' ? nsFilter : undefined,
         limit:     CMD_PAGE,
@@ -182,9 +185,21 @@ export function CommandsPage() {
       setLoading(false)
       setLoadingMore(false)
     }
-  }, [proj?.id, search, langFilter, favFilter, nsFilter])
+  }, [proj?.id, search, langFilter, tagFilter, favFilter, nsFilter])
 
   useEffect(() => { load(0, false) }, [load])
+
+  // Filter chip options: languages + tags across the FULL project/namespace
+  // scope, not just the currently loaded page — otherwise chips for
+  // less-common languages/tags would only appear once you'd scrolled far
+  // enough to load a page containing one.
+  useEffect(() => {
+    let cancelled = false
+    commandsApi.facets({ projectId: proj?.id, namespace: nsFilter !== 'all' ? nsFilter : undefined })
+      .then(f => { if (!cancelled) setFacets(f) })
+      .catch(() => { if (!cancelled) setFacets({ languages: [], tags: [] }) })
+    return () => { cancelled = true }
+  }, [proj?.id, nsFilter])
 
   // Debounce search
   const [searchInput, setSearchInput] = useState('')
@@ -252,11 +267,6 @@ export function CommandsPage() {
       setImporting(false)
     }
   }
-
-  const availableLangs = useMemo(
-    () => [...new Set(commands.map(c => c.language))].sort(),
-    [commands]
-  )
 
   // Keyboard shortcut: N = new command
   useEffect(() => {
@@ -327,11 +337,11 @@ export function CommandsPage() {
           </div>
 
           {/* Filters */}
-          <div style={{ padding: '0 10px 8px', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-            <button onClick={() => { setFavFilter(false); setLangFilter(null); setNsFilter('all') }} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 10, border: '1px solid var(--line)', background: !favFilter && !langFilter && nsFilter === 'all' ? 'var(--bg-elev-2)' : 'transparent', color: !favFilter && !langFilter && nsFilter === 'all' ? 'var(--fg)' : 'var(--fg-3)', cursor: 'default' }}>
+          <div style={{ padding: '0 10px 4px', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            <button onClick={() => { setFavFilter(false); setLangFilter(null); setTagFilter(null); setNsFilter('all') }} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 10, border: '1px solid var(--line)', background: !favFilter && !langFilter && !tagFilter && nsFilter === 'all' ? 'var(--bg-elev-2)' : 'transparent', color: !favFilter && !langFilter && !tagFilter && nsFilter === 'all' ? 'var(--fg)' : 'var(--fg-3)', cursor: 'default' }}>
               All
             </button>
-            <button onClick={() => { setFavFilter(v => !v); setLangFilter(null) }} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 10, border: '1px solid var(--line)', background: favFilter ? '#F59E0B20' : 'transparent', color: favFilter ? '#F59E0B' : 'var(--fg-3)', cursor: 'default' }}>
+            <button onClick={() => { setFavFilter(v => !v); setLangFilter(null); setTagFilter(null) }} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 10, border: '1px solid var(--line)', background: favFilter ? '#F59E0B20' : 'transparent', color: favFilter ? '#F59E0B' : 'var(--fg-3)', cursor: 'default' }}>
               ★ Favorites
             </button>
             <button onClick={() => setNsFilter(v => v === 'team' ? 'all' : 'team')} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 10, border: `1px solid ${nsFilter === 'team' ? 'rgba(99,102,241,.5)' : 'var(--line)'}`, background: nsFilter === 'team' ? 'rgba(99,102,241,.15)' : 'transparent', color: nsFilter === 'team' ? 'var(--accent-2)' : 'var(--fg-3)', cursor: 'default' }}>
@@ -340,17 +350,36 @@ export function CommandsPage() {
             <button onClick={() => setNsFilter(v => v === 'personal' ? 'all' : 'personal')} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 10, border: `1px solid ${nsFilter === 'personal' ? 'rgba(99,102,241,.5)' : 'var(--line)'}`, background: nsFilter === 'personal' ? 'rgba(99,102,241,.15)' : 'transparent', color: nsFilter === 'personal' ? 'var(--accent-2)' : 'var(--fg-3)', cursor: 'default' }}>
               🔒 Personal
             </button>
-            {availableLangs.map(l => (
-              <button key={l} onClick={() => setLangFilter(langFilter === l ? null : l)} style={{
+            {facets.languages.map(({ value: l, count }) => (
+              <button key={l} onClick={() => setLangFilter(langFilter === l ? null : l)} title={`${count} command${count !== 1 ? 's' : ''}`} style={{
                 fontSize: '11px', padding: '2px 8px', borderRadius: 10,
                 border: `1px solid ${langFilter === l ? langColor(l) + '60' : 'var(--line)'}`,
                 background: langFilter === l ? langColor(l) + '20' : 'transparent',
                 color: langFilter === l ? langColor(l) : 'var(--fg-3)', cursor: 'default',
               }}>
-                {l}
+                {l} <span style={{ opacity: .55 }}>{count}</span>
               </button>
             ))}
           </div>
+
+          {/* Tags — capped + independently scrollable so a project with many
+              distinct tags can't push the command list itself out of view
+              (the sidebar column is overflow:hidden, so unbounded chip wrap
+              would otherwise squeeze the list's flex:1 region to nothing). */}
+          {facets.tags.length > 0 && (
+            <div style={{ padding: '0 10px 8px', display: 'flex', gap: 4, flexWrap: 'wrap', borderBottom: '1px solid var(--line)', marginBottom: 4, maxHeight: 88, overflowY: 'auto', flexShrink: 0 }}>
+              {facets.tags.map(({ value: t, count }) => (
+                <button key={t} onClick={() => setTagFilter(tagFilter === t ? null : t)} title={`${count} command${count !== 1 ? 's' : ''}`} style={{
+                  fontSize: '10.5px', padding: '2px 7px', borderRadius: 10, marginBottom: 6,
+                  border: `1px solid ${tagFilter === t ? 'rgba(99,102,241,.5)' : 'var(--line)'}`,
+                  background: tagFilter === t ? 'rgba(99,102,241,.15)' : 'var(--bg-elev)',
+                  color: tagFilter === t ? 'var(--accent-2)' : 'var(--fg-4)', cursor: 'default',
+                }}>
+                  #{t} <span style={{ opacity: .55 }}>{count}</span>
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* List */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '0 6px 8px' }}>
@@ -376,9 +405,13 @@ export function CommandsPage() {
                 ? <div style={{ padding: '28px 16px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
                     <div style={{ width: 38, height: 38, borderRadius: 8, background: 'var(--bg-elev)', border: '1px solid var(--line)', display: 'grid', placeItems: 'center', fontSize: 18, color: 'var(--fg-4)' }}>&gt;_</div>
                     <div style={{ fontSize: '12px', color: 'var(--fg-3)' }}>
-                      {search ? `No commands matching "${search}"` : 'No commands yet'}
+                      {search
+                        ? `No commands matching "${search}"`
+                        : (langFilter || tagFilter)
+                          ? `No commands match the selected filter${langFilter && tagFilter ? 's' : ''}`
+                          : 'No commands yet'}
                     </div>
-                    {!search && (
+                    {!search && !langFilter && !tagFilter && (
                       <button onClick={() => setShowNew(true)} style={{ fontSize: '11.5px', padding: '5px 12px', borderRadius: 5, border: '1px solid var(--accent)', background: 'var(--accent-dim)', color: 'var(--accent-2)' }}>
                         + Create your first command
                       </button>

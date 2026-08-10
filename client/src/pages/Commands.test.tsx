@@ -18,6 +18,7 @@ vi.mock('../store/projectStore', () => ({
 }))
 
 const listMock    = vi.fn()
+const facetsMock  = vi.fn()
 const createMock  = vi.fn()
 const updateMock  = vi.fn()
 const removeMock  = vi.fn()
@@ -27,6 +28,7 @@ const bulkMock    = vi.fn()
 vi.mock('../lib/api', () => ({
   commandsApi: {
     list:    (...args: unknown[]) => listMock(...args),
+    facets:  (...args: unknown[]) => facetsMock(...args),
     create:  (...args: unknown[]) => createMock(...args),
     update:  (...args: unknown[]) => updateMock(...args),
     remove:  (...args: unknown[]) => removeMock(...args),
@@ -53,6 +55,7 @@ function renderPage() {
 beforeEach(() => {
   vi.clearAllMocks()
   listMock.mockResolvedValue({ items: [makeCmd()], total: 1 })
+  facetsMock.mockResolvedValue({ languages: [{ value: 'bash', count: 1 }], tags: [{ value: 'dev', count: 1 }] })
   useMock.mockResolvedValue(makeCmd())
   Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } })
 })

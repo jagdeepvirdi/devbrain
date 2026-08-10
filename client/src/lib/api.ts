@@ -870,11 +870,15 @@ export type CommandInput = Pick<Command, 'title' | 'command' | 'language' | 'des
   project_id?: string | null
 }
 
+export type CommandFacet  = { value: string; count: number }
+export type CommandFacets = { languages: CommandFacet[]; tags: CommandFacet[] }
+
 export const commandsApi = {
-  list: (params?: { projectId?: string; language?: string; search?: string; favorite?: boolean; namespace?: string; limit?: number; offset?: number; signal?: AbortSignal }) => {
+  list: (params?: { projectId?: string; language?: string; tag?: string; search?: string; favorite?: boolean; namespace?: string; limit?: number; offset?: number; signal?: AbortSignal }) => {
     const qs = new URLSearchParams()
     if (params?.projectId)         qs.set('projectId', params.projectId)
     if (params?.language)          qs.set('language',  params.language)
+    if (params?.tag)               qs.set('tag',       params.tag)
     if (params?.search)            qs.set('search',    params.search)
     if (params?.namespace)         qs.set('namespace', params.namespace)
     if (params?.favorite === true) qs.set('favorite',  'true')
@@ -882,6 +886,13 @@ export const commandsApi = {
     if (params?.offset != null)    qs.set('offset',    String(params.offset))
     const q = qs.toString()
     return request<Paged<Command>>(`/commands${q ? `?${q}` : ''}`, params?.signal ? { signal: params.signal } : undefined)
+  },
+  facets: (params?: { projectId?: string; namespace?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.projectId) qs.set('projectId', params.projectId)
+    if (params?.namespace) qs.set('namespace', params.namespace)
+    const q = qs.toString()
+    return request<CommandFacets>(`/commands/facets${q ? `?${q}` : ''}`)
   },
   get:     (id: string)                       => request<Command>(`/commands/${id}`),
   create:  (body: CommandInput)               => request<Command>('/commands', { method: 'POST', body: JSON.stringify(body) }),

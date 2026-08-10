@@ -16,6 +16,43 @@ function embedCommandAsync(id: string, title: string, description: string, comma
 
 const router = Router()
 
+// Shared by GET / and GET /facets so the two never drift out of sync: scopes
+// a `commands c` query down to a project + namespace (personal/team/default),
+// mirroring the same visibility rules as the main list endpoint.
+function buildProjectNamespaceScope(
+  projectId: string | undefined,
+  namespace: string | undefined,
+  userId: string | undefined,
+  startIdx: number
+): { conditions: string[]; values: unknown[]; nextIdx: number } {
+  const conditions: string[] = []
+  const values: unknown[]    = []
+  let   idx = startIdx
+
+  if (projectId === 'global') {
+    conditions.push('c.project_id IS NULL')
+  } else if (projectId) {
+    conditions.push(`c.project_id = $${idx++}`)
+    values.push(projectId)
+  }
+
+  if (namespace === 'personal') {
+    conditions.push(`c.namespace = 'personal'`)
+    if (userId && userId !== 'legacy' && userId !== 'dev') {
+      conditions.push(`c.created_by = $${idx++}`)
+      values.push(userId)
+    }
+  } else if (namespace === 'team') {
+    conditions.push(`c.namespace = 'team'`)
+  } else if (userId && userId !== 'legacy' && userId !== 'dev') {
+    conditions.push(`(c.namespace = 'team' OR (c.namespace = 'personal' AND c.created_by = $${idx++}))`)
+    values.push(userId)
+  }
+  // else: legacy/dev mode with no namespace filter — show all
+
+  return { conditions, values, nextIdx: idx }
+}
+
 const CommandBody = z.object({
   title:       z.string().min(1).max(300).trim(),
   command:     z.string().min(1).max(10000).trim(),
@@ -30,47 +67,28 @@ const CommandBody = z.object({
 // ── GET /api/commands ─────────────────────────────────────────────────────
 
 router.get('/', async (req, res) => {
-  const { projectId, language, search, favorite, namespace } = req.query as Record<string, string>
+  const { projectId, language, search, favorite, namespace, tag } = req.query as Record<string, string>
   const limit  = Math.min(Number(req.query.limit  ?? 25), 100)
   const offset = Number(req.query.offset ?? 0)
   const userId = req.user?.id  // may be undefined in dev/legacy mode
 
-  const conditions: string[] = []
-  const values: unknown[]    = []
-  let   idx = 1
-
-  if (projectId === 'global') {
-    conditions.push('c.project_id IS NULL')
-  } else if (projectId) {
-    conditions.push(`c.project_id = $${idx++}`)
-    values.push(projectId)
-  }
+  const scope = buildProjectNamespaceScope(projectId, namespace, userId, 1)
+  const conditions = scope.conditions
+  const values: unknown[] = scope.values
+  let   idx = scope.nextIdx
 
   if (language) {
     conditions.push(`c.language = $${idx++}`)
     values.push(language)
   }
 
-  if (favorite === 'true') {
-    conditions.push('c.is_favorite = true')
+  if (tag) {
+    conditions.push(`$${idx++} = ANY(c.tags)`)
+    values.push(tag)
   }
 
-  if (namespace === 'personal') {
-    // Only the user's own personal commands
-    conditions.push(`c.namespace = 'personal'`)
-    if (userId && userId !== 'legacy' && userId !== 'dev') {
-      conditions.push(`c.created_by = $${idx++}`)
-      values.push(userId)
-    }
-  } else if (namespace === 'team') {
-    conditions.push(`c.namespace = 'team'`)
-  } else {
-    // Default: team commands + own personal commands
-    if (userId && userId !== 'legacy' && userId !== 'dev') {
-      conditions.push(`(c.namespace = 'team' OR (c.namespace = 'personal' AND c.created_by = $${idx++}))`)
-      values.push(userId)
-    }
-    // In legacy/dev mode, show all
+  if (favorite === 'true') {
+    conditions.push('c.is_favorite = true')
   }
 
   if (search) {
@@ -144,6 +162,45 @@ router.patch('/bulk', requireRole('member'), async (req, res) => {
     res.status(500).json({ error: (err as Error).message })
   } finally {
     client.release()
+  }
+})
+
+// ── GET /api/commands/facets ──────────────────────────────────────────────
+// Distinct languages + tags (with counts) for the current project/namespace
+// scope — powers the Commands page filter chips. Deliberately scoped only by
+// project + namespace (not by the page's own language/tag/search selections)
+// so every chip stays visible and clickable while narrowing down with others,
+// instead of chips disappearing as soon as you pick one.
+// Must be registered before GET /:id or Express would treat "facets" as an id.
+
+router.get('/facets', async (req, res) => {
+  const { projectId, namespace } = req.query as Record<string, string>
+  const userId = req.user?.id
+
+  const { conditions, values } = buildProjectNamespaceScope(projectId, namespace, userId, 1)
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+
+  try {
+    const [langRes, tagRes] = await Promise.all([
+      pool.query(
+        `SELECT c.language AS value, COUNT(*)::int AS count
+         FROM commands c ${where}
+         GROUP BY c.language
+         ORDER BY count DESC, value ASC`,
+        values
+      ),
+      pool.query(
+        `SELECT tag AS value, COUNT(*)::int AS count
+         FROM commands c, unnest(c.tags) AS tag
+         ${where}
+         GROUP BY tag
+         ORDER BY count DESC, value ASC`,
+        values
+      ),
+    ])
+    res.json({ data: { languages: langRes.rows, tags: tagRes.rows } })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
   }
 })
 
