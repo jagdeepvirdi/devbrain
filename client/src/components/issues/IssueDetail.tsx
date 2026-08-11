@@ -34,6 +34,9 @@ export function IssueDetail({ issueId, onBack, onDeleted }: { issueId: string; o
   const [savingRunbook,  setSavingRunbook]  = useState(false)
   const [commitInput,    setCommitInput]    = useState('')
   const [linkCopied,     setLinkCopied]    = useState(false)
+  const [editingComponent, setEditingComponent] = useState(false)
+  const [componentDraft, setComponentDraft] = useState('')
+  const [componentOptions, setComponentOptions] = useState<string[]>([])
   const { toast } = useToast()
   const { track } = useRecentlyViewed()
 
@@ -43,6 +46,7 @@ export function IssueDetail({ issueId, onBack, onDeleted }: { issueId: string; o
       setSummary(i.summary ?? '')
       setLoading(false)
       track({ id: i.id, type: 'issue', title: i.title, projectName: i.project_name ?? undefined, projectColor: i.project_color ?? undefined })
+      issuesApi.components(i.project_id ?? undefined).then(setComponentOptions).catch(() => {})
     }).catch(() => setLoading(false))
   }, [issueId, track])
 
@@ -346,6 +350,43 @@ export function IssueDetail({ issueId, onBack, onDeleted }: { issueId: string; o
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+
+          {/* Component pill */}
+          <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
+            {editingComponent ? (
+              <>
+                <input
+                  autoFocus
+                  list="issue-component-options"
+                  value={componentDraft}
+                  onChange={e => setComponentDraft(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') { patch({ component: componentDraft.trim() || null }); setEditingComponent(false) }
+                    if (e.key === 'Escape') setEditingComponent(false)
+                  }}
+                  onBlur={() => { patch({ component: componentDraft.trim() || null }); setEditingComponent(false) }}
+                  style={{ fontSize: '11.5px', padding: '3px 8px', borderRadius: 5, border: '1px solid var(--line-2)', background: 'var(--bg)', color: 'var(--fg)', width: 140, outline: 'none' }}
+                />
+                <datalist id="issue-component-options">
+                  {componentOptions.map(c => <option key={c} value={c} />)}
+                </datalist>
+              </>
+            ) : (
+              <button
+                onClick={() => { setComponentDraft(issue.component ?? ''); setEditingComponent(true) }}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  fontSize: '11.5px', padding: '3px 8px', borderRadius: 5,
+                  color: issue.component ? 'var(--accent-2)' : 'var(--fg-4)',
+                  background: issue.component ? 'var(--accent-dim)' : 'var(--bg-elev-2)',
+                  border: `1px solid ${issue.component ? 'var(--accent-line)' : 'var(--line-2)'}`,
+                  cursor: 'default',
+                }}
+              >
+                {issue.component || '+ Component'}
+              </button>
             )}
           </div>
 

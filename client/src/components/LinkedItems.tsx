@@ -25,31 +25,41 @@ export function routeForLink(link: { type: LinkEntityType; subtitle: string | nu
   return { task: '/tasks', issue: '/issues', release: '/releases', command: '/commands' }[link.type] as string
 }
 
-type Candidate = { id: string; label: string; sub: string }
+type Candidate = { id: string; label: string; sub: string; component: string | null }
 
 async function fetchCandidates(type: LinkEntityType): Promise<Candidate[]> {
   switch (type) {
     case 'task': {
       const items = await tasksApi.list()
-      return items.map(t => ({ id: t.id, label: t.title, sub: t.status }))
+      return items.map(t => ({ id: t.id, label: t.title, sub: t.status, component: t.component }))
     }
     case 'document': {
       const result = await documentsApi.list({ limit: 100 })
-      return result.items.map(d => ({ id: d.id, label: d.title, sub: d.file_type === 'code' ? `code · ${d.language ?? ''}` : d.file_type }))
+      return result.items.map(d => ({ id: d.id, label: d.title, sub: d.file_type === 'code' ? `code · ${d.language ?? ''}` : d.file_type, component: d.component }))
     }
     case 'issue': {
       const result = await issuesApi.list({ limit: 100 })
-      return result.items.map(i => ({ id: i.id, label: i.title, sub: i.status }))
+      return result.items.map(i => ({ id: i.id, label: i.title, sub: i.status, component: i.component }))
     }
     case 'release': {
       const items = await releasesApi.list()
-      return items.map(r => ({ id: r.id, label: `${r.project_name} v${r.version}`, sub: r.type }))
+      return items.map(r => ({ id: r.id, label: `${r.project_name} v${r.version}`, sub: r.type, component: r.component }))
     }
     case 'command': {
       const result = await commandsApi.list({ limit: 100 })
-      return result.items.map(c => ({ id: c.id, label: c.title, sub: c.language }))
+      return result.items.map(c => ({ id: c.id, label: c.title, sub: c.language, component: c.component }))
     }
   }
+}
+
+// Every linkable type now exposes a components() distinct-values endpoint with
+// the same shape (see routes/{issues,tasks,releases,commands,documents}.ts).
+const componentsApiFor: Record<LinkEntityType, (projectId?: string) => Promise<string[]>> = {
+  task:     tasksApi.components,
+  document: documentsApi.components,
+  issue:    issuesApi.components,
+  release:  releasesApi.components,
+  command:  commandsApi.components,
 }
 
 // ── Picker modal ──────────────────────────────────────────────────────────
@@ -67,10 +77,14 @@ function LinkPickerModal({ entityType, entityId, existingIds, onLinked, onClose 
   const [loading,     setLoading]     = useState(true)
   const [search,      setSearch]      = useState('')
   const [linking,     setLinking]     = useState<string | null>(null)
+  const [componentOptions, setComponentOptions] = useState<string[]>([])
+  const [componentFilter,  setComponentFilter]  = useState('')
 
   useEffect(() => {
     setLoading(true)
+    setComponentFilter('')
     fetchCandidates(targetType).then(setCandidates).catch(() => setCandidates([])).finally(() => setLoading(false))
+    componentsApiFor[targetType]().then(setComponentOptions).catch(() => setComponentOptions([]))
   }, [targetType])
 
   async function handleLink(id: string) {
@@ -88,6 +102,7 @@ function LinkPickerModal({ entityType, entityId, existingIds, onLinked, onClose 
   const visible = candidates
     .filter(c => !(targetType === entityType && c.id === entityId))
     .filter(c => !existingIds.has(c.id))
+    .filter(c => !componentFilter || c.component === componentFilter)
     .filter(c => !search.trim() || c.label.toLowerCase().includes(search.trim().toLowerCase()))
 
   const inp: React.CSSProperties = { width: '100%', background: 'var(--bg)', border: '1px solid var(--line-2)', borderRadius: 5, padding: '6px 9px', color: 'var(--fg)', fontSize: 12.5, boxSizing: 'border-box', outline: 'none' }
@@ -119,6 +134,17 @@ function LinkPickerModal({ entityType, entityId, existingIds, onLinked, onClose 
         </div>
 
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder={`Search ${ENTITY_META[targetType].label.toLowerCase()}s…`} style={inp} autoFocus />
+
+        {componentOptions.length > 0 && (
+          <select
+            value={componentFilter}
+            onChange={e => setComponentFilter(e.target.value)}
+            style={{ ...inp, cursor: 'default', color: componentFilter ? 'var(--fg)' : 'var(--fg-3)' }}
+          >
+            <option value="">All components</option>
+            {componentOptions.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
 
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4, minHeight: 120 }}>
           {loading && <div style={{ fontSize: 12, color: 'var(--fg-4)', padding: '10px 0', textAlign: 'center' }}>Loading…</div>}

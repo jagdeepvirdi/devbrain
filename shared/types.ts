@@ -67,6 +67,7 @@ export interface Issue {
   linkedCommands: string[]
   resolution: string
   tags: string[]
+  component?: string
   createdAt: Date
   resolvedAt?: Date
 }
@@ -81,6 +82,7 @@ export interface Command {
   language: CommandLanguage
   description: string
   tags: string[]
+  component?: string
   isFavorite: boolean
   lastUsed?: Date
 }
@@ -98,6 +100,7 @@ export interface Release {
   breakingChanges: string[]
   notes: string
   linkedIssues: string[]
+  component?: string
 }
 
 export interface RunbookStep {

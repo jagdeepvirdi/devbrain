@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { commandsApi, type Command } from '../../lib/api'
 import { useProjectStore } from '../../store/projectStore'
 import { SUPPORTED_LANGS } from './highlighter'
+import { ComponentInput } from '../ComponentInput'
 
 export function NewCommandModal({ onClose, onCreate }: {
   onClose: () => void
@@ -17,10 +18,16 @@ export function NewCommandModal({ onClose, onCreate }: {
   const [description,setDesc]       = useState('')
   const [projectId,  setProjectId]  = useState<string>(proj?.id ?? '')
   const [tagsRaw,    setTagsRaw]    = useState('')
+  const [component,  setComponent]  = useState('')
+  const [componentOptions, setComponentOptions] = useState<string[]>([])
   const [isFav,      setIsFav]      = useState(false)
   const [namespace,  setNamespace]  = useState<'team' | 'personal'>('team')
   const [saving,     setSaving]     = useState(false)
   const [error,      setError]      = useState('')
+
+  useEffect(() => {
+    commandsApi.components(projectId || undefined).then(setComponentOptions).catch(() => setComponentOptions([]))
+  }, [projectId])
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -32,7 +39,7 @@ export function NewCommandModal({ onClose, onCreate }: {
         title: title.trim(), command: command.trim(), language,
         description: description.trim(),
         project_id: projectId || null,
-        tags, is_favorite: isFav, namespace,
+        tags, component: component.trim() || null, is_favorite: isFav, namespace,
       })
       onCreate(created)
     } catch (err) {
@@ -107,6 +114,11 @@ export function NewCommandModal({ onClose, onCreate }: {
           <div>
             <label style={labelStyle}>Tags (comma-separated)</label>
             <input value={tagsRaw} onChange={e => setTagsRaw(e.target.value)} placeholder="dev, server, docker" style={inputStyle} />
+          </div>
+
+          <div>
+            <label style={labelStyle}>Component</label>
+            <ComponentInput value={component} onChange={setComponent} options={componentOptions} />
           </div>
 
           <div>

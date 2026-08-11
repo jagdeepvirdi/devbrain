@@ -4,6 +4,7 @@ import { commandsApi, type Command, type CommandInput } from '../../lib/api'
 import { useRecentlyViewed } from '../../hooks/useRecentlyViewed'
 import { SUPPORTED_LANGS, langColor, fmtDate } from './highlighter'
 import { CodeBlock } from './CodeBlock'
+import { ComponentInput } from '../ComponentInput'
 
 export function CommandDetail({ cmd, hl, onUpdate, onDelete }: {
   cmd: Command
@@ -19,6 +20,8 @@ export function CommandDetail({ cmd, hl, onUpdate, onDelete }: {
   const [explanation, setExplain]   = useState<string | null>(cmd.explanation ?? null)
   const [confirmDel, setConfirmDel] = useState(false)
   const [linkCopied, setLinkCopied] = useState(false)
+  const [component, setComponent]   = useState(cmd.component ?? '')
+  const [componentOptions, setComponentOptions] = useState<string[]>([])
   const { track } = useRecentlyViewed()
 
   useEffect(() => {
@@ -28,8 +31,13 @@ export function CommandDetail({ cmd, hl, onUpdate, onDelete }: {
     setEditCode(false)
     setExplain(cmd.explanation ?? null)
     setConfirmDel(false)
+    setComponent(cmd.component ?? '')
     track({ id: cmd.id, type: 'command', title: cmd.title, projectName: cmd.project_name ?? undefined, projectColor: cmd.project_color ?? undefined })
   }, [cmd.id, track])
+
+  useEffect(() => {
+    commandsApi.components(cmd.project_id ?? undefined).then(setComponentOptions).catch(() => setComponentOptions([]))
+  }, [cmd.project_id])
 
   async function explain() {
     setExplaining(true)
@@ -158,6 +166,19 @@ export function CommandDetail({ cmd, hl, onUpdate, onDelete }: {
             borderRadius: 6, padding: '8px 12px', color: 'var(--fg)', fontSize: '13px',
             resize: 'vertical', boxSizing: 'border-box', outline: 'none', lineHeight: 1.5,
           }}
+        />
+      </div>
+
+      {/* Component */}
+      <div>
+        <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 6 }}>
+          Component
+        </div>
+        <ComponentInput
+          value={component}
+          onChange={setComponent}
+          onCommit={v => { if (v.trim() !== (cmd.component ?? '')) onUpdate(cmd.id, { component: v.trim() || null }) }}
+          options={componentOptions}
         />
       </div>
 

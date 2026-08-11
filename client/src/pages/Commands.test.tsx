@@ -17,31 +17,33 @@ vi.mock('../store/projectStore', () => ({
   useProjectStore: () => ({ projects: [], selectedProject: () => null }),
 }))
 
-const listMock    = vi.fn()
-const facetsMock  = vi.fn()
-const createMock  = vi.fn()
-const updateMock  = vi.fn()
-const removeMock  = vi.fn()
-const useMock     = vi.fn()
-const explainMock = vi.fn()
-const bulkMock    = vi.fn()
+const listMock       = vi.fn()
+const facetsMock     = vi.fn()
+const createMock     = vi.fn()
+const updateMock     = vi.fn()
+const removeMock     = vi.fn()
+const useMock        = vi.fn()
+const explainMock    = vi.fn()
+const bulkMock       = vi.fn()
+const componentsMock = vi.fn()
 vi.mock('../lib/api', () => ({
   commandsApi: {
-    list:    (...args: unknown[]) => listMock(...args),
-    facets:  (...args: unknown[]) => facetsMock(...args),
-    create:  (...args: unknown[]) => createMock(...args),
-    update:  (...args: unknown[]) => updateMock(...args),
-    remove:  (...args: unknown[]) => removeMock(...args),
-    use:     (...args: unknown[]) => useMock(...args),
-    explain: (...args: unknown[]) => explainMock(...args),
-    bulk:    (...args: unknown[]) => bulkMock(...args),
+    list:       (...args: unknown[]) => listMock(...args),
+    facets:     (...args: unknown[]) => facetsMock(...args),
+    create:     (...args: unknown[]) => createMock(...args),
+    update:     (...args: unknown[]) => updateMock(...args),
+    remove:     (...args: unknown[]) => removeMock(...args),
+    use:        (...args: unknown[]) => useMock(...args),
+    explain:    (...args: unknown[]) => explainMock(...args),
+    bulk:       (...args: unknown[]) => bulkMock(...args),
+    components: (...args: unknown[]) => componentsMock(...args),
   },
 }))
 
 function makeCmd(overrides: Partial<Command> = {}): Command {
   return {
     id: 'cmd-1', project_id: null, title: 'Start Dev Server', command: 'npm run dev',
-    language: 'bash', description: 'Runs the dev server', tags: ['dev'], is_favorite: false,
+    language: 'bash', description: 'Runs the dev server', tags: ['dev'], component: null, is_favorite: false,
     namespace: 'team', created_by: null, last_used: null, explanation: null,
     created_at: '2026-01-01T00:00:00Z', project_name: null, project_color: null,
     ...overrides,
@@ -57,6 +59,7 @@ beforeEach(() => {
   listMock.mockResolvedValue({ items: [makeCmd()], total: 1 })
   facetsMock.mockResolvedValue({ languages: [{ value: 'bash', count: 1 }], tags: [{ value: 'dev', count: 1 }] })
   useMock.mockResolvedValue(makeCmd())
+  componentsMock.mockResolvedValue([])
   Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } })
 })
 

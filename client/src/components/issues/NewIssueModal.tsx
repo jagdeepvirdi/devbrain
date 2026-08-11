@@ -4,6 +4,7 @@ import { issuesApi, runbooksApi, templatesApi } from '../../lib/api'
 import type { Issue, IssueStep, Runbook, RelatedIssue, Template } from '../../lib/api'
 import { PRIORITY_META } from './issueConstants'
 import type { Priority } from './issueConstants'
+import { ComponentInput } from '../ComponentInput'
 
 export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCreate: (issue: Issue) => void }) {
   const { projects, selectedProject } = useProjectStore()
@@ -24,12 +25,18 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
   const [tags,          setTags]          = useState<string[]>([])
   const [tagInput,      setTagInput]      = useState('')
   const [suggestedTags, setSuggestedTags] = useState<string[]>([])
+  const [component,     setComponent]     = useState('')
+  const [componentOptions, setComponentOptions] = useState<string[]>([])
   const relatedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const suggestTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     runbooksApi.list().then(setRunbooks).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    issuesApi.components(projectId ?? undefined).then(setComponentOptions).catch(() => setComponentOptions([]))
+  }, [projectId])
 
   useEffect(() => {
     templatesApi.list({ type: 'issue', projectId: projectId ?? undefined })
@@ -113,6 +120,7 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
         priority,
         project_id: projectId,
         tags,
+        component: component.trim() || null,
         investigation_steps,
       })
       onCreate(issue)
@@ -280,6 +288,11 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
               {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>
+        </div>
+
+        <div>
+          <label style={{ fontSize: '11px', color: 'var(--fg-3)', display: 'block', marginBottom: 5 }}>Component</label>
+          <ComponentInput value={component} onChange={setComponent} options={componentOptions} />
         </div>
 
         <div>

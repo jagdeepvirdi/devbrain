@@ -10,7 +10,7 @@ import { aiEmbed } from './ai.js'
 export const ISSUE_COLS = `
   i.id, i.project_id, i.title, i.description, i.status, i.priority,
   i.linked_docs, i.linked_commands, i.pr_url,
-  i.resolution, i.tags, i.embedding_status, i.summary,
+  i.resolution, i.tags, i.component, i.embedding_status, i.summary,
   i.source, i.external_id,
   i.created_at, i.updated_at, i.resolved_at,
   p.name  AS project_name,

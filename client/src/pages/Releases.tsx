@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { releasesApi, gitApi, type Release, type ReleaseInput, type AiReleaseNotes } from '../lib/api'
 import { useProjectStore } from '../store/projectStore'
 import { LinkedItems } from '../components/LinkedItems'
+import { ComponentInput } from '../components/ComponentInput'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -99,6 +100,12 @@ function ReleaseModal({ initial, onClose, onSave }: {
   const [fixes,      setFixes]      = useState<string[]>(initial?.fixes ?? [])
   const [breaking,   setBreaking]   = useState<string[]>(initial?.breaking_changes ?? [])
   const [notes,      setNotes]      = useState(initial?.notes ?? '')
+  const [component,  setComponent]  = useState(initial?.component ?? '')
+  const [componentOptions, setComponentOptions] = useState<string[]>([])
+
+  useEffect(() => {
+    releasesApi.components(projectId || undefined).then(setComponentOptions).catch(() => setComponentOptions([]))
+  }, [projectId])
 
   // AI generation
   const [showAi,     setShowAi]     = useState(false)
@@ -132,9 +139,9 @@ function ReleaseModal({ initial, onClose, onSave }: {
     if (!projectId)       { setError('Project is required'); return }
     setSaving(true); setError('')
     try {
-      const body: ReleaseInput = { project_id: projectId, version: version.trim(), date, type, features, fixes, breaking_changes: breaking, notes, linked_issues: initial?.linked_issues ?? [] }
+      const body: ReleaseInput = { project_id: projectId, version: version.trim(), date, type, features, fixes, breaking_changes: breaking, notes, linked_issues: initial?.linked_issues ?? [], component: component.trim() || null }
       const saved = isEdit
-        ? await releasesApi.update(initial!.id!, { version: body.version, date: body.date, type: body.type, features: body.features, fixes: body.fixes, breaking_changes: body.breaking_changes, notes: body.notes, linked_issues: body.linked_issues })
+        ? await releasesApi.update(initial!.id!, { version: body.version, date: body.date, type: body.type, features: body.features, fixes: body.fixes, breaking_changes: body.breaking_changes, notes: body.notes, linked_issues: body.linked_issues, component: body.component })
         : await releasesApi.create(body)
       onSave(saved)
     } catch (e) {
@@ -221,6 +228,12 @@ function ReleaseModal({ initial, onClose, onSave }: {
           <div>
             <label style={lbl}>Summary / Notes</label>
             <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Brief description of this release…" rows={2} style={{ ...inp, resize: 'vertical', lineHeight: 1.5 }} />
+          </div>
+
+          {/* Component */}
+          <div>
+            <label style={lbl}>Component</label>
+            <ComponentInput value={component} onChange={setComponent} options={componentOptions} />
           </div>
 
           {/* Features */}
@@ -497,6 +510,109 @@ function ReleaseCard({ release, onEdit, onDelete }: {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── ReleaseTable — sortable tabular view, alternative to the timeline ────────
+
+type SortKey = 'version' | 'date' | 'type' | 'component'
+
+function ReleaseTable({ releases, showProject, onEdit, onDelete }: {
+  releases: Release[]
+  showProject: boolean
+  onEdit: (r: Release) => void
+  onDelete: (id: string) => void
+}) {
+  const [sortKey, setSortKey] = useState<SortKey>('date')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [confirmId, setConfirmId] = useState<string | null>(null)
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
+    else { setSortKey(key); setSortDir('asc') }
+  }
+
+  const sorted = [...releases].sort((a, b) => {
+    const cmp = sortKey === 'date'
+      ? a.date.localeCompare(b.date)
+      : String(a[sortKey] ?? '').localeCompare(String(b[sortKey] ?? ''))
+    return sortDir === 'asc' ? cmp : -cmp
+  })
+
+  const thStyle: React.CSSProperties = { padding: '9px 12px', cursor: 'default', userSelect: 'none', whiteSpace: 'nowrap' }
+
+  function SortableTh({ sortKeyName, label, width }: { sortKeyName: SortKey; label: string; width?: number }) {
+    return (
+      <th onClick={() => toggleSort(sortKeyName)} style={{ ...thStyle, width }}>
+        {label} {sortKey === sortKeyName ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+      </th>
+    )
+  }
+
+  return (
+    <div style={{ overflowX: 'auto', border: '1px solid var(--line)', borderRadius: 8 }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px', textAlign: 'left' }}>
+        <thead>
+          <tr style={{ borderBottom: '1px solid var(--line)', background: 'var(--bg-elev)', color: 'var(--fg-3)', fontWeight: 500 }}>
+            <SortableTh sortKeyName="version" label="Version" width={190} />
+            <SortableTh sortKeyName="date" label="Date" width={100} />
+            <SortableTh sortKeyName="type" label="Type" width={80} />
+            <SortableTh sortKeyName="component" label="Component" width={160} />
+            {showProject && <th style={{ ...thStyle, width: 140 }}>Project</th>}
+            <th style={thStyle}>Summary</th>
+            <th style={{ ...thStyle, width: 110, textAlign: 'right' }}>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map(r => {
+            const ts = typeStyle(r.type)
+            const summary = [
+              r.features.length ? `${r.features.length} feature${r.features.length !== 1 ? 's' : ''}` : '',
+              r.fixes.length ? `${r.fixes.length} fix${r.fixes.length !== 1 ? 'es' : ''}` : '',
+              r.breaking_changes.length ? `${r.breaking_changes.length} breaking` : '',
+            ].filter(Boolean).join(' · ') || r.notes || '—'
+            return (
+              <tr key={r.id} style={{ borderBottom: '1px solid var(--line)' }}>
+                <td style={{ padding: '8px 12px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--fg)' }}>{r.version}</td>
+                <td style={{ padding: '8px 12px', color: 'var(--fg-3)', whiteSpace: 'nowrap' }}>{fmtDate(r.date)}</td>
+                <td style={{ padding: '8px 12px' }}>
+                  <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: 10, background: ts.bg, color: ts.text, border: `1px solid ${ts.border}`, fontWeight: 600 }}>
+                    {r.type}
+                  </span>
+                </td>
+                <td style={{ padding: '8px 12px', color: 'var(--fg-2)' }}>{r.component ?? '—'}</td>
+                {showProject && (
+                  <td style={{ padding: '8px 12px' }}>
+                    {r.project_name && (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '11px', color: 'var(--fg-3)' }}>
+                        <span style={{ width: 5, height: 5, borderRadius: '50%', background: r.project_color }} />
+                        {r.project_name}
+                      </span>
+                    )}
+                  </td>
+                )}
+                <td style={{ padding: '8px 12px', color: 'var(--fg-3)', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={summary}>
+                  {summary}
+                </td>
+                <td style={{ padding: '8px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <button onClick={() => onEdit(r)} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 4, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-3)', cursor: 'default', marginRight: 4 }}>
+                    Edit
+                  </button>
+                  {confirmId === r.id
+                    ? <button onClick={() => { onDelete(r.id); setConfirmId(null) }} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 4, border: '1px solid #EF4444', background: 'rgba(239,68,68,.1)', color: '#EF4444', cursor: 'default' }}>
+                        Confirm
+                      </button>
+                    : <button onClick={() => setConfirmId(r.id)} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: 4, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-4)', cursor: 'default' }}>
+                        Delete
+                      </button>
+                  }
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -867,6 +983,8 @@ export function ReleasesPage() {
   const [showImportGit, setShowImportGit] = useState(false)
   const [showDraftAi,   setShowDraftAi]   = useState(false)
   const [draftInitial,  setDraftInitial]  = useState<Partial<ReleaseInput> | undefined>()
+  const [view,          setView]          = useState<'timeline' | 'table'>('timeline')
+  const [exporting,     setExporting]     = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -912,6 +1030,17 @@ export function ReleasesPage() {
     releasesApi.remove(id).then(() => setReleases(prev => prev.filter(r => r.id !== id)))
   }
 
+  async function handleExport() {
+    setExporting(true)
+    try {
+      await releasesApi.export({ projectId: proj?.id })
+    } catch {
+      // best-effort — no toast wiring here, matches the rest of this page's error handling for now
+    } finally {
+      setExporting(false)
+    }
+  }
+
   // Summary stats
   const stats = {
     total:    releases.length,
@@ -953,6 +1082,34 @@ export function ReleasesPage() {
         )}
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+          {/* View toggle */}
+          <div style={{ display: 'flex', border: '1px solid var(--line)', borderRadius: 5, overflow: 'hidden' }}>
+            {(['timeline', 'table'] as const).map(v => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                style={{
+                  padding: '5px 10px', fontSize: '12px', cursor: 'default',
+                  border: 'none', background: view === v ? 'var(--accent-dim)' : 'none',
+                  color: view === v ? 'var(--accent-2)' : 'var(--fg-3)',
+                }}
+              >
+                {v === 'timeline' ? '☰ Timeline' : '▦ Table'}
+              </button>
+            ))}
+          </div>
+
+          {releases.length > 0 && (
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              title="Download the current view as an .xlsx file"
+              style={{ padding: '5px 12px', borderRadius: 5, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-2)', fontSize: '12px', cursor: exporting ? 'not-allowed' : 'default', opacity: exporting ? 0.6 : 1, display: 'flex', alignItems: 'center', gap: 5 }}
+            >
+              ⇩ {exporting ? 'Exporting…' : 'Export'}
+            </button>
+          )}
+
           {releases.length >= 2 && (
             <button onClick={() => setShowCompare(true)} style={{ padding: '5px 12px', borderRadius: 5, border: '1px solid var(--line)', background: 'none', color: 'var(--fg-2)', fontSize: '12px', cursor: 'default', display: 'flex', alignItems: 'center', gap: 5 }}>
               <span style={{ fontSize: 9, color: 'var(--accent-2)' }}>◆</span> Compare
@@ -986,7 +1143,23 @@ export function ReleasesPage() {
                   {proj ? ` for ${proj.name}` : ''} — <span onClick={() => setShowNew(true)} style={{ color: 'var(--accent-2)', cursor: 'default', textDecoration: 'underline' }}>create one</span>
                 </p>
               </div>
-            : (
+            : view === 'table' ? (
+              <div>
+                <ReleaseTable
+                  releases={releases}
+                  showProject={!proj}
+                  onEdit={r => setEditing(r)}
+                  onDelete={handleDelete}
+                />
+
+                {/* Stats footer */}
+                <div style={{ marginTop: 16, padding: '10px 14px', borderRadius: 7, background: 'var(--bg-elev)', border: '1px solid var(--line)', fontSize: '12px', color: 'var(--fg-3)', display: 'flex', gap: 20 }}>
+                  <span>{stats.total} releases</span>
+                  <span>✦ {stats.features} features shipped</span>
+                  <span>○ {stats.fixes} fixes</span>
+                </div>
+              </div>
+            ) : (
               <div style={{ maxWidth: 780 }}>
                 {/* Top cap for timeline */}
                 <div style={{ display: 'flex', gap: 0, marginBottom: 0 }}>

@@ -60,6 +60,7 @@ const CommandBody = z.object({
   description: z.string().max(2000).trim().default(''),
   project_id:  z.string().nullable().optional(),
   tags:        z.array(z.string()).default([]),
+  component:   z.string().max(200).trim().nullable().optional(),
   is_favorite: z.boolean().default(false),
   namespace:   z.enum(['personal', 'team']).default('team'),
 })
@@ -67,7 +68,7 @@ const CommandBody = z.object({
 // ── GET /api/commands ─────────────────────────────────────────────────────
 
 router.get('/', async (req, res) => {
-  const { projectId, language, search, favorite, namespace, tag } = req.query as Record<string, string>
+  const { projectId, language, search, favorite, namespace, tag, component } = req.query as Record<string, string>
   const limit  = Math.min(Number(req.query.limit  ?? 25), 100)
   const offset = Number(req.query.offset ?? 0)
   const userId = req.user?.id  // may be undefined in dev/legacy mode
@@ -85,6 +86,11 @@ router.get('/', async (req, res) => {
   if (tag) {
     conditions.push(`$${idx++} = ANY(c.tags)`)
     values.push(tag)
+  }
+
+  if (component) {
+    conditions.push(`c.component = $${idx++}`)
+    values.push(component)
   }
 
   if (favorite === 'true') {
@@ -204,6 +210,23 @@ router.get('/facets', async (req, res) => {
   }
 })
 
+// ── GET /api/commands/components  (distinct values for autocomplete/filtering) ─
+// Must be registered before GET /:id so "components" isn't swallowed as an id.
+
+router.get('/components', async (req, res) => {
+  try {
+    const { rows } = await pool.query<{ component: string }>(
+      req.query.projectId
+        ? 'SELECT DISTINCT component FROM commands WHERE component IS NOT NULL AND project_id = $1 ORDER BY component'
+        : 'SELECT DISTINCT component FROM commands WHERE component IS NOT NULL ORDER BY component',
+      req.query.projectId ? [req.query.projectId] : []
+    )
+    res.json({ data: rows.map(r => r.component) })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
 // ── GET /api/commands/:id ─────────────────────────────────────────────────
 
 router.get('/:id', async (req, res) => {
@@ -227,15 +250,15 @@ router.post('/', requireRole('member'), async (req, res) => {
   const parsed = CommandBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
-  const { title, command, language, description, project_id, tags, is_favorite, namespace } = parsed.data
+  const { title, command, language, description, project_id, tags, component, is_favorite, namespace } = parsed.data
   const createdBy = req.user?.id && req.user.id !== 'legacy' && req.user.id !== 'dev' ? req.user.id : null
 
   try {
     const { rows } = await pool.query(
-      `INSERT INTO commands (project_id, title, command, language, description, tags, is_favorite, namespace, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO commands (project_id, title, command, language, description, tags, component, is_favorite, namespace, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
-      [project_id ?? null, title, command, language, description, tags, is_favorite, namespace, createdBy]
+      [project_id ?? null, title, command, language, description, tags, component?.trim() || null, is_favorite, namespace, createdBy]
     )
     res.status(201).json({ data: rows[0] })
     embedCommandAsync(rows[0].id, title, description, command)
@@ -246,7 +269,7 @@ router.post('/', requireRole('member'), async (req, res) => {
 
 // ── PUT /api/commands/:id ─────────────────────────────────────────────────
 
-const COMMAND_UPDATABLE_COLS = new Set(['title', 'command', 'language', 'description', 'project_id', 'tags', 'is_favorite', 'namespace'])
+const COMMAND_UPDATABLE_COLS = new Set(['title', 'command', 'language', 'description', 'project_id', 'tags', 'component', 'is_favorite', 'namespace'])
 
 router.put('/:id', requireRole('member'), async (req, res) => {
   const parsed = CommandBody.partial().safeParse(req.body)

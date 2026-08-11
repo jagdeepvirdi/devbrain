@@ -14,6 +14,7 @@ const TaskBody = z.object({
   project_id:  z.string().nullable().optional(),
   due_date:    z.string().nullable().optional(), // ISO date string YYYY-MM-DD
   tags:        z.array(z.string()).default([]),
+  component:   z.string().max(200).trim().nullable().optional(),
 })
 
 // ── GET /api/tasks ────────────────────────────────────────────────────────
@@ -22,6 +23,7 @@ router.get('/', async (req, res) => {
   const projectId = req.query.projectId as string | undefined
   const status    = req.query.status    as string | undefined
   const priority  = req.query.priority  as string | undefined
+  const component = req.query.component as string | undefined
 
   const conditions: string[] = []
   const values: unknown[]    = []
@@ -42,6 +44,11 @@ router.get('/', async (req, res) => {
   if (priority) {
     conditions.push(`t.priority = $${idx++}`)
     values.push(priority)
+  }
+
+  if (component) {
+    conditions.push(`t.component = $${idx++}`)
+    values.push(component)
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
@@ -72,6 +79,23 @@ router.get('/', async (req, res) => {
       values
     )
     res.json({ data: rows })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── GET /api/tasks/components  (distinct values for autocomplete/filtering) ───
+// Must be registered before GET /:id so "components" isn't swallowed as an id.
+
+router.get('/components', async (req, res) => {
+  try {
+    const { rows } = await pool.query<{ component: string }>(
+      req.query.projectId
+        ? 'SELECT DISTINCT component FROM tasks WHERE component IS NOT NULL AND project_id = $1 ORDER BY component'
+        : 'SELECT DISTINCT component FROM tasks WHERE component IS NOT NULL ORDER BY component',
+      req.query.projectId ? [req.query.projectId] : []
+    )
+    res.json({ data: rows.map(r => r.component) })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
   }
@@ -149,14 +173,14 @@ router.post('/', requireRole('member'), async (req, res) => {
   const parsed = TaskBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
-  const { title, description, status, priority, project_id, due_date, tags } = parsed.data
+  const { title, description, status, priority, project_id, due_date, tags, component } = parsed.data
 
   try {
     const { rows } = await pool.query(
-      `INSERT INTO tasks (project_id, title, description, status, priority, due_date, tags)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO tasks (project_id, title, description, status, priority, due_date, tags, component)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [project_id ?? null, title, description, status, priority, due_date ?? null, tags]
+      [project_id ?? null, title, description, status, priority, due_date ?? null, tags, component?.trim() || null]
     )
     res.status(201).json({ data: rows[0] })
   } catch (err) {

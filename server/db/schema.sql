@@ -205,6 +205,8 @@ CREATE TABLE IF NOT EXISTS issues (
   pr_url              TEXT,
   resolution          TEXT        NOT NULL DEFAULT '',
   tags                TEXT[]      NOT NULL DEFAULT '{}',
+  -- Single-select feature/module grouping (e.g. 'SAP', 'BPP', 'Payment'), same convention as documents.component.
+  component           TEXT,
   -- Semantic search embedding
   embedding           VECTOR(768),
   -- 'pending' | 'processing' | 'done' | 'failed'
@@ -227,6 +229,7 @@ CREATE INDEX IF NOT EXISTS issues_project_idx      ON issues (project_id);
 CREATE INDEX IF NOT EXISTS issues_status_idx       ON issues (status);
 CREATE INDEX IF NOT EXISTS issues_priority_idx     ON issues (priority);
 CREATE INDEX IF NOT EXISTS issues_emb_status_idx   ON issues (embedding_status) WHERE embedding_status != 'done';
+CREATE INDEX IF NOT EXISTS issues_component_idx    ON issues (project_id, component) WHERE component IS NOT NULL;
 CREATE INDEX IF NOT EXISTS issues_embedding_hnsw_idx
   ON issues USING hnsw (embedding vector_cosine_ops)
   WITH (m = 16, ef_construction = 64);
@@ -265,6 +268,8 @@ CREATE TABLE IF NOT EXISTS commands (
   language    TEXT        NOT NULL DEFAULT 'bash',
   description TEXT        NOT NULL DEFAULT '',
   tags        TEXT[]      NOT NULL DEFAULT '{}',
+  -- Single-select feature/module grouping (e.g. 'SAP', 'BPP', 'Payment'), same convention as documents.component.
+  component   TEXT,
   is_favorite BOOLEAN     NOT NULL DEFAULT false,
   -- Org v2: ownership and visibility
   namespace   TEXT        NOT NULL DEFAULT 'team'
@@ -287,6 +292,7 @@ CREATE OR REPLACE TRIGGER trg_commands_updated_at
 CREATE INDEX IF NOT EXISTS commands_tsv_idx            ON commands USING GIN (tsv);
 CREATE INDEX IF NOT EXISTS commands_project_idx        ON commands (project_id);
 CREATE INDEX IF NOT EXISTS commands_fav_idx            ON commands (is_favorite) WHERE is_favorite = true;
+CREATE INDEX IF NOT EXISTS commands_component_idx      ON commands (project_id, component) WHERE component IS NOT NULL;
 CREATE INDEX IF NOT EXISTS commands_embedding_hnsw_idx
   ON commands USING hnsw (embedding vector_cosine_ops)
   WITH (m = 16, ef_construction = 64);
@@ -305,6 +311,8 @@ CREATE TABLE IF NOT EXISTS releases (
   breaking_changes TEXT[]      NOT NULL DEFAULT '{}',
   notes            TEXT        NOT NULL DEFAULT '',
   linked_issues    TEXT[]      NOT NULL DEFAULT '{}',
+  -- Single-select feature/module grouping (e.g. 'SAP', 'BPP', 'Payment'), same convention as documents.component.
+  component        TEXT,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, version)
@@ -314,8 +322,9 @@ CREATE OR REPLACE TRIGGER trg_releases_updated_at
   BEFORE UPDATE ON releases
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
-CREATE INDEX IF NOT EXISTS releases_project_idx ON releases (project_id);
-CREATE INDEX IF NOT EXISTS releases_date_idx    ON releases (date DESC);
+CREATE INDEX IF NOT EXISTS releases_project_idx   ON releases (project_id);
+CREATE INDEX IF NOT EXISTS releases_date_idx      ON releases (date DESC);
+CREATE INDEX IF NOT EXISTS releases_component_idx ON releases (project_id, component) WHERE component IS NOT NULL;
 
 -- ── Runbooks ──────────────────────────────────────────────────────────────
 
@@ -350,6 +359,8 @@ CREATE TABLE IF NOT EXISTS tasks (
                 CHECK (priority IN ('low', 'medium', 'high', 'critical')),
   due_date    DATE,
   tags        TEXT[]      NOT NULL DEFAULT '{}',
+  -- Single-select feature/module grouping (e.g. 'SAP', 'BPP', 'Payment'), same convention as documents.component.
+  component   TEXT,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   done_at     TIMESTAMPTZ
@@ -359,9 +370,10 @@ CREATE OR REPLACE TRIGGER trg_tasks_updated_at
   BEFORE UPDATE ON tasks
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
-CREATE INDEX IF NOT EXISTS tasks_project_idx  ON tasks (project_id);
-CREATE INDEX IF NOT EXISTS tasks_status_idx   ON tasks (status);
-CREATE INDEX IF NOT EXISTS tasks_priority_idx ON tasks (priority);
+CREATE INDEX IF NOT EXISTS tasks_project_idx   ON tasks (project_id);
+CREATE INDEX IF NOT EXISTS tasks_status_idx    ON tasks (status);
+CREATE INDEX IF NOT EXISTS tasks_priority_idx  ON tasks (priority);
+CREATE INDEX IF NOT EXISTS tasks_component_idx ON tasks (project_id, component) WHERE component IS NOT NULL;
 
 -- ── Project members (Org v2) ──────────────────────────────────────────────
 

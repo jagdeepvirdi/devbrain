@@ -4,6 +4,7 @@ import { pool }   from '../db/pool.js'
 import { aiChat } from '../services/ai.js'
 import { requireRole } from '../middleware/auth.js'
 import { deleteLinksFor } from '../services/links.js'
+import { loadXlsx } from '../lib/xlsxCompat.js'
 
 const router = Router()
 
@@ -17,10 +18,11 @@ const ReleaseBody = z.object({
   breaking_changes: z.array(z.string()).default([]),
   notes:            z.string().max(5000).trim().default(''),
   linked_issues:    z.array(z.string()).default([]),
+  component:        z.string().max(200).trim().nullable().optional(),
 })
 
 // Fields allowed in PUT (project_id is immutable after creation)
-const UPDATABLE = ['version', 'date', 'type', 'features', 'fixes', 'breaking_changes', 'notes', 'linked_issues']
+const UPDATABLE = ['version', 'date', 'type', 'features', 'fixes', 'breaking_changes', 'notes', 'linked_issues', 'component']
 
 // ── POST /api/releases/ai-generate ──────────────────────────────────────────
 // Must come before /:id routes to avoid param collision on POST.
@@ -291,7 +293,7 @@ Rules:
 // ── GET /api/releases ────────────────────────────────────────────────────────
 
 router.get('/', async (req, res) => {
-  const { projectId } = req.query as { projectId?: string }
+  const { projectId, component } = req.query as { projectId?: string; component?: string }
 
   const conditions: string[] = []
   const values: unknown[]    = []
@@ -300,6 +302,11 @@ router.get('/', async (req, res) => {
   if (projectId) {
     conditions.push(`r.project_id = $${idx++}`)
     values.push(projectId)
+  }
+
+  if (component) {
+    conditions.push(`r.component = $${idx++}`)
+    values.push(component)
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
@@ -314,6 +321,88 @@ router.get('/', async (req, res) => {
       values
     )
     res.json({ data: rows })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── GET /api/releases/components  (distinct values for autocomplete/filtering) ──
+// Must be registered before GET /:id so "components" isn't swallowed as an id.
+
+router.get('/components', async (req, res) => {
+  try {
+    const { rows } = await pool.query<{ component: string }>(
+      req.query.projectId
+        ? 'SELECT DISTINCT component FROM releases WHERE component IS NOT NULL AND project_id = $1 ORDER BY component'
+        : 'SELECT DISTINCT component FROM releases WHERE component IS NOT NULL ORDER BY component',
+      req.query.projectId ? [req.query.projectId] : []
+    )
+    res.json({ data: rows.map(r => r.component) })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ── GET /api/releases/export  (download the current scope as .xlsx) ──────────
+// Must be registered before GET /:id so "export" isn't swallowed as an id.
+// Honors the same filters as GET / (projectId, component) so "export what
+// I'm looking at" works without a separate selection step.
+
+router.get('/export', async (req, res) => {
+  const { projectId, component } = req.query as { projectId?: string; component?: string }
+
+  const conditions: string[] = []
+  const values: unknown[]    = []
+  let   idx = 1
+
+  if (projectId) {
+    conditions.push(`r.project_id = $${idx++}`)
+    values.push(projectId)
+  }
+  if (component) {
+    conditions.push(`r.component = $${idx++}`)
+    values.push(component)
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT r.version, r.date, r.type, r.component, p.name AS project_name,
+              r.features, r.fixes, r.breaking_changes, r.notes, r.linked_issues
+       FROM releases r
+       JOIN projects p ON p.id = r.project_id
+       ${where}
+       ORDER BY r.date DESC, r.created_at DESC`,
+      values
+    )
+
+    const XLSX = await loadXlsx()
+    const sheetRows = rows.map(r => ({
+      Version:            r.version,
+      Date:               r.date, // plain YYYY-MM-DD text — see db/pool.ts's DATE type parser
+      Type:               r.type,
+      Component:          r.component ?? '',
+      Project:            r.project_name,
+      Features:           (r.features as string[]).join('\n'),
+      Fixes:              (r.fixes as string[]).join('\n'),
+      'Breaking Changes': (r.breaking_changes as string[]).join('\n'),
+      Notes:              r.notes,
+      'Linked Issues':    (r.linked_issues as string[]).join(', '),
+    }))
+
+    const ws = XLSX.utils.json_to_sheet(sheetRows)
+    ws['!cols'] = [
+      { wch: 26 }, { wch: 12 }, { wch: 8 }, { wch: 20 }, { wch: 18 },
+      { wch: 40 }, { wch: 40 }, { wch: 30 }, { wch: 30 }, { wch: 20 },
+    ]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Releases')
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer
+
+    const date = new Date().toISOString().slice(0, 10)
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    res.setHeader('Content-Disposition', `attachment; filename="devbrain-releases-${date}.xlsx"`)
+    res.send(buf)
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
   }
@@ -342,15 +431,15 @@ router.post('/', requireRole('member'), async (req, res) => {
   const parsed = ReleaseBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
-  const { project_id, version, date, type, features, fixes, breaking_changes, notes, linked_issues } = parsed.data
+  const { project_id, version, date, type, features, fixes, breaking_changes, notes, linked_issues, component } = parsed.data
 
   try {
     const { rows } = await pool.query(
       `INSERT INTO releases
-         (project_id, version, date, type, features, fixes, breaking_changes, notes, linked_issues)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         (project_id, version, date, type, features, fixes, breaking_changes, notes, linked_issues, component)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        RETURNING *`,
-      [project_id, version, date, type, features, fixes, breaking_changes, notes, linked_issues]
+      [project_id, version, date, type, features, fixes, breaking_changes, notes, linked_issues, component?.trim() || null]
     )
     res.status(201).json({ data: rows[0] })
   } catch (err) {

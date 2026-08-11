@@ -649,6 +649,7 @@ export type Issue = {
   resolution:          string
   pr_url:              string | null
   tags:                string[]
+  component:           string | null
   summary:             string | null
   source:              string
   external_id:         string | null
@@ -660,6 +661,7 @@ export type Issue = {
 
 export type IssueInput = Pick<Issue, 'title' | 'description' | 'status' | 'priority' | 'tags'> & {
   project_id?: string | null
+  component?: string | null
   investigation_steps?: IssueStep[]
 }
 
@@ -700,6 +702,7 @@ export const issuesApi = {
     status?: string | string[]
     priority?: string | string[]
     tags?: string[]
+    component?: string[]
     dateFrom?: string
     dateTo?: string
     q?: string
@@ -729,6 +732,9 @@ export const issuesApi = {
     }
     if (params?.tags) {
       params.tags.forEach(t => qs.append('tags[]', t))
+    }
+    if (params?.component) {
+      params.component.forEach(c => qs.append('component[]', c))
     }
     if (params?.dateFrom) qs.set('dateFrom', params.dateFrom)
     if (params?.dateTo) qs.set('dateTo', params.dateTo)
@@ -760,6 +766,8 @@ export const issuesApi = {
     request<{ success: boolean }>('/issues/bulk', { method: 'PATCH', body: JSON.stringify({ ids, action, value }) }),
   triage: (projectId?: string) =>
     request<(Issue & { is_stale?: boolean })[]>(`/issues/triage${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+  components: (projectId?: string) =>
+    request<string[]>(`/issues/components${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
 }
 
 // ── Tasks ─────────────────────────────────────────────────────────────────
@@ -773,6 +781,7 @@ export type Task = {
   priority:      'low' | 'medium' | 'high' | 'critical'
   due_date:      string | null
   tags:          string[]
+  component:     string | null
   created_at:    string
   done_at:       string | null
   project_name:  string | null
@@ -782,6 +791,7 @@ export type Task = {
 export type TaskInput = Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'tags'> & {
   project_id?: string | null
   due_date?:   string | null
+  component?:  string | null
 }
 
 // ── Runbooks ──────────────────────────────────────────────────────────────
@@ -827,11 +837,12 @@ export const runbooksApi = {
 }
 
 export const tasksApi = {
-  list: (params?: { projectId?: string; status?: string; priority?: string }) => {
+  list: (params?: { projectId?: string; status?: string; priority?: string; component?: string }) => {
     const qs = new URLSearchParams()
     if (params?.projectId) qs.set('projectId', params.projectId)
     if (params?.status)    qs.set('status',    params.status)
     if (params?.priority)  qs.set('priority',  params.priority)
+    if (params?.component) qs.set('component', params.component)
     const q = qs.toString()
     return request<Task[]>(`/tasks${q ? `?${q}` : ''}`)
   },
@@ -844,6 +855,8 @@ export const tasksApi = {
       method: 'POST',
       body: JSON.stringify({ content, projectId }),
     }),
+  components: (projectId?: string) =>
+    request<string[]>(`/tasks/components${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────
@@ -856,6 +869,7 @@ export type Command = {
   language:      string
   description:   string
   tags:          string[]
+  component:     string | null
   is_favorite:   boolean
   namespace:     'personal' | 'team'
   created_by:    string | null
@@ -868,17 +882,19 @@ export type Command = {
 
 export type CommandInput = Pick<Command, 'title' | 'command' | 'language' | 'description' | 'tags' | 'is_favorite' | 'namespace'> & {
   project_id?: string | null
+  component?:  string | null
 }
 
 export type CommandFacet  = { value: string; count: number }
 export type CommandFacets = { languages: CommandFacet[]; tags: CommandFacet[] }
 
 export const commandsApi = {
-  list: (params?: { projectId?: string; language?: string; tag?: string; search?: string; favorite?: boolean; namespace?: string; limit?: number; offset?: number; signal?: AbortSignal }) => {
+  list: (params?: { projectId?: string; language?: string; tag?: string; component?: string; search?: string; favorite?: boolean; namespace?: string; limit?: number; offset?: number; signal?: AbortSignal }) => {
     const qs = new URLSearchParams()
     if (params?.projectId)         qs.set('projectId', params.projectId)
     if (params?.language)          qs.set('language',  params.language)
     if (params?.tag)               qs.set('tag',       params.tag)
+    if (params?.component)         qs.set('component', params.component)
     if (params?.search)            qs.set('search',    params.search)
     if (params?.namespace)         qs.set('namespace', params.namespace)
     if (params?.favorite === true) qs.set('favorite',  'true')
@@ -903,6 +919,8 @@ export const commandsApi = {
   explain: (id: string) => request<{ explanation: string }>(`/commands/${id}/explain`, { method: 'POST' }),
   bulk: (ids: string[], action: 'tag' | 'favorite' | 'delete', value?: string) =>
     request<{ success: boolean }>('/commands/bulk', { method: 'PATCH', body: JSON.stringify({ ids, action, value }) }),
+  components: (projectId?: string) =>
+    request<string[]>(`/commands/components${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
 }
 
 // ── Releases ──────────────────────────────────────────────────────────────
@@ -918,12 +936,15 @@ export type Release = {
   breaking_changes: string[]
   notes:            string
   linked_issues:    string[]
+  component:        string | null
   created_at:       string
   project_name:     string
   project_color:    string
 }
 
-export type ReleaseInput = Omit<Release, 'id' | 'created_at' | 'project_name' | 'project_color'>
+export type ReleaseInput = Omit<Release, 'id' | 'created_at' | 'project_name' | 'project_color' | 'component'> & {
+  component?: string | null
+}
 
 export type AiReleaseNotes = {
   features:         string[]
@@ -933,9 +954,10 @@ export type AiReleaseNotes = {
 }
 
 export const releasesApi = {
-  list:       (params?: { projectId?: string }) => {
+  list:       (params?: { projectId?: string; component?: string }) => {
     const qs = new URLSearchParams()
     if (params?.projectId) qs.set('projectId', params.projectId)
+    if (params?.component) qs.set('component', params.component)
     const q = qs.toString()
     return request<Release[]>(`/releases${q ? `?${q}` : ''}`)
   },
@@ -951,6 +973,23 @@ export const releasesApi = {
     request<Release>('/releases/import-git', { method: 'POST', body: JSON.stringify(body) }),
   draft: (body: { projectId: string; from: string; to: string; issueIds?: string[] }) =>
     request<ReleaseInput>('/releases/draft', { method: 'POST', body: JSON.stringify(body) }),
+  components: (projectId?: string) =>
+    request<string[]>(`/releases/components${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+  export: async (params?: { projectId?: string; component?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.projectId) qs.set('projectId', params.projectId)
+    if (params?.component) qs.set('component', params.component)
+    const q = qs.toString()
+    const res = await fetch(`${BASE}/releases/export${q ? `?${q}` : ''}`, { credentials: 'include' })
+    if (!res.ok) throw new Error('Release export failed')
+    const blob = await res.blob()
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `devbrain-releases-${new Date().toISOString().slice(0, 10)}.xlsx`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
 }
 
 // ── Search ────────────────────────────────────────────────────────────────

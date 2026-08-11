@@ -26,6 +26,7 @@ const CreateBody = z.object({
   priority:            z.enum(['low', 'medium', 'high', 'critical']).default('medium'),
   project_id:          z.string().nullable().optional(),
   tags:                z.array(z.string()).default([]),
+  component:           z.string().max(200).trim().nullable().optional(),
   investigation_steps: z.array(StepSchema).default([]),
 })
 
@@ -36,6 +37,7 @@ const UpdateBody = z.object({
   priority:            z.enum(['low', 'medium', 'high', 'critical']).optional(),
   project_id:          z.string().nullable().optional(),
   tags:                z.array(z.string()).optional(),
+  component:           z.string().max(200).trim().nullable().optional(),
   investigation_steps: z.array(StepSchema).optional(),
   resolution:          z.string().max(5000).optional(),
   pr_url:              z.string().url().max(500).nullable().optional(),
@@ -65,6 +67,7 @@ router.get('/', async (req, res) => {
   const statuses   = getArrayParam(req.query, 'status')
   const priorities = getArrayParam(req.query, 'priority')
   const tags       = getArrayParam(req.query, 'tags')
+  const components = getArrayParam(req.query, 'component')
   const dateFrom   = req.query.dateFrom as string | undefined
   const dateTo     = req.query.dateTo as string | undefined
   const q          = ((req.query.q || req.query.search) as string | undefined)?.trim()
@@ -103,6 +106,11 @@ router.get('/', async (req, res) => {
   if (tags.length > 0) {
     conditions.push(`i.tags && $${idx++}::text[]`)
     values.push(tags)
+  }
+
+  if (components.length > 0) {
+    conditions.push(`i.component = ANY($${idx++})`)
+    values.push(components)
   }
 
   if (dateFrom) {
@@ -278,6 +286,23 @@ router.patch('/bulk', requireRole('member'), async (req, res) => {
   }
 })
 
+// ── GET /api/issues/components  (distinct values for autocomplete/filtering) ──
+// Must be registered before GET /:id so "components" isn't swallowed as an id.
+
+router.get('/components', async (req, res) => {
+  try {
+    const { rows } = await pool.query<{ component: string }>(
+      req.query.projectId
+        ? 'SELECT DISTINCT component FROM issues WHERE component IS NOT NULL AND project_id = $1 ORDER BY component'
+        : 'SELECT DISTINCT component FROM issues WHERE component IS NOT NULL ORDER BY component',
+      req.query.projectId ? [req.query.projectId] : []
+    )
+    res.json({ data: rows.map(r => r.component) })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
 // ── GET /api/issues/:id ───────────────────────────────────────────────────
 
 router.get('/:id', async (req, res) => {
@@ -303,17 +328,17 @@ router.post('/', requireRole('member'), async (req, res) => {
   const parsed = CreateBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
-  const { title, description, status, priority, project_id, tags, investigation_steps } = parsed.data
+  const { title, description, status, priority, project_id, tags, component, investigation_steps } = parsed.data
 
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
 
     const { rows } = await client.query(
-      `INSERT INTO issues (project_id, title, description, status, priority, tags)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO issues (project_id, title, description, status, priority, tags, component)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id`,
-      [project_id ?? null, title, description, status, priority, tags]
+      [project_id ?? null, title, description, status, priority, tags, component?.trim() || null]
     )
     const issueId = rows[0].id
 
@@ -343,7 +368,7 @@ router.post('/', requireRole('member'), async (req, res) => {
 
 // ── PUT /api/issues/:id ───────────────────────────────────────────────────
 
-const ISSUE_UPDATABLE_COLS = new Set(['title', 'description', 'status', 'priority', 'project_id', 'tags', 'resolution', 'pr_url'])
+const ISSUE_UPDATABLE_COLS = new Set(['title', 'description', 'status', 'priority', 'project_id', 'tags', 'component', 'resolution', 'pr_url'])
 
 router.put('/:id', requireRole('member'), async (req, res) => {
   const parsed = UpdateBody.safeParse(req.body)

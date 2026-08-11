@@ -149,7 +149,7 @@ describe('POST /api/tasks', () => {
     const res = fakeRes()
     await getHandler('/', 'post')({ body: { title: 'Ship it' } }, res, () => {})
     const [, params] = mockQuery.mock.calls[0]
-    expect(params).toEqual([null, 'Ship it', '', 'todo', 'medium', null, []])
+    expect(params).toEqual([null, 'Ship it', '', 'todo', 'medium', null, [], null])
     expect(res.status).toHaveBeenCalledWith(201)
   })
 
@@ -159,7 +159,7 @@ describe('POST /api/tasks', () => {
     await getHandler('/', 'post')({
       body: { title: 'X', description: 'D', status: 'in_progress', priority: 'high', project_id: 'p1', due_date: '2026-02-01', tags: ['a'] },
     }, res, () => {})
-    expect(mockQuery.mock.calls[0][1]).toEqual(['p1', 'X', 'D', 'in_progress', 'high', '2026-02-01', ['a']])
+    expect(mockQuery.mock.calls[0][1]).toEqual(['p1', 'X', 'D', 'in_progress', 'high', '2026-02-01', ['a'], null])
   })
 
   it('responds 500 on a query failure', async () => {

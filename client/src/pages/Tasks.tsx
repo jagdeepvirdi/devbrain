@@ -4,6 +4,7 @@ import { useProjectStore } from '../store/projectStore'
 import { tasksApi } from '../lib/api'
 import type { Task, TaskInput } from '../lib/api'
 import { LinkedItems } from '../components/LinkedItems'
+import { ComponentInput } from '../components/ComponentInput'
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -192,6 +193,11 @@ function TaskPanel({ task, onClose, onUpdate }: { task: Task; onClose: () => voi
   const { projects } = useProjectStore()
   const [form, setForm] = useState({ ...task })
   const [saving, setSaving] = useState(false)
+  const [componentOptions, setComponentOptions] = useState<string[]>([])
+
+  useEffect(() => {
+    tasksApi.components(task.project_id ?? undefined).then(setComponentOptions).catch(() => setComponentOptions([]))
+  }, [task.project_id])
 
   async function save(updates: Partial<TaskInput>) {
     setSaving(true)
@@ -282,6 +288,17 @@ function TaskPanel({ task, onClose, onUpdate }: { task: Task; onClose: () => voi
                 style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--line-2)', background: 'var(--bg)', color: 'var(--fg)', fontSize: '13px', boxSizing: 'border-box' }}
               />
             </div>
+          </div>
+
+          {/* Component */}
+          <div>
+            <label style={{ fontSize: '11px', color: 'var(--fg-3)', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '.05em' }}>Component</label>
+            <ComponentInput
+              value={form.component ?? ''}
+              onChange={v => setForm(f => ({ ...f, component: v || null }))}
+              onCommit={v => save({ component: v.trim() || null })}
+              options={componentOptions}
+            />
           </div>
 
           {/* Description */}

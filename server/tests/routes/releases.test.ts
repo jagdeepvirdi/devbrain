@@ -394,7 +394,7 @@ describe('POST /api/releases', () => {
     await getHandler('/', 'post')({ body: { project_id: 'p1', version: '1.0', date: '2026-01-01' } }, res, () => {})
 
     const [, params] = mockQuery.mock.calls[0]
-    expect(params).toEqual(['p1', '1.0', '2026-01-01', 'patch', [], [], [], '', []])
+    expect(params).toEqual(['p1', '1.0', '2026-01-01', 'patch', [], [], [], '', [], null])
     expect(res.status).toHaveBeenCalledWith(201)
   })
 

@@ -285,7 +285,7 @@ describe('POST /api/commands', () => {
     await getHandler('/', 'post')(fakeReq({ title: 'Deploy', command: 'npm run deploy' }, { id: 'u1' }), res, () => {})
 
     const [, params] = mockQuery.mock.calls[0]
-    expect(params).toEqual([null, 'Deploy', 'npm run deploy', 'bash', '', [], false, 'team', 'u1'])
+    expect(params).toEqual([null, 'Deploy', 'npm run deploy', 'bash', '', [], null, false, 'team', 'u1'])
     expect(res.status).toHaveBeenCalledWith(201)
 
     await vi.waitFor(() => expect(mockAiEmbed).toHaveBeenCalled())
@@ -301,7 +301,7 @@ describe('POST /api/commands', () => {
 
     await getHandler('/', 'post')(fakeReq({ title: 'X', command: 'echo hi' }, { id: 'dev' }), res, () => {})
 
-    expect(mockQuery.mock.calls[0][1]).toEqual([null, 'X', 'echo hi', 'bash', '', [], false, 'team', null])
+    expect(mockQuery.mock.calls[0][1]).toEqual([null, 'X', 'echo hi', 'bash', '', [], null, false, 'team', null])
   })
 
   it('responds 500 on a query failure', async () => {
