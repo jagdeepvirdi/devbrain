@@ -57,14 +57,14 @@ afterAll(async () => {
 // ── Markdown ──────────────────────────────────────────────────────────────────
 
 describe('parseFile — .md', () => {
-  it('returns fileType md and the raw markdown text', async () => {
+  it('returns fileType md and the raw markdown text, using the leading heading as the title', async () => {
     const content = '# Hello\n\nThis is a **markdown** file.'
     const p       = await writeTmp('test.md', content)
 
     const result = await parseFile(p, 'my-notes.md')
 
     expect(result.fileType).toBe('md')
-    expect(result.title).toBe('my-notes')
+    expect(result.title).toBe('Hello')
     expect(result.text).toBe(content.trim())
   })
 
@@ -405,16 +405,36 @@ describe('parseFile — unsupported type', () => {
 // ── Title extraction ──────────────────────────────────────────────────────────
 
 describe('parseFile — title extraction', () => {
-  it('strips the extension to form the title', async () => {
+  it('uses the markdown heading in the document over the filename', async () => {
     const p = await writeTmp('release-notes.md', '# v1.2')
     const { title } = await parseFile(p, 'release-notes.md')
-    expect(title).toBe('release-notes')
+    expect(title).toBe('v1.2')
   })
 
-  it('handles names with multiple dots', async () => {
+  it('falls back to the filename (extension stripped) when the document has no heading', async () => {
     const p = await writeTmp('v1.2.3.txt', 'content')
     const { title } = await parseFile(p, 'v1.2.3.txt')
     expect(title).toBe('v1.2.3')
+  })
+
+  it('falls back to the filename when a .md file has no leading heading', async () => {
+    const p = await writeTmp('notes-plain.md', 'Just some notes, no heading here.')
+    const { title } = await parseFile(p, 'notes-plain.md')
+    expect(title).toBe('notes-plain')
+  })
+
+  it('strips a multi-level heading marker (##) and surrounding whitespace', async () => {
+    const p = await writeTmp('doc.md', '  ##   Getting Started   ')
+    const { title } = await parseFile(p, 'doc.md')
+    expect(title).toBe('Getting Started')
+  })
+
+  it('does not treat a native (non-MarkItDown) fallback leading "#" as a title', async () => {
+    // .yaml/.log/.txt are read raw, never routed through MarkItDown, so a
+    // leading '#' here is a comment, not a heading — filename wins.
+    const p = await writeTmp('config.yaml', '# top comment\nkey: value')
+    const { title } = await parseFile(p, 'config.yaml')
+    expect(title).toBe('config')
   })
 })
 
@@ -425,7 +445,7 @@ describe('parseUrl', () => {
     vi.unstubAllGlobals()
   })
 
-  it('fetches the URL through r.jina.ai, trims the text, and uses the hostname as the title', async () => {
+  it('fetches the URL through r.jina.ai, trims the text, and uses the page heading as the title', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       text: () => Promise.resolve('\n  # Some Page\n\ncontent  \n'),
@@ -437,7 +457,17 @@ describe('parseUrl', () => {
     const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('https://r.jina.ai/https://example.com/article')
     expect((opts.headers as Record<string, string>).Accept).toBe('text/plain')
-    expect(result).toEqual({ text: '# Some Page\n\ncontent', fileType: 'url', title: 'example.com' })
+    expect(result).toEqual({ text: '# Some Page\n\ncontent', fileType: 'url', title: 'Some Page' })
+  })
+
+  it('falls back to the hostname as the title when the fetched page has no leading heading', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve('Just plain content, no heading.'),
+    }))
+
+    const result = await parseUrl('https://example.com/article')
+    expect(result.title).toBe('example.com')
   })
 
   it('throws when the Jina fetch responds non-ok', async () => {

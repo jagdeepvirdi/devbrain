@@ -147,6 +147,19 @@ async function fetchUrl(url: string): Promise<string> {
   return res.text()
 }
 
+// ── Title extraction ────────────────────────────────────────────────────
+// Prefer the title that's actually in the document over the filename.
+// Only a leading ATX-style markdown heading (`# Title`) counts as "clear" —
+// anything else (body text, a stray '#' comment, no heading at all) is too
+// ambiguous to trust, so callers fall back to the filename.
+
+export function extractMarkdownHeadingTitle(text: string): string | null {
+  const firstLine = text.split('\n').find(line => line.trim().length > 0)
+  if (!firstLine) return null
+  const match = firstLine.trim().match(/^#{1,6}\s+(.+?)\s*#*$/)
+  return match ? match[1].trim() : null
+}
+
 // ── Exports ───────────────────────────────────────────────────────────────
 
 export async function parseFile(filePath: string, originalName: string): Promise<ParseResult> {
@@ -161,8 +174,10 @@ export async function parseFile(filePath: string, originalName: string): Promise
   // .ipynb is deliberately excluded — it's just JSON, so parseIpynb() handles
   // it natively without needing the Python bridge at all.
   const markItDownSupported = ['pdf', 'docx', 'xlsx', 'xls', 'pptx', 'ppt', 'csv', 'json', 'html', 'htm']
+  let viaMarkItDown = false
   if (markItDownSupported.includes(ext)) {
     text = await parseWithMarkItDown(filePath)
+    viaMarkItDown = text !== null
   }
 
   // Fallback to legacy JS parsers if MarkItDown failed or isn't used for this ext
@@ -226,11 +241,19 @@ export async function parseFile(filePath: string, originalName: string): Promise
     fileType = (ext === 'md' ? 'md' : textExts.includes(ext) ? 'txt' : ext === 'docx' ? 'docx' : (ext === 'xlsx' || ext === 'xls') ? 'xlsx' : 'pdf') as FileType
   }
 
-  return { text: text.trim(), fileType, title: baseName, language }
+  const trimmedText = text.trim()
+  // Only trust a heading pulled from markdown source or a MarkItDown
+  // conversion — native raw-text extraction (pdf-parse, mammoth, plain
+  // txt/csv/json) has no reliable heading marker, so a leading '#' there is
+  // more likely a comment than a title.
+  const title = (ext === 'md' || viaMarkItDown ? extractMarkdownHeadingTitle(trimmedText) : null) ?? baseName
+
+  return { text: trimmedText, fileType, title, language }
 }
 
 export async function parseUrl(url: string): Promise<ParseResult> {
-  const text  = await fetchUrl(url)
-  const title = new URL(url).hostname
-  return { text: text.trim(), fileType: 'url', title }
+  const text    = await fetchUrl(url)
+  const trimmedText = text.trim()
+  const title   = extractMarkdownHeadingTitle(trimmedText) ?? new URL(url).hostname
+  return { text: trimmedText, fileType: 'url', title }
 }
