@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterAll, afterEach, beforeEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -36,8 +36,21 @@ vi.mock('mammoth', () => ({
   extractRawText: vi.fn().mockResolvedValue({ value: 'Extracted DOCX text' }),
 }))
 
+// Mock the AI title fallback (pdf/docx content with no markdown heading).
+// Defaults to 'NONE' so every existing test — none of which set up a cover
+// page long/distinctive enough to want an AI title — keeps falling back to
+// the filename exactly as before; individual tests below override it.
+const { aiChatMock } = vi.hoisted(() => ({ aiChatMock: vi.fn() }))
+vi.mock('../../services/ai.js', () => ({ aiChat: aiChatMock }))
+
+beforeEach(() => {
+  aiChatMock.mockReset()
+  aiChatMock.mockResolvedValue('NONE')
+})
+
 const { parseFile, parseUrl } = await import('../../services/parser.js')
-const XLSX = await import('xlsx')
+const XLSX    = await import('xlsx')
+const mammoth = await import('mammoth')
 
 // ── Temp file helpers ─────────────────────────────────────────────────────────
 
@@ -435,6 +448,90 @@ describe('parseFile — title extraction', () => {
     const p = await writeTmp('config.yaml', '# top comment\nkey: value')
     const { title } = await parseFile(p, 'config.yaml')
     expect(title).toBe('config')
+  })
+})
+
+// ── AI title fallback (pdf/docx cover pages with no markdown heading) ──────────
+
+describe('parseFile — AI title fallback', () => {
+  // Temp filenames include "nomd" so the MarkItDown mock declines (matching
+  // the convention used throughout this file) and parsing falls through to
+  // the mocked mammoth path instead, which each test can control per-call
+  // via mockResolvedValueOnce — MarkItDown's mock is a fixed string that
+  // ignores the actual file, so it can't be used to feed custom content.
+
+  it('uses the AI-generated title when a docx has no heading but a long enough excerpt', async () => {
+    vi.mocked(mammoth.extractRawText).mockResolvedValueOnce({
+      value: 'High Level Design Document\nTOT Billing Implementation Project Phase 3\nGeneral Ledger Feed Interface',
+    })
+    aiChatMock.mockResolvedValue('SAP Finance Interface — Estimate Write-off Design')
+    const p = await writeTmp('cover-nomd.docx', 'binary-junk')
+
+    const { title } = await parseFile(p, 'TOT_DLD_SAP_Interface_EstimateWriteoff_v0.1.docx')
+
+    expect(title).toBe('SAP Finance Interface — Estimate Write-off Design')
+    expect(aiChatMock).toHaveBeenCalledTimes(1)
+    const [prompt] = aiChatMock.mock.calls[0]
+    expect(prompt).toContain('High Level Design Document')
+  })
+
+  it('strips surrounding quotes/markdown from the AI response', async () => {
+    vi.mocked(mammoth.extractRawText).mockResolvedValueOnce({
+      value: 'Quarterly Revenue Report\nFinance Department\nAll figures in USD, prepared for the board.',
+    })
+    aiChatMock.mockResolvedValue('  "Quarterly Revenue Report"  ')
+    const p = await writeTmp('cover2-nomd.docx', 'binary-junk')
+
+    const { title } = await parseFile(p, 'report.docx')
+    expect(title).toBe('Quarterly Revenue Report')
+  })
+
+  it('falls back to the filename when the AI responds NONE', async () => {
+    vi.mocked(mammoth.extractRawText).mockResolvedValueOnce({
+      value: 'Some rambling opening paragraph with no clear document title in it at all.',
+    })
+    aiChatMock.mockResolvedValue('NONE')
+    const p = await writeTmp('vague-nomd.docx', 'binary-junk')
+
+    const { title } = await parseFile(p, 'vague.docx')
+    expect(title).toBe('vague')
+  })
+
+  it('falls back to the filename when the AI call fails (e.g. Ollama unreachable)', async () => {
+    vi.mocked(mammoth.extractRawText).mockResolvedValueOnce({
+      value: 'A perfectly good title-bearing opening paragraph, but Ollama is down.',
+    })
+    aiChatMock.mockRejectedValue(new Error('fetch failed'))
+    const p = await writeTmp('offline-nomd.docx', 'binary-junk')
+
+    const { title } = await parseFile(p, 'offline.docx')
+    expect(title).toBe('offline')
+  })
+
+  it('does not call the AI when the excerpt is too short to be worth it', async () => {
+    vi.mocked(mammoth.extractRawText).mockResolvedValueOnce({ value: 'Too short' })
+    const p = await writeTmp('tiny-nomd.docx', 'binary-junk')
+
+    const { title } = await parseFile(p, 'tiny.docx')
+
+    expect(aiChatMock).not.toHaveBeenCalled()
+    expect(title).toBe('tiny')
+  })
+
+  it('does not call the AI when a markdown heading is already found', async () => {
+    const p = await writeTmp('has-heading.md', '# Already Clear Title\n\nSome content that is long enough either way.')
+    const { title } = await parseFile(p, 'has-heading.md')
+
+    expect(aiChatMock).not.toHaveBeenCalled()
+    expect(title).toBe('Already Clear Title')
+  })
+
+  it('does not call the AI for file types outside pdf/docx (e.g. txt)', async () => {
+    const p = await writeTmp('plain.txt', 'A long enough plain text body with no heading and no AI eligibility at all.')
+    const { title } = await parseFile(p, 'plain.txt')
+
+    expect(aiChatMock).not.toHaveBeenCalled()
+    expect(title).toBe('plain')
   })
 })
 

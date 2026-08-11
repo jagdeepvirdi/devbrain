@@ -2,10 +2,16 @@
  * Migration: backfill_document_titles
  *
  * Documents uploaded before the heading-aware title extraction (see
- * services/parser.ts extractMarkdownHeadingTitle) were all titled from their
- * filename, even when the document itself had a clear `# Heading`. This
- * retroactively re-derives a title from each document's already-stored
- * content, using the exact same rule new uploads use.
+ * services/parser.ts extractMarkdownHeadingTitle/generateTitleFromContent)
+ * were all titled from their filename, even when the document itself had a
+ * clear title. This retroactively re-derives a title from each document's
+ * already-stored content, using the exact same rules new uploads use:
+ *   1. A leading markdown `# Heading` (md files, MarkItDown conversions).
+ *   2. For pdf/docx with no heading (e.g. legacy .doc cover pages, which are
+ *      real titles spread across several plain-text lines rather than one
+ *      clean heading), a local-Ollama-generated title via generateTitleFromContent
+ *      — this makes a network call per candidate document, so it's slower
+ *      than step 1 but still $0/local.
  *
  * Only documents whose current title still looks auto-generated (i.e. still
  * equals the filename/hostname `source` would have produced) are touched —
@@ -45,11 +51,13 @@ function expectedAutoTitle(fileType: string, source: string): string | null {
   return path.basename(source, path.extname(source))
 }
 
+const AI_TITLE_FILE_TYPES = new Set(['pdf', 'docx'])
+
 async function run(): Promise<void> {
   const apply = process.argv.includes('--apply')
 
-  const { pool }                       = await import('../pool.js')
-  const { extractMarkdownHeadingTitle } = await import('../../services/parser.js')
+  const { pool }                                             = await import('../pool.js')
+  const { extractMarkdownHeadingTitle, generateTitleFromContent } = await import('../../services/parser.js')
 
   const { rows } = await pool.query<{ id: string; title: string; content: string; file_type: string; source: string }>(
     `SELECT id, title, content, file_type, source FROM documents
@@ -57,11 +65,12 @@ async function run(): Promise<void> {
      ORDER BY created_at`
   )
 
-  console.log(`Scanning ${rows.length} document(s) for a retitle-worthy heading (${apply ? 'APPLY' : 'DRY RUN'})...\n`)
+  console.log(`Scanning ${rows.length} document(s) for a retitle-worthy title (${apply ? 'APPLY' : 'DRY RUN'})...\n`)
 
-  let changed = 0
+  let changedHeading = 0
+  let changedAi = 0
   let skippedEdited = 0
-  let skippedNoHeading = 0
+  let skippedNoTitle = 0
 
   for (const row of rows) {
     const expected = expectedAutoTitle(row.file_type, row.source)
@@ -70,22 +79,30 @@ async function run(): Promise<void> {
       continue
     }
 
-    const heading = extractMarkdownHeadingTitle(row.content)
-    if (!heading || heading === row.title) {
-      skippedNoHeading++
+    let newTitle = extractMarkdownHeadingTitle(row.content)
+    let viaAi = false
+    if (!newTitle && AI_TITLE_FILE_TYPES.has(row.file_type)) {
+      newTitle = await generateTitleFromContent(row.content, row.source)
+      viaAi = true
+    }
+
+    if (!newTitle || newTitle === row.title) {
+      skippedNoTitle++
       continue
     }
 
-    changed++
-    console.log(`  "${row.title}" -> "${heading}"  (id=${row.id})`)
+    if (viaAi) changedAi++
+    else changedHeading++
+    console.log(`  "${row.title}" -> "${newTitle}"${viaAi ? '  [AI]' : ''}  (id=${row.id})`)
     if (apply) {
-      await pool.query('UPDATE documents SET title = $2 WHERE id = $1', [row.id, heading])
+      await pool.query('UPDATE documents SET title = $2 WHERE id = $1', [row.id, newTitle])
     }
   }
 
-  console.log(`\n${changed} document(s) ${apply ? 'retitled' : 'would be retitled'}.`)
+  const changed = changedHeading + changedAi
+  console.log(`\n${changed} document(s) ${apply ? 'retitled' : 'would be retitled'} (${changedHeading} from a heading, ${changedAi} via AI).`)
   console.log(`${skippedEdited} skipped (title differs from filename — looks manually edited).`)
-  console.log(`${skippedNoHeading} skipped (no leading heading found in content).`)
+  console.log(`${skippedNoTitle} skipped (no heading and no usable title found).`)
   if (!apply && changed > 0) {
     console.log('\nDry run only — re-run with --apply to write these changes.')
   }

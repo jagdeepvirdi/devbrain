@@ -3,6 +3,7 @@ import path from 'path'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { FileType } from '../../shared/types.js'
+import { aiChat } from './ai.js'
 
 const execAsync = promisify(exec)
 
@@ -160,6 +161,43 @@ export function extractMarkdownHeadingTitle(text: string): string | null {
   return match ? match[1].trim() : null
 }
 
+// PDF/DOCX cover pages are often a real title spread across several plain-text
+// lines (doc type, project name, subsystem — no markdown, so the heading regex
+// above can't see it) rather than a single clean heading. Naively joining
+// those lines collides across documents that share the same cover-page
+// preamble (e.g. two design docs for the same interface, differing only past
+// line 4), silently losing the disambiguating info the filename carried. An
+// AI read of the excerpt can pick the actually-distinctive part instead.
+// Best-effort only — on any failure (Ollama unreachable, malformed reply)
+// the caller falls back to the filename, same as when no heading is found.
+const AI_TITLE_FILE_TYPES = new Set<FileType>(['pdf', 'docx'])
+
+export async function generateTitleFromContent(text: string, originalName?: string): Promise<string | null> {
+  const excerpt = text.slice(0, 2000).trim()
+  if (excerpt.length < 20) return null
+
+  const system =
+    'You extract a short, clean, human-readable title (under 90 characters, no underscores, no filename slugs) ' +
+    'for a document from its opening text and original filename. Respond with ONLY the title itself — no ' +
+    'quotes, no markdown, no explanation. Skip boilerplate like version numbers, dates, or FINAL/DRAFT status. ' +
+    'The excerpt may be near-identical to other similarly-named documents (e.g. different variants/revisions ' +
+    'of the same interface) — if so, append " (X)" to the end, where X is a short 2-4 word distinguishing tag ' +
+    "drawn from the filename's unique part (e.g. a variant name like 'Accrual' or 'Deferral', or a short code " +
+    'like TOC/JS) — never restate the whole filename. ' +
+    'If the excerpt does not clearly state a title, respond with exactly: NONE'
+
+  const filenameLine = originalName ? `Filename: ${originalName}\n` : ''
+
+  try {
+    const raw   = await aiChat(`${filenameLine}Document excerpt:\n${excerpt}\n\nTitle:`, system)
+    const title = raw.trim().replace(/^["'#\s]+|["'\s]+$/g, '')
+    if (!title || title.length > 200 || /^none$/i.test(title)) return null
+    return title
+  } catch {
+    return null
+  }
+}
+
 // ── Exports ───────────────────────────────────────────────────────────────
 
 export async function parseFile(filePath: string, originalName: string): Promise<ParseResult> {
@@ -246,7 +284,10 @@ export async function parseFile(filePath: string, originalName: string): Promise
   // conversion — native raw-text extraction (pdf-parse, mammoth, plain
   // txt/csv/json) has no reliable heading marker, so a leading '#' there is
   // more likely a comment than a title.
-  const title = (ext === 'md' || viaMarkItDown ? extractMarkdownHeadingTitle(trimmedText) : null) ?? baseName
+  const heading = (ext === 'md' || viaMarkItDown) ? extractMarkdownHeadingTitle(trimmedText) : null
+  const title   = heading
+    ?? (AI_TITLE_FILE_TYPES.has(fileType) ? await generateTitleFromContent(trimmedText, originalName) : null)
+    ?? baseName
 
   return { text: trimmedText, fileType, title, language }
 }
