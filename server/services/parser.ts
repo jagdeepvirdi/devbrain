@@ -4,6 +4,7 @@ import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { FileType } from '../../shared/types.js'
 import { aiChat } from './ai.js'
+import { loadXlsx } from '../lib/xlsxCompat.js'
 
 const execAsync = promisify(exec)
 
@@ -76,7 +77,7 @@ async function parseDoc(filePath: string): Promise<string> {
 // ── XLSX ──────────────────────────────────────────────────────────────────
 
 async function parseXlsx(filePath: string): Promise<string> {
-  const XLSX = await import('xlsx')
+  const XLSX = await loadXlsx()
   const wb   = XLSX.readFile(filePath)
   return wb.SheetNames.map((name: string) => {
     const ws  = wb.Sheets[name]

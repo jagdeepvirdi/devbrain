@@ -463,6 +463,7 @@ describe('parseFile — AI title fallback', () => {
   it('uses the AI-generated title when a docx has no heading but a long enough excerpt', async () => {
     vi.mocked(mammoth.extractRawText).mockResolvedValueOnce({
       value: 'High Level Design Document\nTOT Billing Implementation Project Phase 3\nGeneral Ledger Feed Interface',
+      messages: [],
     })
     aiChatMock.mockResolvedValue('SAP Finance Interface — Estimate Write-off Design')
     const p = await writeTmp('cover-nomd.docx', 'binary-junk')
@@ -478,6 +479,7 @@ describe('parseFile — AI title fallback', () => {
   it('strips surrounding quotes/markdown from the AI response', async () => {
     vi.mocked(mammoth.extractRawText).mockResolvedValueOnce({
       value: 'Quarterly Revenue Report\nFinance Department\nAll figures in USD, prepared for the board.',
+      messages: [],
     })
     aiChatMock.mockResolvedValue('  "Quarterly Revenue Report"  ')
     const p = await writeTmp('cover2-nomd.docx', 'binary-junk')
@@ -489,6 +491,7 @@ describe('parseFile — AI title fallback', () => {
   it('falls back to the filename when the AI responds NONE', async () => {
     vi.mocked(mammoth.extractRawText).mockResolvedValueOnce({
       value: 'Some rambling opening paragraph with no clear document title in it at all.',
+      messages: [],
     })
     aiChatMock.mockResolvedValue('NONE')
     const p = await writeTmp('vague-nomd.docx', 'binary-junk')
@@ -500,6 +503,7 @@ describe('parseFile — AI title fallback', () => {
   it('falls back to the filename when the AI call fails (e.g. Ollama unreachable)', async () => {
     vi.mocked(mammoth.extractRawText).mockResolvedValueOnce({
       value: 'A perfectly good title-bearing opening paragraph, but Ollama is down.',
+      messages: [],
     })
     aiChatMock.mockRejectedValue(new Error('fetch failed'))
     const p = await writeTmp('offline-nomd.docx', 'binary-junk')
@@ -509,7 +513,7 @@ describe('parseFile — AI title fallback', () => {
   })
 
   it('does not call the AI when the excerpt is too short to be worth it', async () => {
-    vi.mocked(mammoth.extractRawText).mockResolvedValueOnce({ value: 'Too short' })
+    vi.mocked(mammoth.extractRawText).mockResolvedValueOnce({ value: 'Too short', messages: [] })
     const p = await writeTmp('tiny-nomd.docx', 'binary-junk')
 
     const { title } = await parseFile(p, 'tiny.docx')
