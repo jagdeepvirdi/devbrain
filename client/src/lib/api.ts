@@ -42,6 +42,46 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return _fetch<T>(path, init)
 }
 
+// Reads a `text/event-stream` POST response whose events are exactly
+// `{type:'chunk', text}` / `{type:'error', message}` / `[DONE]` — the shape
+// every SSE route in this app that streams a single running piece of text
+// (as opposed to /api/chat's richer session/citations/chunk protocol) uses.
+async function streamSSE(path: string, onChunk: (text: string) => void): Promise<void> {
+  const res = await fetch(`${BASE}${path}`, { method: 'POST', credentials: 'include' })
+  if (res.status === 401) {
+    window.dispatchEvent(new CustomEvent('devbrain:unauthorized'))
+    throw new Error('Unauthorized')
+  }
+  if (!res.ok || !res.body) throw new Error(`Request failed: ${res.status}`)
+
+  const reader  = res.body.getReader()
+  const decoder = new TextDecoder()
+  let   buf     = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+
+    const lines = buf.split('\n')
+    buf = lines.pop() ?? ''
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      const raw = line.slice(6).trim()
+      if (raw === '[DONE]') return
+      let evt: { type: string; text?: string; message?: string }
+      try {
+        evt = JSON.parse(raw)
+      } catch {
+        continue // incomplete line still buffering — not a real error
+      }
+      if (evt.type === 'chunk') onChunk(evt.text ?? '')
+      if (evt.type === 'error') throw new Error(evt.message ?? 'Unknown error')
+    }
+  }
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────
 
 export type AuthUser = { id: string; username: string; role: 'admin' | 'member' | 'viewer' }
@@ -587,8 +627,12 @@ export const documentsApi = {
   updateContentText: (id: string, content: string) =>
     request<DocDetail>(`/documents/${id}/content`, { method: 'PATCH', body: JSON.stringify({ content }) }),
 
-  explain: (id: string) =>
-    request<{ explanation: string }>(`/documents/${id}/explain`, { method: 'POST' }),
+  // Streamed as SSE (see chatStream below for the same event shape) since a
+  // full explanation can take well over a minute to generate — onChunk lets
+  // the caller show progress instead of a blank wait, and avoids a single
+  // request-level timeout cutting off a still-in-progress generation.
+  explainStream: (id: string, onChunk: (text: string) => void) =>
+    streamSSE(`/documents/${id}/explain`, onChunk),
 
   diagram: (id: string) =>
     request<{ diagram: string }>(`/documents/${id}/diagram`, { method: 'POST' }),

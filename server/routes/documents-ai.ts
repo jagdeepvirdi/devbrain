@@ -7,7 +7,7 @@ import crypto  from 'crypto'
 import { z }   from 'zod'
 import { pool } from '../db/pool.js'
 import { parseFile } from '../services/parser.js'
-import { aiChat }    from '../services/ai.js'
+import { aiChat, aiChatStream } from '../services/ai.js'
 import { serverError } from '../lib/errors.js'
 import { requireRole } from '../middleware/auth.js'
 import { embedDocument } from '../services/embedder.js'
@@ -41,61 +41,29 @@ const router = Router()
 
 const EXPLAIN_SOURCE_CHARS = 12000  // enough for most single files without an oversized prompt
 
-router.post('/:id/explain', requireRole('member'), async (req, res) => {
-  const id = req.params.id as string
-  try {
-    const { rows } = await pool.query(
-      'SELECT title, content, file_type, language, content_hash FROM documents WHERE id = $1',
-      [id]
-    )
-    if (!rows.length) return res.status(404).json({ error: 'Document not found' })
+// Packages/files whose outline lists more than this many procedures/functions
+// switch to EXPLAIN_SYSTEM_PROMPT_COMPACT instead of the full one below. Real-
+// file testing found mistral:7b took 162s for a full 400-600-word response on
+// a 37-procedure Oracle package — well past the old 120s non-streaming cap
+// (see ai.ts) and slow even under the new streaming/300s one. Asking for a
+// terser response on exactly these large-outline files keeps generation fast
+// without shrinking the outline's actual coverage (still every procedure).
+const LARGE_OUTLINE_THRESHOLD = 15
 
-    const doc = rows[0] as { title: string; content: string; file_type: string; language: string | null; content_hash: string | null }
-    if (doc.file_type !== 'code') {
-      return res.status(400).json({ error: 'Explain is only available for tracked code files' })
-    }
+// Hard caps on Ollama's num_predict (see aiChatStream's opts.maxTokens),
+// not just a suggestion in the prompt — real-file testing found mistral:7b
+// ignores the compact prompt's "200-300 words" ask and kept generating past
+// 700+ words / 300s on TOT_SAPREVENUE's 37-procedure outline regardless.
+// 450 was tried first and measured safe (~100s total incl. prompt processing,
+// well under the 300s cap) but only covered ~10 of 37 procedures before
+// hitting the cap — 650 buys enough headroom to cover a full 30-40-procedure
+// outline (~155s at the same measured generation rate) while staying well
+// clear of 300s. Not a tight match to the prompt's word targets either way —
+// the point is a hard worst-case time bound, not the exact word count.
+const EXPLAIN_MAX_TOKENS         = 900  // full prompt asks for 400-600 words
+const EXPLAIN_MAX_TOKENS_COMPACT = 650  // compact prompt asks for 200-300 words
 
-    const lang = doc.language ?? 'code'
-    const truncated = doc.content.length > EXPLAIN_SOURCE_CHARS
-    const source = doc.content.slice(0, EXPLAIN_SOURCE_CHARS)
-
-    // Static-analysis signature outline (same tree-sitter pass component-overview uses) —
-    // gives the model an accurate map of every function/class even when the raw source
-    // above is truncated, so longer files don't lose coverage of what's past the cutoff.
-    // Tree-sitter has no grammar for sql/plsql and always returns null for them — fall
-    // back to sql_bridge.py (extractSqlOutline) for exactly those two languages, so large
-    // PL/SQL packages (the common case for oversized files in this app) aren't left with
-    // zero outline coverage past EXPLAIN_SOURCE_CHARS.
-    const isSql = doc.language === 'sql' || doc.language === 'plsql'
-    let outline = await extractSymbolOutline(doc.content, doc.language)
-    if (!outline && isSql) {
-      outline = await extractSqlOutline(doc.content, doc.language)
-    }
-
-    // Real-file testing (TASKS.md) found that on a large truncated SQL/PLSQL
-    // package, giving the model BOTH the truncated raw source AND the full-file
-    // outline together backfires — both mistral and llama3.2 fixated on the
-    // truncated excerpt and ignored the outline, describing only the handful of
-    // procedures that happened to fit before the cutoff. Dropping the raw source
-    // for exactly this case (large + truncated + a successful SQL outline) and
-    // asking the model to work from the outline alone — the same "rank symbols,
-    // don't dump everything" approach /component-overview already uses — got a
-    // response that actually covered the whole file's procedures instead of the
-    // first few. Every other case (small files, non-SQL languages, or SQL files
-    // where sql_bridge.py found nothing) keeps the original raw-source prompt.
-    const useOutlineOnly = isSql && truncated && outline !== null
-
-    const outlineBlock = outline
-      ? `Symbol outline (functions/classes found via static analysis, covers the whole file even if the source below is truncated):\n${outline.map(l => `  ${l}`).join('\n')}\n\n`
-      : ''
-
-    const userPrompt = useOutlineOnly
-      ? `Explain what this ${lang} file ("${doc.title}") does, based on its full symbol outline (every procedure/function in the file, with the tables each one reads/writes):\n\n${outline!.map(l => `  ${l}`).join('\n')}\n\nCover ALL of the procedures/functions listed above, not just the first few — the outline is complete for the whole file.`
-      : `Explain what this ${lang} file ("${doc.title}") does:\n\n${outlineBlock}Source:\n\`\`\`${lang}\n${source}\n\`\`\`${truncated ? '\n\n(Source was truncated for length — use the symbol outline above, if present, to cover parts past the cutoff.)' : ''}`
-
-    const explanation = await aiChat(
-      userPrompt,
-      `You are a technical assistant that explains source code clearly and in detail for a developer knowledge base. Use Markdown with these headings, omitting any that don't apply to this file:
+const EXPLAIN_SYSTEM_PROMPT = `You are a technical assistant that explains source code clearly and in detail for a developer knowledge base. Use Markdown with these headings, omitting any that don't apply to this file:
 
 ## Overview
 What this file is responsible for, in 2-3 sentences.
@@ -116,14 +84,128 @@ Notable external dependencies, I/O, network calls, database access.
 Anything a future reader would want to know that isn't obvious from the code alone.
 
 Be specific rather than generic — name the actual parameters, files, tables, and formats involved. Aim for 400-600 words.`
+
+const EXPLAIN_SYSTEM_PROMPT_COMPACT = `You are a technical assistant that explains source code for a developer knowledge base. This file has a large number of procedures/functions, and the response is generated by a small local model — keep it terse so generation doesn't time out. Use Markdown with these headings, omitting any that don't apply:
+
+## Overview
+What this file is responsible for, in 2-3 sentences.
+
+## Key Functions & Classes
+ONE short line per procedure/function: name — what it does, tables it touches. Do not elaborate beyond one line per item, but cover every item in the outline.
+
+## Notable Patterns / Gotchas
+At most 2-3 bullet points, only if something is genuinely non-obvious. Omit this heading entirely if nothing stands out.
+
+Be specific — name the actual tables/procedures involved — but stay compact. Aim for 200-300 words total, not 400-600.`
+
+router.post('/:id/explain', requireRole('member'), async (req, res) => {
+  const id = req.params.id as string
+
+  let doc: { title: string; content: string; file_type: string; language: string | null; content_hash: string | null }
+  let systemPrompt: string
+  let userPrompt: string
+  let maxTokens: number
+  try {
+    const { rows } = await pool.query(
+      'SELECT title, content, file_type, language, content_hash FROM documents WHERE id = $1',
+      [id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Document not found' })
+
+    doc = rows[0] as { title: string; content: string; file_type: string; language: string | null; content_hash: string | null }
+    if (doc.file_type !== 'code') {
+      return res.status(400).json({ error: 'Explain is only available for tracked code files' })
+    }
+
+    const lang = doc.language ?? 'code'
+    const truncated = doc.content.length > EXPLAIN_SOURCE_CHARS
+    const source = doc.content.slice(0, EXPLAIN_SOURCE_CHARS)
+
+    // Static-analysis signature outline (same tree-sitter pass component-overview uses) —
+    // gives the model an accurate map of every function/class even when the raw source
+    // above is truncated, so longer files don't lose coverage of what's past the cutoff.
+    // Tree-sitter has no grammar for sql/plsql and always returns null for them — fall
+    // back to sql_bridge.py (extractSqlOutline) for exactly those two languages, so large
+    // PL/SQL packages (the common case for oversized files in this app) aren't left with
+    // zero outline coverage past EXPLAIN_SOURCE_CHARS.
+    const isSql = doc.language === 'sql' || doc.language === 'plsql'
+    let outline = await extractSymbolOutline(doc.content, doc.language)
+    if (!outline && isSql) {
+      outline = await extractSqlOutline(doc.content, doc.language as 'sql' | 'plsql')
+    }
+
+    // Real-file testing (TASKS.md) found that on a large truncated SQL/PLSQL
+    // package, giving the model BOTH the truncated raw source AND the full-file
+    // outline together backfires — both mistral and llama3.2 fixated on the
+    // truncated excerpt and ignored the outline, describing only the handful of
+    // procedures that happened to fit before the cutoff. Dropping the raw source
+    // for exactly this case (large + truncated + a successful SQL outline) and
+    // asking the model to work from the outline alone — the same "rank symbols,
+    // don't dump everything" approach /component-overview already uses — got a
+    // response that actually covered the whole file's procedures instead of the
+    // first few. Every other case (small files, non-SQL languages, or SQL files
+    // where sql_bridge.py found nothing) keeps the original raw-source prompt.
+    const useOutlineOnly = isSql && truncated && outline !== null
+    const isLargeOutline = useOutlineOnly && outline!.length > LARGE_OUTLINE_THRESHOLD
+
+    const outlineBlock = outline
+      ? `Symbol outline (functions/classes found via static analysis, covers the whole file even if the source below is truncated):\n${outline.map(l => `  ${l}`).join('\n')}\n\n`
+      : ''
+
+    userPrompt = useOutlineOnly
+      ? `Explain what this ${lang} file ("${doc.title}") does, based on its full symbol outline (every procedure/function in the file, with the tables each one reads/writes):\n\n${outline!.map(l => `  ${l}`).join('\n')}\n\nCover ALL of the procedures/functions listed above, not just the first few — the outline is complete for the whole file.`
+      : `Explain what this ${lang} file ("${doc.title}") does:\n\n${outlineBlock}Source:\n\`\`\`${lang}\n${source}\n\`\`\`${truncated ? '\n\n(Source was truncated for length — use the symbol outline above, if present, to cover parts past the cutoff.)' : ''}`
+
+    systemPrompt = isLargeOutline ? EXPLAIN_SYSTEM_PROMPT_COMPACT : EXPLAIN_SYSTEM_PROMPT
+    maxTokens    = isLargeOutline ? EXPLAIN_MAX_TOKENS_COMPACT : EXPLAIN_MAX_TOKENS
+  } catch (err) {
+    return serverError(res, err)
+  }
+
+  // Streamed as SSE (same shape as /api/chat) rather than one blocking JSON
+  // response — a 400-600-word explanation from mistral:7b on this app's
+  // target hardware can take well over a minute, and streaming both avoids a
+  // single hard request timeout ending generation early and lets the UI show
+  // progress instead of a blank spinner for that whole time.
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.flushHeaders()
+
+  const IDLE_MS = 5 * 60 * 1000
+  let idleTimer = setTimeout(onIdle, IDLE_MS)
+  function resetIdle() { clearTimeout(idleTimer); idleTimer = setTimeout(onIdle, IDLE_MS) }
+  function onIdle() { res.write('data: {"type":"timeout"}\n\n'); res.end() }
+  req.on('close', () => clearTimeout(idleTimer))
+
+  function send(obj: unknown) {
+    resetIdle()
+    res.write(`data: ${JSON.stringify(obj)}\n\n`)
+  }
+  function done() {
+    clearTimeout(idleTimer)
+    res.write('data: [DONE]\n\n')
+    res.end()
+  }
+
+  try {
+    let explanation = ''
+    await aiChatStream(
+      [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userPrompt },
+      ],
+      (chunk) => { explanation += chunk; send({ type: 'chunk', text: chunk }) },
+      { maxTokens }
     )
     // Stamp the content_hash this explanation was generated against, so a
     // later content change (see update-content route) can be detected as
     // explanation_stale without a separate "last explained at" timestamp.
     await pool.query('UPDATE documents SET explanation = $2, explanation_hash = $3 WHERE id = $1', [id, explanation, doc.content_hash])
-    res.json({ data: { explanation } })
+    done()
   } catch (err) {
-    serverError(res, err)
+    send({ type: 'error', message: (err as Error).message ?? 'Unknown error' })
+    done()
   }
 })
 

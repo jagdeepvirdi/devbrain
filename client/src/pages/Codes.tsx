@@ -188,9 +188,11 @@ function CodePreviewPanel({ docId, onClose, onReembedSuccess, onNavigate }: { do
     if (!doc || explaining) return
     setExplaining(true)
     setSavedTitle(null)
+    setExplanation('')
     try {
-      const res = await documentsApi.explain(doc.id)
-      setExplanation(res.explanation)
+      await documentsApi.explainStream(doc.id, chunk => {
+        setExplanation(prev => (prev ?? '') + chunk)
+      })
     } catch {
       setExplanation('Failed to get explanation — is Ollama running?')
     } finally {

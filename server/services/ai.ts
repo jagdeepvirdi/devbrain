@@ -173,10 +173,20 @@ export async function aiEmbed(text: string): Promise<number[]> {
  * Streaming AI completion — calls `onChunk` for each partial token as it
  * arrives. Used by the DocChat SSE route to push tokens to the browser.
  * Handles both Ollama's NDJSON stream and Claude's SSE stream formats.
+ *
+ * `opts.maxTokens` is a hard generation-length cap (Ollama's `num_predict`,
+ * Claude/Gemini's `max_tokens`/`maxOutputTokens`) — for callers where an
+ * instruction in the prompt ("keep this under 300 words") isn't reliable
+ * enough on its own. Confirmed in practice: /explain's compact system prompt
+ * asks mistral:7b for 200-300 words, but on a real large PL/SQL file the
+ * model kept generating past 700+ words and 300s anyway (models routinely
+ * don't self-terminate on a word-count ask) — only an actual token cap
+ * bounds worst-case generation time.
  */
 export async function aiChatStream(
   messages: Message[],
-  onChunk: (chunk: string) => void
+  onChunk: (chunk: string) => void,
+  opts?: { maxTokens?: number }
 ): Promise<void> {
   if (env.AI_PROVIDER === 'claude') {
     // Same startup-validated invariant as aiChat() above.
@@ -194,7 +204,7 @@ export async function aiChatStream(
       },
       body: JSON.stringify({
         model:      'claude-sonnet-4-6',
-        max_tokens: 2048,
+        max_tokens: opts?.maxTokens ?? 2048,
         stream:     true,
         system,
         messages:   userMessages,
@@ -244,6 +254,7 @@ export async function aiChatStream(
       body: JSON.stringify({
         system_instruction: system ? { parts: [{ text: system }] } : undefined,
         contents:           toGeminiContents(messages),
+        generationConfig:   opts?.maxTokens ? { maxOutputTokens: opts.maxTokens } : undefined,
       }),
     })
 
@@ -278,14 +289,22 @@ export async function aiChatStream(
 
   // Default: Ollama streaming
   return withOllamaQueue(async () => {
+    // 300s, not 120s — callers that stream (chat.ts, documents-ai.ts /explain)
+    // already tolerate long-running generation via their own 5-minute SSE idle
+    // timer (resets per chunk, not per call), so this cap should be a safety
+    // net for a genuinely wedged connection, not the thing that ends a slow-
+    // but-still-producing generation. Confirmed in practice: mistral:7b on this
+    // app's target 6GB-VRAM hardware took 162s for a real 400-600-word /explain
+    // response, which the previous 120s cut off before the DB write ever ran.
     const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(120_000),  // streaming can legitimately take longer
+      signal: AbortSignal.timeout(300_000),
       body: JSON.stringify({
         model:    CHAT_MODEL,
         stream:   true,
         messages,
+        options:  opts?.maxTokens ? { num_predict: opts.maxTokens } : undefined,
       }),
     })
 
