@@ -48,6 +48,10 @@ function DropZone({ projectId, existingComponents, onDone }: { projectId: string
   const [suggestedTags,  setSuggestedTags]  = useState<string[]>([])
   const [suggesting,     setSuggesting]     = useState(false)
   const [stagedFile,     setStagedFile]     = useState<File | null>(null)
+  // Tags/component collapse behind one toggle instead of always taking up
+  // two full-width rows — opens on its own once there's actually something
+  // to categorize (a file just got staged), stays closed otherwise.
+  const [categorizeOpen, setCategorizeOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   async function handleSuggestTags() {
@@ -89,6 +93,7 @@ function DropZone({ projectId, existingComponents, onDone }: { projectId: string
     if (list.length === 1) {
       setStagedFile(list[0])
       setSuggestedTags([])
+      setCategorizeOpen(true)
       return
     }
 
@@ -114,6 +119,7 @@ function DropZone({ projectId, existingComponents, onDone }: { projectId: string
       setStagedFile(null)
       setTags([])
       setSuggestedTags([])
+      setCategorizeOpen(false)
       onDone()
     } catch (err) {
       setError((err as Error).message)
@@ -185,7 +191,7 @@ function DropZone({ projectId, existingComponents, onDone }: { projectId: string
             {uploading ? 'Uploading…' : 'Upload'}
           </button>
           <button
-            onClick={() => { setStagedFile(null); setSuggestedTags([]) }}
+            onClick={() => { setStagedFile(null); setSuggestedTags([]); setCategorizeOpen(false) }}
             disabled={!!uploading}
             style={{ height: 26, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-3)', fontSize: 11.5 }}
           >
@@ -211,56 +217,89 @@ function DropZone({ projectId, existingComponents, onDone }: { projectId: string
         </button>
       </div>
 
-      <div style={{ display: 'flex', gap: 10, marginTop: 10, alignItems: 'center' }}>
-        <input
-          value={tagInput}
-          onChange={e => setTagInput(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && addTag()}
-          placeholder="Add tags to files/URL before importing…"
-          style={{ width: 300, padding: '6px 10px', background: 'var(--bg-elev-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius)', fontSize: 12.5, color: 'var(--fg)' }}
-        />
-        <button
-          onClick={handleSuggestTags}
-          disabled={suggesting}
-          title={stagedFile ? `Analyze "${stagedFile.name}"'s actual content` : 'Suggest tags from typed text (select a single file to analyze its real content instead)'}
-          style={{ height: 28, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-2)', fontSize: 11.5 }}
-        >
-          {suggesting ? 'Suggesting…' : '🪄 Auto-tag'}
-        </button>
-        {tags.map(t => (
-          <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 4, background: 'var(--bg-elev-2)', border: '1px solid var(--line-2)', fontSize: 11, color: 'var(--fg-2)' }}>
-            #{t}
-            <button onClick={() => setTags(prev => prev.filter(x => x !== t))} style={{ color: 'var(--fg-3)' }}>×</button>
-          </span>
-        ))}
-      </div>
-
-      <div style={{ display: 'flex', gap: 10, marginTop: 8, alignItems: 'center' }}>
-        <input
-          list="component-options"
-          value={component}
-          onChange={e => setComponent(e.target.value)}
-          placeholder="Component (e.g. SAP, BPP, Payment)…"
-          style={{ width: 300, padding: '6px 10px', background: 'var(--bg-elev-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius)', fontSize: 12.5, color: 'var(--fg)' }}
-        />
-        <datalist id="component-options">
-          {existingComponents.map(c => <option key={c} value={c} />)}
-        </datalist>
-        {component && (
-          <button onClick={() => setComponent('')} style={{ color: 'var(--fg-3)', fontSize: 11 }} title="Clear component">
-            × clear
-          </button>
-        )}
-      </div>
-      {suggestedTags.length > 0 && (
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 11, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '.04em' }}>Suggestions:</span>
-          {suggestedTags.map(t => (
-            <button key={t} onClick={() => acceptSuggested(t)} style={{ padding: '2px 8px', borderRadius: 4, border: '1px dashed var(--line-3)', background: 'transparent', color: 'var(--fg-3)', fontSize: 11 }}>
-              +{t}
+      {/* Tags/component collapse behind one toggle so the default view is
+          just "drop a file or paste a URL" — this used to be two permanent
+          full-width rows below the drop zone regardless of whether there
+          was anything to categorize yet. */}
+      {categorizeOpen ? (
+        <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--line-2)', background: 'var(--bg-elev)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <span style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '.05em', flex: 1 }}>
+              Tags & component <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 'normal' }}>(optional)</span>
+            </span>
+            <button onClick={() => setCategorizeOpen(false)} style={{ fontSize: 11, color: 'var(--fg-4)' }}>
+              Hide
             </button>
-          ))}
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input
+              value={tagInput}
+              onChange={e => setTagInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && addTag()}
+              placeholder="Add tag…"
+              style={{ width: 160, padding: '6px 10px', background: 'var(--bg-elev-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius)', fontSize: 12.5, color: 'var(--fg)' }}
+            />
+            <button
+              onClick={handleSuggestTags}
+              disabled={suggesting}
+              title={stagedFile ? `Analyze "${stagedFile.name}"'s actual content` : 'Suggest tags from typed text (select a single file to analyze its real content instead)'}
+              style={{ height: 28, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev-2)', color: 'var(--fg-2)', fontSize: 11.5, flexShrink: 0 }}
+            >
+              {suggesting ? 'Suggesting…' : '🪄 Auto-tag'}
+            </button>
+            {tags.map(t => (
+              <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 4, background: 'var(--bg-elev-2)', border: '1px solid var(--line-2)', fontSize: 11, color: 'var(--fg-2)' }}>
+                #{t}
+                <button onClick={() => setTags(prev => prev.filter(x => x !== t))} style={{ color: 'var(--fg-3)' }}>×</button>
+              </span>
+            ))}
+          </div>
+
+          {suggestedTags.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '.04em' }}>Suggestions:</span>
+              {suggestedTags.map(t => (
+                <button key={t} onClick={() => acceptSuggested(t)} style={{ padding: '2px 8px', borderRadius: 4, border: '1px dashed var(--line-3)', background: 'transparent', color: 'var(--fg-3)', fontSize: 11 }}>
+                  +{t}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              list="component-options"
+              value={component}
+              onChange={e => setComponent(e.target.value)}
+              placeholder="Component (e.g. SAP, BPP, Payment)…"
+              style={{ width: 240, padding: '6px 10px', background: 'var(--bg-elev-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius)', fontSize: 12.5, color: 'var(--fg)' }}
+            />
+            <datalist id="component-options">
+              {existingComponents.map(c => <option key={c} value={c} />)}
+            </datalist>
+            {component && (
+              <button onClick={() => setComponent('')} style={{ color: 'var(--fg-3)', fontSize: 11 }} title="Clear component">
+                × clear
+              </button>
+            )}
+          </div>
         </div>
+      ) : (
+        <button
+          onClick={() => setCategorizeOpen(true)}
+          style={{
+            marginTop: 10, fontSize: 11.5, color: (tags.length > 0 || component) ? 'var(--accent-2)' : 'var(--fg-4)',
+            display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 2px',
+          }}
+        >
+          {tags.length > 0 || component
+            ? <>🏷 {[
+                tags.length > 0 ? `${tags.length} tag${tags.length !== 1 ? 's' : ''}` : null,
+                component ? `Component: ${component}` : null,
+              ].filter(Boolean).join(' · ')} — edit</>
+            : '+ Add tags & component'}
+        </button>
       )}
       {error && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--red)' }}>{error}</div>}
     </div>
