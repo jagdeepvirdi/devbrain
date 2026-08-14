@@ -90,6 +90,22 @@ describe('GET /api/export/project/:id', () => {
 
     expect(res.status).toHaveBeenCalledWith(500)
   })
+
+  it('logs and ends the response when the archive itself emits an error', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'p1', name: 'PlayCru', short_name: 'playcru' }] } as never)
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    addProjectToArchiveMock.mockImplementationOnce(async (archive: Archiver) => {
+      archive.emit('error', new Error('archive boom'))
+      throw new Error('archive boom')
+    })
+
+    const res = fakeStreamRes()
+
+    await getHandler('/project/:id', 'get')({ params: { id: 'p1' } }, res, () => {})
+
+    expect(errSpy).toHaveBeenCalledWith('export error', expect.objectContaining({ message: 'archive boom' }))
+    errSpy.mockRestore()
+  })
 })
 
 describe('GET /api/export/all', () => {
@@ -121,5 +137,20 @@ describe('GET /api/export/all', () => {
     await getHandler('/all', 'get')({}, res, () => {})
 
     expect(res.status).toHaveBeenCalledWith(500)
+  })
+
+  it('logs and ends the response when the archive itself emits an error', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    buildZipToStreamMock.mockImplementationOnce(async (archive: Archiver) => {
+      archive.emit('error', new Error('archive boom'))
+      throw new Error('archive boom')
+    })
+
+    const res = fakeStreamRes()
+
+    await getHandler('/all', 'get')({}, res, () => {})
+
+    expect(errSpy).toHaveBeenCalledWith('export error', expect.objectContaining({ message: 'archive boom' }))
+    errSpy.mockRestore()
   })
 })

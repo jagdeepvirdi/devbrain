@@ -74,7 +74,7 @@ router.post('/', requireRole('member'), async (req, res) => {
         }
       )
       res.write('data: [DONE]\n\n')
-      handleAiTaskDoneNotification(userId, task).catch(() => {})
+      handleAiTaskDoneNotification(userId, task)
     } catch (err) {
       res.write(`data: ${JSON.stringify({ error: (err as Error).message })}\n\n`)
     }
@@ -85,7 +85,7 @@ router.post('/', requireRole('member'), async (req, res) => {
 
   try {
     const result = await aiChat(task, system)
-    handleAiTaskDoneNotification(userId, task).catch(() => {})
+    handleAiTaskDoneNotification(userId, task)
     res.json({ data: { result, format } })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })

@@ -361,6 +361,43 @@ describe('backup service', () => {
 
       errSpy.mockRestore()
     })
+
+    it('does not throw when writing the remote-failure status itself also fails', async () => {
+      mockQuery.mockImplementation((sql: string) =>
+        (sql as string).includes('last_remote_backup_error')
+          ? Promise.reject(new Error('db down'))
+          : Promise.resolve({ rows: [] }),
+      )
+      uploadBackupToRemoteMock.mockRejectedValueOnce(new Error('network unreachable'))
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const remote = { type: 'sftp' as const, host: 'h', username: 'u', remotePath: '/r' }
+
+      await expect(triggerBackupNow(tmpRoot, 30, remote)).resolves.toBeUndefined()
+
+      errSpy.mockRestore()
+    })
+  })
+
+  describe('startBackupScheduler timer coverage', () => {
+    it('does not throw when the initial locked tick itself rejects', async () => {
+      vi.useFakeTimers()
+      vi.mocked(pool.connect).mockRejectedValueOnce(new Error('pool exhausted'))
+
+      startBackupScheduler()
+
+      await vi.advanceTimersByTimeAsync(30_000)
+    })
+
+    it('keeps ticking on the hourly interval after the initial run, swallowing a rejected tick', async () => {
+      vi.useFakeTimers()
+      mockQuery.mockResolvedValue({ rows: [{ value: { path: tmpRoot, schedule: 'off', last_backup_at: null } }] } as never)
+
+      startBackupScheduler()
+      await vi.advanceTimersByTimeAsync(30_000)
+
+      vi.mocked(pool.connect).mockRejectedValueOnce(new Error('pool exhausted'))
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000)
+    })
   })
 
   describe('scheduled backup remote handling', () => {

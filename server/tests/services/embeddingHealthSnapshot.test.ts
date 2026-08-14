@@ -92,4 +92,23 @@ describe('startEmbeddingHealthScheduler', () => {
     // Only the failed SELECT — pruneOldSnapshots never reached this tick.
     expect(mockQuery).toHaveBeenCalledTimes(1)
   })
+
+  it('does not throw when the initial locked tick itself rejects', async () => {
+    vi.useFakeTimers()
+    vi.mocked(pool.connect).mockRejectedValueOnce(new Error('pool exhausted'))
+
+    startEmbeddingHealthScheduler()
+    await vi.advanceTimersByTimeAsync(30_000)
+  })
+
+  it('does not throw when a later hourly tick itself rejects', async () => {
+    vi.useFakeTimers()
+    mockQuery.mockResolvedValue({ rows: [{ pending: 0, processing: 0, done: 0, failed: 0 }] } as never)
+
+    startEmbeddingHealthScheduler()
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    vi.mocked(pool.connect).mockRejectedValueOnce(new Error('pool exhausted'))
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000)
+  })
 })
