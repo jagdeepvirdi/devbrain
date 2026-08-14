@@ -20,7 +20,7 @@ export type ParseResult = {
 // highlighting. Anything not listed here falls through to the generic
 // txt/md/etc. handling below, unchanged from before this map existed.
 
-const CODE_EXT_LANGUAGE: Record<string, string> = {
+export const CODE_EXT_LANGUAGE: Record<string, string> = {
   ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
   mjs: 'javascript', cjs: 'javascript',
   py: 'python', dart: 'dart', java: 'java', kt: 'kotlin', kts: 'kotlin',
