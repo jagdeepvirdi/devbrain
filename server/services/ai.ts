@@ -289,48 +289,83 @@ export async function aiChatStream(
 
   // Default: Ollama streaming
   return withOllamaQueue(async () => {
-    // 300s, not 120s — callers that stream (chat.ts, documents-ai.ts /explain)
-    // already tolerate long-running generation via their own 5-minute SSE idle
-    // timer (resets per chunk, not per call), so this cap should be a safety
-    // net for a genuinely wedged connection, not the thing that ends a slow-
-    // but-still-producing generation. Confirmed in practice: mistral:7b on this
-    // app's target 6GB-VRAM hardware took 162s for a real 400-600-word /explain
-    // response, which the previous 120s cut off before the DB write ever ran.
-    const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(300_000),
-      body: JSON.stringify({
-        model:    CHAT_MODEL,
-        stream:   true,
-        messages,
-        options:  opts?.maxTokens ? { num_predict: opts.maxTokens } : undefined,
-      }),
-    })
+    // A flat total-duration timeout doesn't fit this call: a genuinely long
+    // (but still actively producing) generation is not distinguishable from
+    // a wedged one by wall-clock time alone, and on this app's target 6GB-
+    // VRAM hardware, a thorough explanation of a large file (e.g. a 37-
+    // procedure Oracle package) can legitimately take several minutes at
+    // mistral:7b's real generation rate — confirmed in practice at ~5-7
+    // tokens/sec. Instead, abort only on a genuine STALL: no new bytes from
+    // Ollama for this long. Every chunk read (even a content-less keep-alive
+    // line) resets the clock, so an actively-streaming response can run
+    // indefinitely; only a connection that's stopped producing anything gets
+    // killed. This mirrors the SSE route layer's own idle-reset timer
+    // (chat.ts, documents-ai.ts /explain) one level down, at the Ollama
+    // fetch itself rather than the client-facing response.
+    const STALL_MS = 90_000
+    const controller = new AbortController()
+    let stallTimer = setTimeout(() => controller.abort(), STALL_MS)
+    const resetStall = () => { clearTimeout(stallTimer); stallTimer = setTimeout(() => controller.abort(), STALL_MS) }
+
+    let res: Response
+    try {
+      res = await fetch(`${OLLAMA_BASE}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model:    CHAT_MODEL,
+          stream:   true,
+          messages,
+          options:  opts?.maxTokens ? { num_predict: opts.maxTokens } : undefined,
+        }),
+      })
+    } catch (err) {
+      clearTimeout(stallTimer)
+      throw (controller.signal.aborted
+        ? new Error(`Ollama stream stalled — no response for ${STALL_MS / 1000}s`)
+        : err)
+    }
 
     if (!res.ok) {
+      clearTimeout(stallTimer)
       const body = await res.text()
       throw new Error(`Ollama stream error ${res.status}: ${body}`)
     }
-    if (!res.body) throw new Error('Ollama stream response had no body')
+    if (!res.body) {
+      clearTimeout(stallTimer)
+      throw new Error('Ollama stream response had no body')
+    }
 
     const reader  = res.body.getReader()
     const decoder = new TextDecoder()
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      const lines = decoder.decode(value, { stream: true }).split('\n').filter(Boolean)
-      for (const line of lines) {
+    try {
+      while (true) {
+        let done: boolean, value: Uint8Array | undefined
         try {
-          const json = JSON.parse(line) as { message?: { content?: string }; done?: boolean }
-          if (json.message?.content) {
-            onChunk(json.message.content)
+          ;({ done, value } = await reader.read())
+        } catch (err) {
+          throw (controller.signal.aborted
+            ? new Error(`Ollama stream stalled — no data for ${STALL_MS / 1000}s`)
+            : err)
+        }
+        if (done) break
+        resetStall()
+        const lines = decoder.decode(value, { stream: true }).split('\n').filter(Boolean)
+        for (const line of lines) {
+          try {
+            const json = JSON.parse(line) as { message?: { content?: string }; done?: boolean }
+            if (json.message?.content) {
+              onChunk(json.message.content)
+            }
+          } catch {
+            // incomplete JSON line — skip
           }
-        } catch {
-          // incomplete JSON line — skip
         }
       }
+    } finally {
+      clearTimeout(stallTimer)
     }
   })
 }

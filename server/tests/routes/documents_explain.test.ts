@@ -220,13 +220,34 @@ describe('POST /api/documents/:id/explain', () => {
     const messages = mockAiChatStream.mock.calls[0][0]
     const prompt = messages[1].content as string
     expect(prompt).toContain('proc_zero_invoice')
-    expect(prompt).toContain('Cover ALL of the procedures/functions listed above')
+    expect(prompt).toContain('Cover ALL of the items listed above')
     // The raw truncated source (a run of 12000 'x' characters) must NOT appear —
     // that's the excerpt models were observed fixating on instead of the outline.
     expect(prompt).not.toContain('x'.repeat(12000))
   })
 
-  it('uses the compact system prompt for a large outline (>15 procedures), to keep generation fast enough not to time out', async () => {
+  it('drops the raw truncated source for a large non-SQL file too, when a tree-sitter outline is available (not SQL-specific)', async () => {
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [{ title: 'big_module.py', content: 'x'.repeat(20000), file_type: 'code', language: 'python', content_hash: 'hash-big-py' }],
+      } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+
+    mockOutline.mockResolvedValue(['def run_pipeline()', 'def load_config()'])
+
+    const req = fakeReq({ id: 'doc-big-py' })
+    const res = fakeRes()
+
+    await getHandler('/:id/explain', 'post')(req, res, () => {})
+
+    expect(mockSqlOutline).not.toHaveBeenCalled()
+    const messages = mockAiChatStream.mock.calls[0][0]
+    const prompt = messages[1].content as string
+    expect(prompt).toContain('Cover ALL of the items listed above')
+    expect(prompt).not.toContain('x'.repeat(12000))
+  })
+
+  it('uses the compact system prompt for a large outline (>15 items), asking for full coverage rather than a word-count target', async () => {
     const bigOutline = Array.from({ length: 20 }, (_, i) => `PROCEDURE proc_${i}() (lines 1-2)`)
     mockQuery
       .mockResolvedValueOnce({
@@ -244,8 +265,11 @@ describe('POST /api/documents/:id/explain', () => {
 
     const messages = mockAiChatStream.mock.calls[0][0]
     const systemPrompt = messages[0].content as string
-    expect(systemPrompt).toContain('200-300 words')
+    expect(systemPrompt).toContain('list every single item from the outline')
     expect(systemPrompt).not.toContain('400-600 words')
+    expect(systemPrompt).not.toContain('200-300 words')
+
+    expect(mockAiChatStream.mock.calls[0][2]).toEqual({ maxTokens: 3000 })
   })
 
   it('uses the full system prompt for a small outline (<=15 procedures)', async () => {
