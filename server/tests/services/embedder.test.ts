@@ -179,6 +179,76 @@ describe('embedDocument', () => {
 
     expect(count).toBe(1) // just the one real chunk for this short text
   })
+
+  it('recovers from a context-length rejection by splitting the chunk and embedding each half separately, instead of failing the whole document', async () => {
+    // Our chunk-size estimate uses a different tokenizer (cl100k_base) than
+    // nomic-embed-text's own — this simulates that estimate being wrong for
+    // one chunk (e.g. garbled PDF-extracted text) and Ollama rejecting it.
+    const text = 'word '.repeat(100).trim()
+    mockAiEmbed.mockImplementation(async (t: string) => {
+      if (t === text) throw new Error('Ollama embed error 500: {"error":"the input length exceeds the context length"}')
+      return [0.1, 0.2, 0.3]
+    })
+
+    const count = await embedDocument('doc-split', text)
+
+    expect(count).toBe(2) // the one oversized chunk became 2 stored chunks
+    expect(mockAiEmbed).toHaveBeenCalledTimes(3) // 1 failed attempt (no wasted retries) + 2 successful halves
+
+    const insertCalls = mockPool.query.mock.calls.filter(
+      (c: unknown[]) => (c[0] as string).includes('INSERT INTO document_chunks')
+    )
+    expect(insertCalls).toHaveLength(2)
+    expect((insertCalls[0][1] as unknown[])[2]).toBe(0) // sequential chunk_index
+    expect((insertCalls[1][1] as unknown[])[2]).toBe(1)
+  })
+
+  it('does not retry a context-length rejection with delays (it is deterministic, not transient)', async () => {
+    const text = 'a single short chunk'
+    mockAiEmbed.mockRejectedValue(new Error('Ollama embed error 500: {"error":"the input length exceeds the context length"}'))
+
+    await embedDocument('doc-fastfail', text)
+
+    // Splits down past the 200-char floor almost immediately for a 20-char
+    // input, so this should resolve near-instantly — no 500/1000/1500ms
+    // backoff delays anywhere in the path.
+    expect(mockAiEmbed).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops a chunk (without failing the whole document) if it still exceeds the context length after repeated splitting', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const text = 'x'.repeat(2000) // no whitespace — forces the hard-midpoint split fallback
+    mockAiEmbed.mockRejectedValue(new Error('Ollama embed error 500: {"error":"the input length exceeds the context length"}'))
+
+    const count = await embedDocument('doc-unsplittable', text)
+
+    expect(count).toBe(0) // dropped, not thrown
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('still exceeds the embedding context length'))
+    warnSpy.mockRestore()
+  })
+
+  it('still throws (does not silently drop) a non-context-length embed error', async () => {
+    mockAiEmbed.mockRejectedValue(new Error('Ollama embed error 500: connection refused'))
+
+    await expect(embedDocument('doc-real-error', 'hello world')).rejects.toThrow('connection refused')
+  })
+
+  it('does not abort the document\'s real content chunks when the summary chunk embed itself fails', async () => {
+    mockAiChat.mockResolvedValueOnce('A summary that exists.')
+    mockAiEmbed.mockImplementation(async (t: string) => {
+      if (t.includes('A summary that exists.')) throw new Error('ollama down')
+      return [0.1, 0.2, 0.3]
+    })
+
+    const count = await embedDocument('doc-summary-fail', 'hello world', { title: 'T' })
+
+    expect(count).toBe(1) // real chunk still embedded despite the summary chunk failing
+    const insertCalls = mockPool.query.mock.calls.filter(
+      (c: unknown[]) => (c[0] as string).includes('INSERT INTO document_chunks')
+    )
+    expect(insertCalls).toHaveLength(1)
+    expect(insertCalls.some(c => (c[1] as unknown[])[2] === -1)).toBe(false) // no summary row
+  })
 })
 
 describe('embedDocumentsBatch', () => {
@@ -267,6 +337,18 @@ describe('embedDocumentsBatch', () => {
       { id: 'doc-2', chunkCount: 1 },
     ])
   }, 10_000) // embedWithRetry's 3 attempts with backoff delays push past the default 5s timeout
+
+  it('recovers a context-length rejection by splitting, within a batch, without treating it as that document\'s failure', async () => {
+    const text = 'word '.repeat(100).trim()
+    mockAiEmbed.mockImplementation(async (t: string) => {
+      if (t === text) throw new Error('Ollama embed error 500: {"error":"the input length exceeds the context length"}')
+      return [0.1, 0.2, 0.3]
+    })
+
+    const results = await embedDocumentsBatch([{ id: 'doc-1', content: text }])
+
+    expect(results).toEqual([{ id: 'doc-1', chunkCount: 2 }]) // no `error` field — this wasn't a real failure
+  })
 
   it('fires onProgress per document with the document id', async () => {
     const onProgress = vi.fn()

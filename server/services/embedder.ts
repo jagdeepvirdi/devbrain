@@ -6,6 +6,20 @@ import { countTokens, splitByTokenWindow, TARGET_CHUNK_TOKENS, MIN_CHUNK_TOKENS 
 
 export { countTokens }
 
+// "the input length exceeds the context length" (nomic-embed-text's real
+// architecture limit — 2048 tokens, independent of any higher num_ctx set in
+// its Modelfile) is deterministic, not transient: retrying the exact same
+// text can never succeed. Our own chunk-size target (TARGET_CHUNK_TOKENS)
+// is measured with a different tokenizer (cl100k_base) than nomic-embed-
+// text's own, which is normally a close-enough estimate but can diverge a
+// lot on garbled/PDF-extracted text with unusual character runs — this is
+// what actually lets a chunk slip past our size check and hit Ollama's real
+// limit. embedChunkResilient() below is what recovers from that; this
+// function just needs to not waste time retrying it.
+function isContextLengthError(err: unknown): boolean {
+  return err instanceof Error && /exceeds the context length/i.test(err.message)
+}
+
 // Retry wrapper for transient Ollama failures during bulk embed operations.
 // Waits 500ms × attempt before each retry (500ms, 1000ms, 1500ms).
 async function embedWithRetry(text: string, maxAttempts = 3): Promise<number[]> {
@@ -15,12 +29,51 @@ async function embedWithRetry(text: string, maxAttempts = 3): Promise<number[]> 
       return await aiEmbed(text)
     } catch (err) {
       lastErr = err as Error
+      if (isContextLengthError(err)) break // retrying identical input can't help — fail fast
       if (attempt < maxAttempts) {
         await new Promise(r => setTimeout(r, 500 * attempt))
       }
     }
   }
   throw lastErr
+}
+
+// Splits `text` at the whitespace nearest its midpoint (falls back to a hard
+// midpoint cut if there's no whitespace, e.g. one very long unbroken token
+// run) — used only to recover from a real "exceeds context length" rejection.
+function splitInHalf(text: string): [string, string] {
+  const mid       = Math.floor(text.length / 2)
+  const spaceNear = text.lastIndexOf(' ', mid)
+  const cut       = spaceNear > text.length * 0.25 ? spaceNear : mid
+  return [text.slice(0, cut).trim(), text.slice(cut).trim()]
+}
+
+// Embeds one chunk, self-healing on a genuine context-length rejection by
+// halving the text and embedding each half independently — since one input
+// chunk can turn into two (or more) output chunks, this returns an array,
+// not a single embedding. Recurses up to 4 levels deep (a 512-token chunk
+// halved 4 times is ~32 tokens, well past anywhere nomic-embed-text's real
+// 2048-token limit could still be the problem); a piece that still fails at
+// that depth is dropped with a warning rather than aborting the whole
+// document's embedding over one pathological fragment.
+async function embedChunkResilient(text: string, depth = 0): Promise<{ text: string; embedding: number[] }[]> {
+  try {
+    return [{ text, embedding: await embedWithRetry(text) }]
+  } catch (err) {
+    if (!isContextLengthError(err)) throw err
+    if (depth >= 4 || text.length < 200) {
+      console.warn(`Dropping a chunk that still exceeds the embedding context length after ${depth} splits (${text.length} chars)`)
+      return []
+    }
+    const [a, b] = splitInHalf(text)
+    // Ollama calls are already serialized through withOllamaQueue (ai.ts) —
+    // concurrent halves don't race for the GPU, they just queue.
+    const [aResult, bResult] = await Promise.all([
+      embedChunkResilient(a, depth + 1),
+      embedChunkResilient(b, depth + 1),
+    ])
+    return [...aResult, ...bResult]
+  }
 }
 
 // ── Chunking ─────────────────────────────────────────────────────────────
@@ -131,31 +184,38 @@ export async function embedDocument(
   const summary = await summarizeDocument(text)
   if (summary) {
     const summaryChunk = title ? `[${title}]\n\n${summary}` : summary
-    const embedding = await embedWithRetry(summaryChunk)
-    await pool.query(
-      `INSERT INTO document_chunks (document_id, content, chunk_index, embedding)
-       VALUES ($1, $2, $3, $4)`,
-      [documentId, summaryChunk, SUMMARY_CHUNK_INDEX, JSON.stringify(embedding)]
-    )
+    // Non-fatal, same as a failed summary *generation* above — a missing
+    // summary row shouldn't cost the document its real content chunks below.
+    try {
+      const embedding = await embedWithRetry(summaryChunk)
+      await pool.query(
+        `INSERT INTO document_chunks (document_id, content, chunk_index, embedding)
+         VALUES ($1, $2, $3, $4)`,
+        [documentId, summaryChunk, SUMMARY_CHUNK_INDEX, JSON.stringify(embedding)]
+      )
+    } catch (err) {
+      console.warn('Summary chunk embed failed (non-fatal, real content chunks still proceed):', (err as Error).message)
+    }
   }
 
   const astChunks = await chunkCodeByAst(text, language)
   const rawChunks = astChunks ?? chunkText(text)
   const chunks    = title ? rawChunks.map(c => `[${title}]\n\n${c}`) : rawChunks
 
+  let stored = 0
   for (let i = 0; i < chunks.length; i++) {
-    const embedding = await embedWithRetry(chunks[i])
-
-    await pool.query(
-      `INSERT INTO document_chunks (document_id, content, chunk_index, embedding)
-       VALUES ($1, $2, $3, $4)`,
-      [documentId, chunks[i], i, JSON.stringify(embedding)]
-    )
-
+    const results = await embedChunkResilient(chunks[i])
+    for (const r of results) {
+      await pool.query(
+        `INSERT INTO document_chunks (document_id, content, chunk_index, embedding)
+         VALUES ($1, $2, $3, $4)`,
+        [documentId, r.text, stored++, JSON.stringify(r.embedding)]
+      )
+    }
     onProgress?.(i + 1, chunks.length)
   }
 
-  return chunks.length
+  return stored
 }
 
 export type BatchDoc    = { id: string; content: string; title?: string; language?: string | null }
@@ -209,26 +269,35 @@ export async function embedDocumentsBatch(
       const summary = summaries.get(doc.id)
       if (summary) {
         const summaryChunk = doc.title ? `[${doc.title}]\n\n${summary}` : summary
-        const embedding = await embedWithRetry(summaryChunk)
-        await pool.query(
-          `INSERT INTO document_chunks (document_id, content, chunk_index, embedding)
-           VALUES ($1, $2, $3, $4)`,
-          [doc.id, summaryChunk, SUMMARY_CHUNK_INDEX, JSON.stringify(embedding)]
-        )
+        // Non-fatal — a missing summary row shouldn't cost this document its
+        // real content chunks below (same reasoning as embedDocument()).
+        try {
+          const embedding = await embedWithRetry(summaryChunk)
+          await pool.query(
+            `INSERT INTO document_chunks (document_id, content, chunk_index, embedding)
+             VALUES ($1, $2, $3, $4)`,
+            [doc.id, summaryChunk, SUMMARY_CHUNK_INDEX, JSON.stringify(embedding)]
+          )
+        } catch (err) {
+          console.warn('Summary chunk embed failed (non-fatal, real content chunks still proceed):', (err as Error).message)
+        }
       }
 
       const chunks = chunkSets.get(doc.id) ?? []
+      let   stored = 0
       for (let i = 0; i < chunks.length; i++) {
-        const embedding = await embedWithRetry(chunks[i])
-        await pool.query(
-          `INSERT INTO document_chunks (document_id, content, chunk_index, embedding)
-           VALUES ($1, $2, $3, $4)`,
-          [doc.id, chunks[i], i, JSON.stringify(embedding)]
-        )
+        const chunkResults = await embedChunkResilient(chunks[i])
+        for (const r of chunkResults) {
+          await pool.query(
+            `INSERT INTO document_chunks (document_id, content, chunk_index, embedding)
+             VALUES ($1, $2, $3, $4)`,
+            [doc.id, r.text, stored++, JSON.stringify(r.embedding)]
+          )
+        }
         onProgress?.(doc.id, i + 1, chunks.length)
       }
 
-      results.push({ id: doc.id, chunkCount: chunks.length })
+      results.push({ id: doc.id, chunkCount: stored })
     } catch (err) {
       results.push({ id: doc.id, chunkCount: 0, error: (err as Error).message })
     }
