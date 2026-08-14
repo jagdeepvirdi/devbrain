@@ -897,3 +897,71 @@ design, not oversight)*
       `routes/code-intel.ts`, `services/treeSitterLoader.ts`, and a `services/codeIntel/` subtree
       (`types.ts`/`storage.ts`/`parsers/`/`analyzer/`), plus a `scripts/` line (this tree didn't have one
       before this phase).
+
+---
+
+## Phase 41 — CI Coverage Gate & Security Audit Workflow Recovery (2026-08-14)
+
+> The last three pushes to master (all [[Phase 40]]-adjacent bugfixes: oversized-chunk embedding, `/explain`
+> truncation/hang, `markitdown_bridge.py`'s cwd bug) had gone green on every individual test but red on CI
+> overall — `server/vitest.config.ts`'s coverage thresholds were failing, not any test assertion. Root cause:
+> `services/codeIntel/storage.ts` ([[Phase 40]], item 1) had never gotten its own direct test file — it was
+> only exercised indirectly through callers that mock it at the boundary — so it sat at flat 0% coverage and
+> dragged the global average down, compounded by several pre-existing services/routes with never-exercised
+> error-handling and scheduler branches. Separately, and unrelated to any code change, the weekly `Security
+> Audit` workflow had failed 3 consecutive Monday runs (2026-07-27, 08-03, 08-10) purely on newly-published
+> `npm audit` advisories landing upstream, not on anything in this repo.
+
+### Tasks
+- [x] `server/tests/services/codeIntel/storage.test.ts` — new, 21 tests covering every exported function
+      (`upsertNodes`/`upsertEdges`/`insertUnresolvedRefs`/`clearProjectGraph`, all the `get*` reads,
+      `getImpactTree`'s depth param + depth-sort, null-vs-populated column mapping), mocking `pool.query` the
+      same way `tests/services/audit.test.ts` already does. Took the file from 0% to 100% coverage on all four
+      metrics — closed the `lines`/`statements` gate (was 96.89%/95.69%, now 97.6%/96.35% against 97%/96%
+      thresholds) but left `functions` (93.2% vs 94% required) and `branches` (92.65% vs 93%) still short,
+      traced to gaps elsewhere, not this file.
+- [x] Closed the `functions` gap (93.2%→94.85%) — new/extended tests exercising previously-dead closures:
+      `routes/aitask.ts` (`.catch(() => {})` around a call proven to never reject — see next item, removed
+      rather than tested), `routes/export.ts` (both routes' `archive.on('error', ...)` handler, via a real
+      `archive.emit('error', ...)` from the mocked `addProjectToArchive`/`buildZipToStream`), `services/
+      backup.ts` and `services/embeddingHealthSnapshot.ts` (their `startXScheduler()`'s hourly `setInterval`
+      tick, and the case where the advisory-locked tick itself rejects — forced via `pool.connect()` rejecting
+      once), and a new `services/issuesShared.test.ts` (`embedIssueAsync` had no direct test file at all;
+      5 tests covering the success path and all three of its independent failure-swallowing branches).
+- [x] Removed dead code found while chasing the `functions` gap, rather than writing a test for it:
+      `routes/aitask.ts`'s two `.catch(() => {})` wrappers around `handleAiTaskDoneNotification(...)` — that
+      function already has its own internal try/catch that never rethrows, so the outer `.catch()` could never
+      fire under any real input; the two uncovered-function findings were genuinely unreachable code, not a
+      test gap, per this project's own "don't add error handling for scenarios that can't happen" convention.
+- [x] Closed the `branches` gap (92.65%→93.26%) — new `tests/lib/env.test.ts` (`lib/env.ts` had no test file;
+      9 tests covering all four `superRefine` validation branches — missing `ANTHROPIC_API_KEY`/
+      `GEMINI_API_KEY`/`AUTH_PASSWORD`, the invalid-env `process.exit(1)` path — plus the `TRUST_PROXY`/
+      `CORS_ORIGINS` transform branches; took the file from 50%/45% to 100% branch coverage, the single
+      biggest gain of this phase), `tests/lib/errors.test.ts` (production-mode message-masking branch, via
+      `vi.mock('../../lib/env.js', ...)` since `env.NODE_ENV` is a load-time singleton), `tests/lib/
+      xlsxCompat.test.ts` (both `.default`-fallback branches, via a mocked `xlsx` shape missing the top-level
+      API), and `tests/services/tokenChunker.test.ts` (the whitespace-only-window-gets-dropped branch in
+      `splitByTokenWindow`) — none of these four `lib`/`services` files had a test file before this phase.
+- [x] Verified via a full `npx vitest run --coverage`: statements 96.67%, branches 93.26%, functions 94.99%,
+      lines 97.79% — all four above `vitest.config.ts`'s thresholds with real margin, not a bare pass. 1380
+      tests passed, 1 skipped, zero regressions. `tsc --noEmit` and `eslint .` both clean (the same 3
+      pre-existing coverage-report-artifact and `documents-ai.ts` non-null-assertion warnings as before this
+      phase, nothing new). Committed as `5d12bfb`; CI run 31788624622 confirmed all three jobs (Server, Client,
+      E2E) green.
+- [x] Fixed the weekly `Security Audit` workflow (3 consecutive failing runs, all on genuinely new findings —
+      `audit-server`'s allowlist-checking `scripts/audit-check.mjs` flagged `brace-expansion`/`ip-address`/
+      `js-yaml`/`nanoid` as high-severity and NOT in the accepted-risk list; `audit-client`'s plain `npm audit
+      --audit-level=high` flagged `nanoid`/`undici`). Resolved both via plain `npm audit fix` in `server/` and
+      `client/` — semver-compatible transitive bumps only, no `--force`, no direct `package.json` version
+      changes (only the two `package-lock.json` files moved). Client fix also incidentally picked up
+      `dompurify`/`fast-uri`/`js-yaml`/`mermaid`; only `react-router`/`react-router-dom`'s moderate advisories
+      remain (below the client job's high-severity gate) — the workflow's existing accepted-risk comment
+      calling that "a v6→v7 major bump, breaking API changes" turned out to be stale: `npm audit fix` resolved
+      it inside the already-installed `^6.28.0` range, no major bump involved.
+- [x] Verified server (`tsc --noEmit`, full `vitest run --coverage`, unchanged pass/threshold results) and
+      client (`tsc --noEmit`, `npm test` — 101/101, `npm run build` — succeeds, output unchanged in shape)
+      both still pass after the dependency bump, and that `eslint .` on the client shows the identical 64
+      problems (4 pre-existing errors, 60 warnings) before and after via a `git stash`/re-run comparison — the
+      bump touched neither eslint itself nor anything it lints. Committed as `74e3567`; manually triggered
+      `workflow_dispatch` run 31789474837 confirmed both `audit-server` and `audit-client` jobs green (no need
+      to wait for the next Monday schedule to find out).
