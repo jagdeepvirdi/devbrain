@@ -3,12 +3,14 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-// Mock exec before module loads
+// Mock execFile before module loads (parser.ts calls execFile, not exec —
+// an argv array, not a shell command string, so this mock inspects `args`)
 vi.mock('node:child_process', () => ({
-  exec: vi.fn((cmd, cb) => {
+  execFile: vi.fn((_file, args, cb) => {
     // Filenames containing "nomd" simulate MarkItDown being unavailable/failing,
     // so tests can exercise the native JS fallback parsers.
-    if (cmd.includes('markitdown_bridge.py') && !cmd.includes('nomd')) {
+    const filePath = args[args.length - 1]
+    if (args.some((a: string) => a.includes('markitdown_bridge.py')) && !filePath.includes('nomd')) {
       cb(null, { stdout: 'Mocked Markdown Content' })
     } else {
       cb(new Error('Unknown command'))

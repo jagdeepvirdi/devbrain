@@ -1,12 +1,20 @@
 import fs from 'fs/promises'
 import path from 'path'
-import { exec } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { fileURLToPath } from 'node:url'
 import type { FileType } from '../../shared/types.js'
 import { aiChat } from './ai.js'
 import { loadXlsx } from '../lib/xlsxCompat.js'
 
-const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
+
+// Resolved from this file's own location, not a cwd-relative guess — devbrain.ps1/.sh
+// both `Set-Location server` before `npm run dev`/`npm start`, so the running server's
+// cwd is always server/, never the repo root. A literal 'server/scripts/...' path
+// (this function's previous form) resolved to server/server/scripts/... and always
+// failed. Matches the same fix already applied in codeIntel/parsers/pythonBridgeParser.ts.
+const SCRIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts')
 
 export type ParseResult = {
   text:     string
@@ -38,7 +46,7 @@ export const CODE_EXT_LANGUAGE: Record<string, string> = {
 
 async function parseWithMarkItDown(filePath: string): Promise<string | null> {
   try {
-    const { stdout } = await execAsync(`python server/scripts/markitdown_bridge.py "${filePath}"`)
+    const { stdout } = await execFileAsync('python', [path.join(SCRIPTS_DIR, 'markitdown_bridge.py'), filePath])
     return stdout.trim()
   } catch (err) {
     console.warn('MarkItDown conversion failed, falling back to JS parsers:', (err as Error).message)
