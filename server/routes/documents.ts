@@ -222,12 +222,20 @@ router.patch('/bulk', requireRole('member'), async (req, res) => {
 
 router.get('/components', async (req, res) => {
   const projectId = req.query.projectId as string | undefined
+  // Scopes the distinct-values list to one file_type (e.g. 'code' for the
+  // Codes tab) so its component picker/filter isn't polluted with PDF/DOCX
+  // component names from the Documents tab, which share this same column.
+  const fileType = req.query.fileType as string | undefined
+
+  const conditions = ['component IS NOT NULL']
+  const values: string[] = []
+  if (projectId) { values.push(projectId); conditions.push(`project_id = $${values.length}`) }
+  if (fileType)  { values.push(fileType);  conditions.push(`file_type = $${values.length}`) }
+
   try {
     const { rows } = await pool.query<{ component: string }>(
-      projectId
-        ? 'SELECT DISTINCT component FROM documents WHERE component IS NOT NULL AND project_id = $1 ORDER BY component'
-        : 'SELECT DISTINCT component FROM documents WHERE component IS NOT NULL ORDER BY component',
-      projectId ? [projectId] : []
+      `SELECT DISTINCT component FROM documents WHERE ${conditions.join(' AND ')} ORDER BY component`,
+      values,
     )
     res.json({ data: rows.map(r => r.component) })
   } catch (err) {

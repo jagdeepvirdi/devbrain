@@ -156,6 +156,35 @@ describe('GET /api/documents/components — distinct values for autocomplete', (
     await getHandler('/components', 'get')(req, res, () => {})
     expect(res.status).toHaveBeenCalledWith(500)
   })
+
+  it('scopes to a file_type when fileType is given (e.g. the Codes tab)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ component: 'Custom Layer' }] } as any)
+
+    const req: any = { query: { fileType: 'code' } }
+    const res = fakeRes()
+
+    await getHandler('/components', 'get')(req, res, () => {})
+
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.stringContaining('WHERE component IS NOT NULL AND file_type = $1'),
+      ['code']
+    )
+    expect(res.json).toHaveBeenCalledWith({ data: ['Custom Layer'] })
+  })
+
+  it('combines projectId and fileType scoping', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ component: 'Custom Layer' }] } as any)
+
+    const req: any = { query: { projectId: 'proj-1', fileType: 'code' } }
+    const res = fakeRes()
+
+    await getHandler('/components', 'get')(req, res, () => {})
+
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.stringContaining('WHERE component IS NOT NULL AND project_id = $1 AND file_type = $2'),
+      ['proj-1', 'code']
+    )
+  })
 })
 
 describe('PATCH /api/documents/:id — component is an updatable field', () => {

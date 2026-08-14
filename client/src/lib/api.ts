@@ -556,8 +556,13 @@ export const documentsApi = {
   patch: (id: string, body: { title?: string; tags?: string[]; component?: string | null; projectId?: string | null }) =>
     request<DocDetail>(`/documents/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
 
-  components: (projectId?: string) =>
-    request<string[]>(`/documents/components${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+  components: (projectId?: string, fileType?: string) => {
+    const qs = new URLSearchParams()
+    if (projectId) qs.set('projectId', projectId)
+    if (fileType) qs.set('fileType', fileType)
+    const q = qs.toString()
+    return request<string[]>(`/documents/components${q ? `?${q}` : ''}`)
+  },
 
   chunkContext: (documentId: string, chunkIndex: number) =>
     request<{ chunkIndex: number; chunks: { chunkIndex: number; content: string }[] }>(

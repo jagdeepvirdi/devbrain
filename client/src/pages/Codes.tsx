@@ -4,6 +4,8 @@ import { documentsApi, type DocMeta, type DocDetail, type EmbeddingStatus } from
 import { useProjectStore } from '../store/projectStore'
 import { useToast } from '../components/Toast'
 import { SkeletonRow } from '../components/Skeleton'
+import { FilterBar, initialFilterState } from '../components/FilterBar'
+import type { FilterState } from '../components/FilterBar'
 import { LinkedItems } from '../components/LinkedItems'
 import { MermaidDiagram } from '../components/MermaidDiagram'
 import { langColor } from '../lib/language'
@@ -42,18 +44,30 @@ const PAGE = 25
 
 // ── Upload strip ──────────────────────────────────────────────────────────
 
-function CodeUploadStrip({ projectId, onDone }: { projectId: string | undefined; onDone: () => void }) {
+function CodeUploadStrip({ projectId, existingComponents, onDone }: { projectId: string | undefined; existingComponents: string[]; onDone: () => void }) {
   const { toast } = useToast()
   const [dragging,  setDragging]  = useState(false)
   const [uploading, setUploading] = useState<string | null>(null)
+  const [tagInput,  setTagInput]  = useState('')
+  const [tags,      setTags]      = useState<string[]>([])
+  const [component, setComponent] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+
+  function addTag() {
+    const t = tagInput.trim().replace(/,/g, '')
+    if (!t || tags.includes(t)) { setTagInput(''); return }
+    setTags(prev => [...prev, t])
+    setTagInput('')
+  }
 
   async function handleFiles(files: FileList) {
     const list = Array.from(files)
     for (const file of list) {
       setUploading(file.name)
       try {
-        await documentsApi.upload(file, projectId, ['code'])
+        // 'code' stays first and mandatory (Codes tab identity), any
+        // user-typed tags are additional, same as Documents' DropZone.
+        await documentsApi.upload(file, projectId, ['code', ...tags], component.trim() || undefined)
       } catch (err) {
         const e = err as Error & { existingId?: string }
         toast(e.existingId ? `"${file.name}" already tracked` : e.message, 'error')
@@ -64,32 +78,65 @@ function CodeUploadStrip({ projectId, onDone }: { projectId: string | undefined;
   }
 
   return (
-    <div
-      onDragOver={e => { e.preventDefault(); setDragging(true) }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={e => {
-        e.preventDefault(); setDragging(false)
-        if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files)
-      }}
-      onClick={() => fileRef.current?.click()}
-      style={{
-        margin: '0 24px', padding: '14px 18px', borderRadius: 8,
-        border: `1.5px dashed ${dragging ? 'var(--accent)' : 'var(--line-2)'}`,
-        background: dragging ? 'var(--accent-dim)' : 'var(--bg-elev)',
-        display: 'flex', alignItems: 'center', gap: 10, cursor: 'default',
-      }}
-    >
-      <span style={{ fontSize: 16, color: 'var(--fg-4)' }}>{'</>'}</span>
-      <span style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>
-        {uploading ? `Uploading ${uploading}…` : 'Drop source files here, or click to browse — .ts, .py, .dart, .go, .rs, .java, .rb, .php, .swift, .c/.cpp, .cs, .sh, .ps1, and more'}
-      </span>
-      <input
-        ref={fileRef}
-        type="file"
-        multiple
-        hidden
-        onChange={e => { if (e.target.files?.length) handleFiles(e.target.files) }}
-      />
+    <div style={{ margin: '0 24px' }}>
+      <div
+        onDragOver={e => { e.preventDefault(); setDragging(true) }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={e => {
+          e.preventDefault(); setDragging(false)
+          if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files)
+        }}
+        onClick={() => fileRef.current?.click()}
+        style={{
+          padding: '14px 18px', borderRadius: 8,
+          border: `1.5px dashed ${dragging ? 'var(--accent)' : 'var(--line-2)'}`,
+          background: dragging ? 'var(--accent-dim)' : 'var(--bg-elev)',
+          display: 'flex', alignItems: 'center', gap: 10, cursor: 'default',
+        }}
+      >
+        <span style={{ fontSize: 16, color: 'var(--fg-4)' }}>{'</>'}</span>
+        <span style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>
+          {uploading ? `Uploading ${uploading}…` : 'Drop source files here, or click to browse — .ts, .py, .dart, .go, .rs, .java, .rb, .php, .swift, .c/.cpp, .cs, .sh, .ps1, and more'}
+        </span>
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          hidden
+          onChange={e => { if (e.target.files?.length) handleFiles(e.target.files) }}
+        />
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input
+          value={tagInput}
+          onChange={e => setTagInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && addTag()}
+          placeholder="Add extra tags before uploading (optional)…"
+          style={{ width: 260, padding: '6px 10px', background: 'var(--bg-elev-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius)', fontSize: 12.5, color: 'var(--fg)' }}
+        />
+        {tags.map(t => (
+          <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 4, background: 'var(--bg-elev-2)', border: '1px solid var(--line-2)', fontSize: 11, color: 'var(--fg-2)' }}>
+            #{t}
+            <button onClick={() => setTags(prev => prev.filter(x => x !== t))} style={{ color: 'var(--fg-3)' }}>×</button>
+          </span>
+        ))}
+        <input
+          list="code-component-options"
+          value={component}
+          onChange={e => setComponent(e.target.value)}
+          placeholder="Component (e.g. Custom Layer - SAP)…"
+          style={{ width: 260, padding: '6px 10px', background: 'var(--bg-elev-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius)', fontSize: 12.5, color: 'var(--fg)' }}
+        />
+        <datalist id="code-component-options">
+          {existingComponents.map(c => <option key={c} value={c} />)}
+        </datalist>
+        {component && (
+          <button onClick={() => setComponent('')} style={{ color: 'var(--fg-3)', fontSize: 11 }} title="Clear component">
+            × clear
+          </button>
+        )}
+      </div>
     </div>
   )
 }
@@ -204,6 +251,11 @@ function CodePreviewPanel({ docId, onClose, onReembedSuccess, onNavigate }: { do
         {doc?.language && (
           <span style={{ height: 20, padding: '0 6px', borderRadius: 4, fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-mono)', color: langColor(doc.language), background: 'var(--bg-elev-2)', border: `1px solid ${langColor(doc.language)}40`, display: 'inline-flex', alignItems: 'center' }}>
             {doc.language}
+          </span>
+        )}
+        {doc?.component && (
+          <span style={{ height: 20, padding: '0 7px', borderRadius: 10, fontSize: 10.5, fontWeight: 600, color: 'var(--accent-2)', background: 'var(--accent-dim)', display: 'inline-flex', alignItems: 'center' }}>
+            {doc.component}
           </span>
         )}
         <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>
@@ -538,17 +590,51 @@ export function CodesPage() {
   const [loading,    setLoading]    = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [search,     setSearch]     = useState('')
+  const [filters,    setFilters]    = useState<FilterState>(initialFilterState)
   const [selected,   setSelected]   = useState<string | null>(() => searchParams.get('open'))
   const [deleting,   setDeleting]   = useState<DocMeta | null>(null)
   const [showOverviewModal, setShowOverviewModal] = useState(false)
   const [showDuplicatesModal, setShowDuplicatesModal] = useState(false)
 
+  const [selectedIds,   setSelectedIds]   = useState<Set<string>>(new Set())
+  const [bulkWorking,   setBulkWorking]   = useState(false)
+  const [confirmBulkDel, setConfirmBulkDel] = useState(false)
+  const [componentOptions, setComponentOptions] = useState<string[]>([])
+  const headerCheckboxRef = useRef<HTMLInputElement>(null)
+
+  // Scoped to file_type='code' so this list (and the datalist it feeds in
+  // CodeUploadStrip/FilterBar) never mixes in Documents' PDF/DOCX components.
+  const refreshComponentOptions = useCallback(() => {
+    documentsApi.components(selectedId ?? undefined, 'code').then(setComponentOptions).catch(() => {})
+  }, [selectedId])
+
+  useEffect(() => {
+    refreshComponentOptions()
+  }, [refreshComponentOptions])
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }, [])
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds(prev => prev.size === docs.length ? new Set() : new Set(docs.map(d => d.id)))
+  }, [docs])
+
   const load = useCallback(async (offset: number, append: boolean) => {
-    if (!append) setLoading(true); else setLoadingMore(true)
+    if (!append) { setLoading(true); setSelectedIds(new Set()) }
+    else setLoadingMore(true)
     try {
       const result = await documentsApi.list({
         projectId: selectedId ?? undefined,
         fileType:  ['code'],
+        tags:      filters.tags.length > 0 ? filters.tags : undefined,
+        component: filters.component.length > 0 ? filters.component : undefined,
+        dateFrom:  filters.dateFrom || undefined,
+        dateTo:    filters.dateTo || undefined,
         q:         search.trim() || undefined,
         limit:     PAGE,
         offset,
@@ -562,7 +648,7 @@ export function CodesPage() {
       setLoading(false)
       setLoadingMore(false)
     }
-  }, [selectedId, search, toast])
+  }, [selectedId, filters, search, toast])
 
   useEffect(() => {
     const timer = setTimeout(() => load(0, false), 150)
@@ -580,6 +666,68 @@ export function CodesPage() {
       toast((err as Error).message, 'error')
     }
   }
+
+  async function handleBulkDelete() {
+    setBulkWorking(true)
+    try {
+      await documentsApi.bulk([...selectedIds], 'delete')
+      const count = selectedIds.size
+      setDocs(prev => prev.filter(d => !selectedIds.has(d.id)))
+      setTotal(t => t - count)
+      if (selected && selectedIds.has(selected)) setSelected(null)
+      toast(`Removed ${count} file${count !== 1 ? 's' : ''}`, 'success')
+      setSelectedIds(new Set())
+    } catch {
+      toast('Bulk remove failed', 'error')
+    } finally {
+      setBulkWorking(false)
+      setConfirmBulkDel(false)
+    }
+  }
+
+  async function handleBulkTag(tag: string) {
+    if (!tag.trim()) return
+    setBulkWorking(true)
+    try {
+      await documentsApi.bulk([...selectedIds], 'tag', tag.trim())
+      setDocs(prev => prev.map(d => {
+        if (selectedIds.has(d.id)) {
+          const newTags = d.tags.includes(tag.trim()) ? d.tags : [...d.tags, tag.trim()]
+          return { ...d, tags: newTags }
+        }
+        return d
+      }))
+      toast(`Tagged ${selectedIds.size} file${selectedIds.size !== 1 ? 's' : ''}`, 'success')
+      setSelectedIds(new Set())
+    } catch {
+      toast('Bulk tagging failed', 'error')
+    } finally {
+      setBulkWorking(false)
+    }
+  }
+
+  async function handleBulkComponent(component: string) {
+    const value = component.trim()
+    if (!value) return
+    setBulkWorking(true)
+    try {
+      await documentsApi.bulk([...selectedIds], 'component', value)
+      setDocs(prev => prev.map(d => selectedIds.has(d.id) ? { ...d, component: value } : d))
+      toast(`Set component on ${selectedIds.size} file${selectedIds.size !== 1 ? 's' : ''}`, 'success')
+      setSelectedIds(new Set())
+      refreshComponentOptions()
+    } catch {
+      toast('Bulk component update failed', 'error')
+    } finally {
+      setBulkWorking(false)
+    }
+  }
+
+  useEffect(() => {
+    if (headerCheckboxRef.current) {
+      headerCheckboxRef.current.indeterminate = selectedIds.size > 0 && selectedIds.size < docs.length
+    }
+  }, [selectedIds, docs])
 
   return (
     <>
@@ -624,13 +772,22 @@ export function CodesPage() {
         />
       )}
 
+      <FilterBar entityType="codes" filters={filters} onChange={setFilters} />
+
       <div style={{ paddingTop: 14 }}>
-        <CodeUploadStrip projectId={selectedId ?? undefined} onDone={() => load(0, false)} />
+        <CodeUploadStrip projectId={selectedId ?? undefined} existingComponents={componentOptions} onDone={() => { load(0, false); refreshComponentOptions() }} />
       </div>
 
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden', marginTop: 16 }}>
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 100px 90px 80px 80px', gap: 12, padding: '8px 18px', borderBottom: '1px solid var(--line)', fontSize: 10.5, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '.07em', fontWeight: 600, position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 1 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '24px 32px 1fr 100px 90px 80px 80px', gap: 12, padding: '8px 18px', borderBottom: '1px solid var(--line)', fontSize: 10.5, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '.07em', fontWeight: 600, position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 1, alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              ref={headerCheckboxRef}
+              checked={docs.length > 0 && selectedIds.size === docs.length}
+              onChange={toggleSelectAll}
+              style={{ accentColor: 'var(--accent)', cursor: 'default', width: 14, height: 14 }}
+            />
             <span />
             <span>File</span>
             <span>Language</span>
@@ -639,7 +796,7 @@ export function CodesPage() {
             <span>Date</span>
           </div>
 
-          {loading && [1, 2, 3, 4, 5].map(i => <SkeletonRow key={i} cols={[7, 220, 70, 60, 70, 70]} />)}
+          {loading && [1, 2, 3, 4, 5].map(i => <SkeletonRow key={i} cols={[14, 7, 220, 70, 60, 70, 70]} />)}
 
           {!loading && docs.length === 0 && (
             <div style={{ padding: '48px 18px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, textAlign: 'center' }}>
@@ -653,18 +810,29 @@ export function CodesPage() {
 
           {docs.map(doc => {
             const isSel = selected === doc.id
+            const isChecked = selectedIds.has(doc.id)
             return (
               <div
                 key={doc.id}
                 onClick={() => { const next = isSel ? null : doc.id; setSelected(next); setSearchParams(next ? { open: next } : {}, { replace: true }) }}
+                className={`bulk-select-row ${isChecked ? 'bulk-select-row-selected' : ''} ${selectedIds.size > 0 ? 'bulk-select-has-selection' : ''}`}
                 style={{
-                  display: 'grid', gridTemplateColumns: '32px 1fr 100px 90px 80px 80px',
+                  display: 'grid', gridTemplateColumns: '24px 32px 1fr 100px 90px 80px 80px',
                   gap: 12, padding: '9px 18px',
                   borderBottom: '1px solid var(--line)',
                   background: isSel ? 'var(--accent-dim)' : 'transparent',
                   cursor: 'default', alignItems: 'center',
                 }}
               >
+                <input
+                  type="checkbox"
+                  className="bulk-select-checkbox"
+                  checked={isChecked}
+                  onChange={e => { e.stopPropagation(); toggleSelect(doc.id) }}
+                  onClick={e => e.stopPropagation()}
+                  style={{ accentColor: 'var(--accent)', cursor: 'default', width: 14, height: 14 }}
+                />
+
                 <span style={{ width: 7, height: 7, borderRadius: '50%', background: doc.project_color ?? 'var(--fg-4)', display: 'inline-block', margin: 'auto' }} />
 
                 <div style={{ minWidth: 0 }}>
@@ -747,6 +915,69 @@ export function CodesPage() {
               <button onClick={() => setDeleting(null)} style={{ height: 28, padding: '0 16px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-2)', fontSize: 12.5 }}>Cancel</button>
               <button onClick={() => handleDelete(deleting)} style={{ height: 28, padding: '0 16px', borderRadius: 'var(--radius)', border: 'none', background: '#F05A5A', color: 'white', fontSize: 12.5 }}>Remove</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {selectedIds.size > 0 && (
+        <div style={{
+          position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+          background: 'var(--bg-elev-2)', border: '1px solid var(--accent-line)', borderRadius: 10,
+          padding: '10px 18px', display: 'flex', alignItems: 'center', gap: 12,
+          boxShadow: '0 10px 30px rgba(0,0,0,0.5)', zIndex: 100, animation: 'modal-in 0.15s ease',
+        }}>
+          <span style={{ fontSize: '12.5px', color: 'var(--fg-2)', fontWeight: 500, marginRight: 6 }}>
+            {selectedIds.size} selected
+          </span>
+
+          <div style={{ display: 'flex', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg-elev)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 8px' }}>
+              <input
+                placeholder="Add tag..."
+                onKeyDown={e => {
+                  if (e.key === 'Enter') { handleBulkTag(e.currentTarget.value); e.currentTarget.value = '' }
+                }}
+                style={{ fontSize: '11.5px', color: 'var(--fg)', width: 85, background: 'none', border: 'none', outline: 'none' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg-elev)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 8px' }}>
+              <input
+                list="code-component-options"
+                placeholder="Set component..."
+                onKeyDown={e => {
+                  if (e.key === 'Enter') { handleBulkComponent(e.currentTarget.value); e.currentTarget.value = '' }
+                }}
+                style={{ fontSize: '11.5px', color: 'var(--fg)', width: 105, background: 'none', border: 'none', outline: 'none' }}
+              />
+            </div>
+
+            {!confirmBulkDel ? (
+              <button
+                onClick={() => setConfirmBulkDel(true)}
+                disabled={bulkWorking}
+                style={{ fontSize: '11.5px', padding: '4px 12px', borderRadius: 6, border: '1px solid rgba(239,68,68,.4)', background: 'rgba(239,68,68,.08)', color: '#EF4444' }}
+              >
+                Remove
+              </button>
+            ) : (
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={bulkWorking}
+                  style={{ fontSize: '11.5px', padding: '4px 12px', borderRadius: 6, border: 'none', background: '#EF4444', color: 'white' }}
+                >
+                  {bulkWorking ? 'Removing…' : 'Confirm'}
+                </button>
+                <button
+                  onClick={() => setConfirmBulkDel(false)}
+                  disabled={bulkWorking}
+                  style={{ fontSize: '11.5px', padding: '4px 12px', borderRadius: 6, border: '1px solid var(--line)', background: 'var(--bg-elev)', color: 'var(--fg-3)' }}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

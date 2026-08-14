@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { FilterBar, initialFilterState } from './FilterBar'
 import type { FilterState } from './FilterBar'
+import { documentsApi } from '../lib/api'
 
 vi.mock('../store/projectStore', () => ({
   useProjectStore: () => ({ projects: [], selectedId: undefined }),
@@ -74,5 +75,40 @@ describe('FilterBar — documents entity type', () => {
 
     expect(screen.queryByText('Status')).not.toBeInTheDocument()
     expect(screen.queryByText('Priority')).not.toBeInTheDocument()
+  })
+})
+
+describe('FilterBar — codes entity type', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('shows Component (and Tags) but omits File Type, Status, and Priority — those don\'t apply to code files', async () => {
+    const onChange = vi.fn()
+    render(<FilterBar entityType="codes" filters={initialFilterState} onChange={onChange} />)
+
+    fireEvent.click(screen.getByText('Filters'))
+
+    expect(await screen.findByText('Component')).toBeInTheDocument()
+    expect(screen.getByText('Tags')).toBeInTheDocument()
+    expect(screen.queryByText('File Type')).not.toBeInTheDocument()
+    expect(screen.queryByText('Status')).not.toBeInTheDocument()
+    expect(screen.queryByText('Priority')).not.toBeInTheDocument()
+  })
+
+  it('requests components scoped to file_type=code, not the mixed Documents component list', () => {
+    const onChange = vi.fn()
+    render(<FilterBar entityType="codes" filters={initialFilterState} onChange={onChange} />)
+
+    expect(documentsApi.components).toHaveBeenCalledWith(undefined, 'code')
+  })
+
+  it('toggling a component filter updates state the same way as Documents', async () => {
+    vi.mocked(documentsApi.components).mockResolvedValue(['Custom Layer'])
+    const onChange = vi.fn()
+    render(<FilterBar entityType="codes" filters={initialFilterState} onChange={onChange} />)
+
+    fireEvent.click(screen.getByText('Filters'))
+    fireEvent.click(await screen.findByText('Custom Layer'))
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ component: ['Custom Layer'] }))
   })
 })

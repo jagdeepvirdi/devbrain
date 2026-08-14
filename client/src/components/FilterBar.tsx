@@ -27,7 +27,7 @@ export const initialFilterState: FilterState = {
 }
 
 interface FilterBarProps {
-  entityType: 'issues' | 'documents'
+  entityType: 'issues' | 'documents' | 'codes'
   filters: FilterState
   onChange: (filters: FilterState) => void
 }
@@ -46,10 +46,13 @@ export function FilterBar({ entityType, filters, onChange }: FilterBarProps) {
   // Tag input state
   const [tagInput, setTagInput] = useState('')
 
-  // Load distinct component values for the current project scope (documents only)
+  // Load distinct component values for the current project scope. 'codes'
+  // scopes to file_type='code' so the Codes tab's component list isn't
+  // polluted with PDF/DOCX component names — they share the same underlying
+  // `documents` table/column, just a different file_type.
   useEffect(() => {
-    if (entityType !== 'documents') return
-    documentsApi.components(selectedId ?? undefined)
+    if (entityType !== 'documents' && entityType !== 'codes') return
+    documentsApi.components(selectedId ?? undefined, entityType === 'codes' ? 'code' : undefined)
       .then(setComponentOptions)
       .catch(() => setComponentOptions([]))
   }, [entityType, selectedId])
@@ -432,8 +435,8 @@ export function FilterBar({ entityType, filters, onChange }: FilterBarProps) {
             </div>
           )}
 
-          {/* Component (Documents only) */}
-          {entityType === 'documents' && (
+          {/* Component (Documents and Codes) */}
+          {(entityType === 'documents' || entityType === 'codes') && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Component</span>
               {componentOptions.length === 0 ? (
