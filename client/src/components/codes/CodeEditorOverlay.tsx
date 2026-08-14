@@ -3,6 +3,7 @@ import { documentsApi, type DocDetail } from '../../lib/api'
 import { useToast } from '../Toast'
 import { langColor } from '../../lib/language'
 import { CodeEditor } from './CodeEditor'
+import { toggleListPrefix, type ListKind } from './listFormatting'
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
 
 const AUTOSAVE_DEBOUNCE_MS = 2500
@@ -66,6 +67,14 @@ export function CodeEditorOverlay({ doc, onClose, onSaved, startInEditMode }: Co
     setEditing(true)
     // Editor is already mounted (read-only) — focus it once it becomes editable.
     setTimeout(() => editorRef.current?.view?.focus(), 0)
+  }
+
+  const isNote = doc.file_type === 'note'
+
+  function handleToggleList(kind: ListKind) {
+    const view = editorRef.current?.view
+    if (!view) return
+    toggleListPrefix(view, kind)
   }
 
   // Same focus as startEditing(), for the case where we mounted already-editable.
@@ -206,6 +215,25 @@ export function CodeEditorOverlay({ doc, onClose, onSaved, startInEditMode }: Co
         )}
       </div>
 
+      {isNote && editing && (
+        <div style={{ padding: '6px 18px', borderBottom: '1px solid var(--line)', display: 'flex', gap: 6, flexShrink: 0 }}>
+          <button
+            onClick={() => handleToggleList('bullet')}
+            title="Toggle bullet list"
+            style={{ fontSize: 11.5, padding: '3px 10px', borderRadius: 5, border: '1px solid var(--accent-line)', background: 'var(--accent-dim)', color: 'var(--accent-2)', cursor: 'default' }}
+          >
+            • Bullet
+          </button>
+          <button
+            onClick={() => handleToggleList('numbered')}
+            title="Toggle numbered list"
+            style={{ fontSize: 11.5, padding: '3px 10px', borderRadius: 5, border: '1px solid var(--accent-line)', background: 'var(--accent-dim)', color: 'var(--accent-2)', cursor: 'default' }}
+          >
+            1. Numbered
+          </button>
+        </div>
+      )}
+
       {draftBanner && (
         <div style={{ padding: '8px 18px', borderBottom: '1px solid var(--line)', background: 'rgba(245,158,11,.08)', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
           <span style={{ fontSize: 11.5, color: '#F59E0B', flex: 1 }}>
@@ -221,7 +249,7 @@ export function CodeEditorOverlay({ doc, onClose, onSaved, startInEditMode }: Co
       )}
 
       <div style={{ flex: 1, minHeight: 0 }}>
-        <CodeEditor ref={editorRef} value={value} language={doc.language} onChange={setValue} readOnly={!editing} />
+        <CodeEditor ref={editorRef} value={value} language={doc.language} onChange={setValue} readOnly={!editing} enableListEditing={isNote} />
       </div>
 
       {confirmClose && (

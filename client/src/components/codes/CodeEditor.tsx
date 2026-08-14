@@ -4,6 +4,7 @@ import { languages } from '@codemirror/language-data'
 import { LanguageDescription, type LanguageSupport } from '@codemirror/language'
 import { githubDarkInit } from '@uiw/codemirror-theme-github'
 import type { Extension } from '@codemirror/state'
+import { listEnterKeymap } from './listFormatting'
 
 // DevBrain's internal language codes (see LANGUAGE_COLOR in Codes.tsx) mapped to the
 // display names @codemirror/language-data matches against. Covers everything in that
@@ -46,10 +47,13 @@ type CodeEditorProps = {
   onChange:   (value: string) => void
   readOnly?:  boolean
   autoFocus?: boolean
+  // Note-only bullet/numbered list Enter-key continuation (see listFormatting.ts) — off by
+  // default so the Codes tab's plain code editing is unaffected.
+  enableListEditing?: boolean
 }
 
 export const CodeEditor = forwardRef<ReactCodeMirrorRef, CodeEditorProps>(function CodeEditor(
-  { value, language, filename, onChange, readOnly, autoFocus }, ref
+  { value, language, filename, onChange, readOnly, autoFocus, enableListEditing }, ref
 ) {
   const [langExt, setLangExt] = useState<LanguageSupport | null>(null)
 
@@ -60,7 +64,12 @@ export const CodeEditor = forwardRef<ReactCodeMirrorRef, CodeEditorProps>(functi
     return () => { cancelled = true }
   }, [language, filename])
 
-  const extensions = useMemo<Extension[]>(() => (langExt ? [langExt] : []), [langExt])
+  const extensions = useMemo<Extension[]>(() => {
+    const exts: Extension[] = []
+    if (langExt) exts.push(langExt)
+    if (enableListEditing) exts.push(listEnterKeymap)
+    return exts
+  }, [langExt, enableListEditing])
 
   return (
     <CodeMirror

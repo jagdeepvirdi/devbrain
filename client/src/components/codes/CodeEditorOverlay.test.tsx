@@ -12,6 +12,11 @@ vi.mock('../../lib/api', () => ({
   documentsApi: { updateContentText: (...args: unknown[]) => updateContentTextMock(...args) },
 }))
 
+const toggleListPrefixMock = vi.fn()
+vi.mock('./listFormatting', () => ({
+  toggleListPrefix: (...args: unknown[]) => toggleListPrefixMock(...args),
+}))
+
 // Stub the real CodeMirror-backed editor with a plain textarea so these tests exercise
 // CodeEditorOverlay's own logic (dirty tracking, save, drafts, keyboard shortcuts, and the
 // view/edit mode switch) without mounting CodeMirror/language-data in jsdom. `readOnly` is
@@ -35,6 +40,11 @@ const baseDoc: DocDetail = {
   explanation_stale: false, diagram_stale: false, project_name: null, project_color: null,
   content: 'const a = 1', explanation: null, diagram: null,
   source_document_id: null, linked_explanation_id: null, linked_explanation_title: null,
+}
+
+const noteDoc: DocDetail = {
+  ...baseDoc, id: 'note-1', title: 'Scratchpad', file_type: 'note', language: 'markdown', source: 'note',
+  content: '- foo',
 }
 
 function draftKey(id: string) { return `devbrain:draft:${id}` }
@@ -211,5 +221,31 @@ describe('CodeEditorOverlay', () => {
     await vi.advanceTimersByTimeAsync(5000)
 
     expect(updateContentTextMock).not.toHaveBeenCalled()
+  })
+
+  it('does not show the list toolbar for non-note docs, even in edit mode', () => {
+    render(<CodeEditorOverlay doc={baseDoc} onClose={vi.fn()} onSaved={vi.fn()} />)
+    enterEditMode()
+    expect(screen.queryByTitle('Toggle bullet list')).not.toBeInTheDocument()
+    expect(screen.queryByTitle('Toggle numbered list')).not.toBeInTheDocument()
+  })
+
+  it('shows the list toolbar for notes only once in edit mode', () => {
+    render(<CodeEditorOverlay doc={noteDoc} onClose={vi.fn()} onSaved={vi.fn()} />)
+    expect(screen.queryByTitle('Toggle bullet list')).not.toBeInTheDocument()
+
+    enterEditMode()
+    expect(screen.getByTitle('Toggle bullet list')).toBeInTheDocument()
+    expect(screen.getByTitle('Toggle numbered list')).toBeInTheDocument()
+  })
+
+  it('the toolbar buttons dispatch the matching list toggle against the live editor view', () => {
+    render(<CodeEditorOverlay doc={noteDoc} onClose={vi.fn()} onSaved={vi.fn()} startInEditMode />)
+
+    fireEvent.click(screen.getByTitle('Toggle bullet list'))
+    expect(toggleListPrefixMock).toHaveBeenLastCalledWith(expect.anything(), 'bullet')
+
+    fireEvent.click(screen.getByTitle('Toggle numbered list'))
+    expect(toggleListPrefixMock).toHaveBeenLastCalledWith(expect.anything(), 'numbered')
   })
 })
