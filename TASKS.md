@@ -389,3 +389,511 @@ design, not oversight)*
 - [ ] **No SAML/OIDC** — only LDAP/AD and local bcrypt; modern B2B buyers expect SSO via SAML/OIDC, not just LDAP.
 - [ ] **No formal privacy/ToS/DPA** — standard procurement blockers for any B2B sale; irrelevant for personal use, required the moment this is pitched externally.
 - [ ] **Cloud-inference cost model undefined** — the "$0/month" pitch (`CLAUDE.md` Cost Summary) only holds for local Ollama on your own GPU; the moment `AI_PROVIDER=claude`/`gemini` becomes the default for other users, "zero cost" becomes "per-token cost per user," and nothing in the app tracks or caps that spend today.
+
+---
+
+## Phase 40 — Code Intelligence & Knowledge Graph Engine (2026-08-13)
+
+> Requested after a ChatGPT/Gemini-authored spec proposed a standalone Python `tree-sitter` + `sqlglot` +
+> KuzuDB indexer for statically parsing a multi-language codebase (Python/Perl/Bash/Postgres+Oracle SQL) into
+> a call/reference graph, to power "which functions call this," "what does this stored procedure touch," and
+> LLM-ready context export for refactoring. Goal: a real understanding of *code structure* (calls, imports,
+> table reads/writes, impact radius) that goes beyond what DevBrain currently does — chunking code into RAG
+> embeddings (`codeChunker.ts`) and free-text search. Not restricted to one project or one language family:
+> **primary pilot target is NT Billing** (`ntbilling` project — Perl/Bash/Oracle+Postgres SQL, matches the
+> spec's exact language list), but the engine is a per-language pluggable parser registry from day one so any
+> tracked project (and future languages) can be indexed the same way.
+>
+> The original spec assumed a pure-Python implementation (`requirements.txt`, `python -m code_intelligence.cli`,
+> KuzuDB/SQLite). DevBrain's server is 100% Node/TypeScript with **zero Python in the runtime** and a single
+> Postgres+pgvector datastore as a stated architectural principle — so this phase re-shapes the spec onto
+> existing DevBrain infrastructure rather than following it verbatim. Confirmed with the user 2026-08-13:
+> (1) target is all projects, extensible beyond Perl/Oracle/Python, NT Billing first; (2) Perl + SQL parsing
+> via a Python subprocess bridge; (3) graph stored in Postgres tables, not a new embedded DB engine.
+
+### Decided
+
+- **Reuse, don't reinvent, for Python/Bash/TS/JS**: `server/services/codeChunker.ts` already loads
+  `web-tree-sitter` + `tree-sitter-wasms` grammars for `python`, `bash`, `typescript`, `javascript` (and 12
+  others) — this phase's parsers for those languages call into the *same* loaded-`Language`/`Parser` machinery
+  (extracted into a shared helper, not copy-pasted) to walk the AST for `function_definition`/`class_definition`/
+  `call`/`import`-shaped nodes, rather than adding a second tree-sitter binding path. Zero new npm dependency for
+  these four languages.
+- **Perl + SQL (Postgres/Oracle) via a Python subprocess bridge**, following the *exact* existing precedent of
+  `parseWithMarkItDown()` in `server/services/parser.ts` (`execAsync('python server/scripts/markitdown_bridge.py
+  ...')`, try/catch → `null` on failure, `console.warn`, caller falls back gracefully) — this is already
+  DevBrain's established pattern for "optional local Python dependency, JS-side degrades cleanly if it's
+  missing" (see Known Risks: "Python environment missing → JS fallbacks... markitdown preferred but optional").
+  Two new scripts alongside the existing `markitdown_bridge.py`/`apprise_client.py`/`digest_scheduler.py`:
+  - `server/scripts/sql_bridge.py` — uses `sqlglot` (already the right tool for dialect-aware Postgres *and*
+    Oracle parsing; no viable Node equivalent exists at comparable quality) to extract tables read/written and
+    `CREATE OR REPLACE PROCEDURE/FUNCTION` definitions. `sqlglot` added to the existing shared
+    `server/scripts/requirements.txt`.
+  - `server/scripts/perl_bridge.py` — regex/heuristic extraction (`sub <name>`, `use`/`require`, DBI
+    handles, embedded SQL strings) rather than shelling out to real Perl + the CPAN `PPI` module — `PPI` is
+    itself a Perl library, so using it would add a *third* runtime dependency (Perl) on top of Node+Python for
+    marginal v1 gain. Noted as a future upgrade path (either real `PPI` via a Perl subprocess, or
+    `tree-sitter-perl` if/when a prebuilt wasm grammar becomes available), not blocking v1.
+  - Both scripts communicate via a single JSON object on stdout (entities + relationships, matching the Unified
+    Entity/Relationship schema below) — one process spawn per file, same cost model `markitdown_bridge.py`
+    already accepts.
+  - `.pl`/`.pm` → `perl`, `.sql` → `sql`/`postgres`, `.spc`/`.bdy`/`.pks`/`.pkb` → `plsql`/`oracle` extension
+    mapping **already exists** in `parser.ts`'s `CODE_EXT_LANGUAGE` (added ahead of this phase, presumably
+    anticipating NT Billing) — reused as-is for dispatch, not redefined.
+- **Storage: new Postgres tables, not KuzuDB/SQLite.** `server/db/migrations/add_code_intel_graph.ts` (mirroring
+  the existing migration + `schema.sql`-mirror convention) adds:
+  - `code_nodes (id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id) ON DELETE CASCADE, file_path TEXT,
+    language TEXT, entity_type TEXT, name TEXT, signature TEXT, docstring TEXT, start_line INT, end_line INT,
+    content_hash TEXT, updated_at TIMESTAMPTZ)` — `id` is `file_path::entity_type::entity_name` per the
+    original spec's Unified Entity Schema.
+  - `code_edges (source_id TEXT REFERENCES code_nodes(id) ON DELETE CASCADE, target_id TEXT REFERENCES
+    code_nodes(id) ON DELETE CASCADE, relationship_type TEXT, PRIMARY KEY (source_id, target_id,
+    relationship_type))` — `relationship_type` enum: `CALLS | IMPORTS | READS_TABLE | WRITES_TABLE | INCLUDES`.
+  - Indexes on `code_nodes(project_id)`, `code_nodes(file_path)`, `code_edges(target_id)` (for fast
+    caller-lookups, the most common traversal direction).
+  - `get_callers`/`get_callees` are flat indexed lookups; `get_impact_tree(entity_id, depth)` is a single
+    `WITH RECURSIVE` CTE over `code_edges` — no new query engine needed. Also unlocks future semantic code
+    search "for free" later: `code_nodes.docstring`/`signature` can be embedded into the existing pgvector
+    pipeline as a follow-up, without a second database to keep in sync.
+- **Decoupled indexing job, not request-path work** — mirrors the existing precedent of `tasks-watcher.ts`'s
+  chokidar watcher on a project's `fs_path`. Two trigger modes:
+  1. **v1 (this phase): on-demand CLI.** `server/scripts/index-code-graph.ts` (tsx-runnable, same pattern as
+     `seed.ts`), invoked as `npx tsx server/scripts/index-code-graph.ts --project ntbilling` (resolves the
+     project's existing `projects.fs_path` column — already populated/used by [[Phase 37]]'s on-disk file
+     editor) or `--dir <path>` for an arbitrary directory. Walks the tree respecting `.gitignore`-style excludes
+     (reuse the `ignore` npm package already a server dependency), dispatches each file by extension to the
+     right parser, and upserts into `code_nodes`/`code_edges`.
+  2. **Explicitly deferred, not in this phase's scope:** hooking incremental re-index into the existing
+     `fs_path` chokidar watcher for near-live graph updates. Ship the batch CLI first and prove correctness
+     before wiring it into a live watcher.
+- **API surface, no new UI yet.** `server/routes/code-intel.ts`: `GET /api/code-intel/:projectId/nodes?search=`,
+  `GET /api/code-intel/:projectId/callers/:entityId`, `.../callees/:entityId`, `.../impact/:entityId?depth=`,
+  and `.../context/:entityId` (returns the entity's own source plus signatures of immediate callers/callees as
+  Markdown — the spec's "LLM refactor context" output, implemented as an API response format rather than a
+  CLI-only feature so the client can use it later). Read-only endpoints, `requireAuth` + project-scoped like
+  every other route. A client-side graph browser/UI is **out of scope for this phase** — ship engine + API +
+  CLI, revisit UI as its own phase once the underlying data is proven useful.
+- **Not building**: KuzuDB or SQLite (superseded by the Postgres decision above); a `requirements.txt` at repo
+  root (Python deps stay scoped to the existing `server/scripts/requirements.txt`, since this is still an
+  optional bridge, not a core runtime dependency); any automated code-*modification*/refactoring — this phase
+  is read-only analysis and context export only.
+- **Column-level SQL lineage, not just table-level** — added after review 2026-08-13: table-level
+  `READS_TABLE`/`WRITES_TABLE` alone can't answer "how many columns does this touch" or "which column did this
+  value come from." `code_edges` gains a `columns TEXT[]` array (nullable — populated only for `READS_TABLE`/
+  `WRITES_TABLE` edges) from `sql_bridge.py`'s use of `sqlglot`'s column-lineage support, which walks joins/
+  CTEs/subqueries to attribute output columns back to source table+column. Lineage accuracy is capped by how
+  much schema info `sqlglot` has — see the schema-registry item below; without it, `SELECT *` and ambiguous
+  joined columns can't be fully resolved and are recorded with `columns: null` (unknown), not guessed.
+- **Schema registry, designed now so future table definitions plug in without rework** — new
+  `code_schema_tables (project_id, table_name, PRIMARY KEY (project_id, table_name))` and
+  `code_schema_columns (project_id, table_name, column_name, data_type, PRIMARY KEY (project_id, table_name,
+  column_name))` tables. Empty at ship time (this phase does not require you to supply definitions up front —
+  the SQL parser works structurally without them, just less precisely on `SELECT *`/ambiguous columns). When
+  populated later (manually, or via a follow-up DDL-file import), `index-code-graph.ts` loads the project's
+  schema and passes it to `sql_bridge.py` as `sqlglot`'s `schema=` argument, which sharpens column-lineage
+  resolution and lets `getContext`/impact-tree output flag "references unknown table/column" as a bonus
+  correctness check. No `code_nodes`/`code_edges` shape changes needed when this gets populated — it's a pure
+  accuracy upgrade to the same SQL bridge.
+- **Explicit cross-file/cross-language link-resolution pass** — added after review 2026-08-13: the original
+  per-file parser design would only produce *intra-file* structure (e.g. Perl's `perl_bridge.py` finds an
+  embedded SQL string, but never says what stored procedure it targets). Indexing is two passes:
+  1. **Pass 1 (extraction)**: every parser, per file, emits `code_nodes` plus a list of *unresolved call
+     references* — `{ fromEntityId, rawTargetName, kind: 'call' | 'sql_exec' | 'script_invocation' }` — instead
+     of only fully-formed edges. This covers ordinary function calls, Perl embedded-SQL execution (`$dbh->do(...)`
+     /`prepare(...)->execute()` targeting a procedure name), and Bash script/procedure invocations (`psql -f
+     script.sql`, `sqlplus @script.sql`, `psql -c "CALL proc(...)"`).
+  2. **Pass 2 (resolution)**, run once per indexing job after all files are parsed: for each unresolved
+     reference, look up `rawTargetName` against the full set of `code_nodes` just written (by `name`, with
+     `file_path`/`language` as tiebreakers for duplicate names), and write the resulting edge (`CALLS` for
+     ordinary/procedure calls, `INCLUDES` for script invocations). This is what actually answers "which process
+     calls this SQL procedure," across the Perl→SQL and Bash→SQL boundary, not just within one language.
+  3. **References that don't resolve are kept, not dropped** — stored in a new `code_unresolved_refs
+     (project_id, from_entity_id, raw_target_name, kind, reason)` table and surfaced in the CLI summary output
+     and a new API endpoint (`GET /api/code-intel/:projectId/unresolved`). Static analysis over legacy Perl/Bash
+     will genuinely miss some calls (dynamic dispatch, variable-built SQL, includes via a variable path) — the
+     plan is to make that visible rather than silently produce a graph that looks complete but isn't.
+
+### Tasks
+
+- [x] Scaffold `server/services/codeIntel/` — done 2026-08-13: `types.ts` (Unified Entity/Relationship types —
+      `CodeNode`/`CodeEdge`/`UnresolvedRef`/`ParseResult`, `buildNodeId()` helper, `language`/`entityType` kept
+      as plain strings on purpose so new languages/entity kinds don't need a type change), `parsers/base.ts`
+      (the `BaseParser` interface individual language parsers will implement — no language parsers themselves
+      yet, that's later Phase 40 tasks), `storage.ts` (`upsertNodes`/`upsertEdges`/`insertUnresolvedRefs`/
+      `clearProjectGraph` writes; `getCallers`/`getCallees`/`getImpactTree` reads — the latter a
+      `WITH RECURSIVE` CTE walking callers-of-callers up to a depth limit). `tsc --noEmit` and `eslint` both
+      clean.
+- [x] `server/db/migrations/add_code_intel_graph.ts` — done 2026-08-13: creates `code_nodes`, `code_edges`
+      (with `columns TEXT[]`, `relationship_type` CHECK-constrained to the 5-value vocabulary), `code_schema_tables`,
+      `code_schema_columns` (composite FK to `code_schema_tables`), `code_unresolved_refs` + indexes on
+      `code_nodes(project_id/file_path)` and `code_edges(source_id/target_id)`. Mirrored into `schema.sql`
+      after `task_tree_cache`, matching [[Phase 38]]'s `add_note_file_type.ts` convention. Run against the
+      local dev DB (`devbrain-postgres-1`), verified idempotent on a second run, and `\d` confirms all FKs/
+      CHECK constraints landed as designed.
+- [x] `parsers/treeSitterParser.ts` — done 2026-08-13. Extracted the actual grammar-loading machinery
+      (`LANGUAGE_WASM`/`loadLanguage`/`ensureInit`) out of `codeChunker.ts` into a new shared
+      `server/services/treeSitterLoader.ts` (`getParser(language)`), which `codeChunker.ts` now imports instead
+      of owning its own copy — zero behavior change, its existing 19 tests still pass unmodified.
+      `codeIntel/parsers/treeSitterParser.ts` implements `BaseParser` for `python`/`typescript`/`javascript`/
+      `bash` on top of that shared loader: a small per-language `LangConfig` table (function/class/call/import
+      node-type predicates + callee/import-target extraction) drives one generic recursive walk, rather than
+      branching per language throughout — same spirit as `codeChunker.ts`'s `BOUNDARY_RE`. Every file gets one
+      `entityType: 'script'` node representing the file itself (so top-level calls/imports outside any function
+      have somewhere to attach as `fromEntityId`, and bash `INCLUDES` edges have a target once link resolution
+      exists). Calls and imports are emitted as `UnresolvedRef`s (Pass 1 only — resolving them into real edges
+      is [[Phase 40]]'s later `linkResolver.ts` task), **not** resolved here. Language is inferred from the file
+      extension via `parser.ts`'s `CODE_EXT_LANGUAGE` (exported for this reuse, not redefined). Added
+      `'import'` to `UnresolvedRefKind` and widened `code_unresolved_refs`'s `kind` CHECK constraint to match
+      (`add_code_intel_graph.ts` updated in place with an explicit `ALTER ... DROP/ADD CONSTRAINT` step, since
+      it had already been run once this session — re-ran it, confirmed via `\d` that the wider constraint
+      landed). 9 new tests (`tests/services/codeIntel/treeSitterParser.test.ts`) covering Python function/
+      class/method extraction, docstring capture, TS import+call extraction, Bash function+command extraction,
+      unsupported-language and syntax-error fallback, and the extension-based `BaseParser` dispatch. Full suite:
+      75 files / 1242 passed + 1 skipped. `tsc --noEmit` and `eslint` both clean.
+- [x] `server/scripts/sql_bridge.py` + `sqlglot` added to `server/scripts/requirements.txt` — done 2026-08-13.
+      `python sql_bridge.py <file> --dialect postgres|oracle [--schema '<json>']`, JSON on stdout:
+      `{nodes, edges, unresolved_refs}` (the last always `[]` for now — inter-procedure `CALLS` detection is a
+      future refinement, not in scope here). Verified against real `sqlglot` installed locally (not guessed
+      from memory) — this surfaced several real bugs, all fixed and re-verified against fixture files before
+      considering this done:
+      - **sqlglot cannot reliably parse a full Oracle `IS/AS ... BEGIN ... END;` procedure body** — confirmed
+        empirically: a real `UPDATE` inside a `BEGIN` block was silently dropped from the parse tree entirely.
+        So this script never trusts sqlglot to decompose a procedure body on its own. It finds entity
+        boundaries itself — regex + BEGIN/END depth-counting for Oracle-style bodies (distinguishing a closing
+        bare `END` from a qualified `END IF`/`END LOOP`/`END CASE`, which closes an inner construct, not the
+        block), or `$$`-tag matching for Postgres-style ones — then re-splits the body into individual leaf
+        statements with its own quote/comment-aware semicolon splitter and feeds each to `sqlglot`
+        *individually*. A leaf statement that still fails to parse falls back to regex-based table-name
+        scanning for just that one statement (`columns: null`, tables-only) rather than losing the whole file.
+      - **Column-level detail deliberately avoids `sqlglot.optimizer.qualify()`** — it raised `OptimizeError`
+        on a perfectly ordinary `INSERT INTO x SELECT ... FROM y` during testing. Column attribution instead
+        reads the raw (unqualified) parse tree directly: single-table statements attribute all columns
+        unambiguously; multi-table statements attribute columns already qualified in the source
+        (`alias.column`) via the statement's own alias->table map, and — when `--schema` is supplied — also
+        resolve unqualified columns that match exactly one of the statement's tables' known columns (0 or 2+
+        matches stays unresolved, not guessed). `SELECT *` expands to a table's full column list only when
+        `--schema` names that table and exactly one table is involved.
+      - **`SELECT ... INTO local_var FROM ...` (Oracle) wraps the INTO target as an `exp.Table`** — was showing
+        up as a bogus extra table; excluded by checking `isinstance(t.parent, exp.Into)`.
+      - **Procedure parameters referenced bare in the body parse as columns** — sqlglot has no notion of
+        PL/SQL parameter scope. Parameter names are extracted from the entity's own header (paren-depth-aware
+        split, so `NUMBER(10,2)`-style type declarations don't break it) and filtered out of every column list
+        for that entity. Local `DECLARE`d variables are NOT covered by this — an acknowledged, undocumented
+        case beyond `extract_param_names()`'s reach that inflates local-variable-name pollution in rare cases.
+      - **`INSERT INTO x (a, b) VALUES (...)`'s target column list is plain `Identifier`s under a `Schema`
+        node, not `exp.Column`** — invisible to the general column scan; read separately and merged into the
+        write-table's edge.
+      - **Line-number tracking bug**: the statement splitter's `start_line` froze at the previous statement's
+        terminator instead of tracking forward past blank/comment lines to the next statement's real start —
+        fixed by only locking `start_line` on the first non-whitespace character since the last `;`.
+      - **Standalone `/` (SQL*Plus batch terminator)** — ubiquitous between `CREATE PROCEDURE`/`FUNCTION`
+        blocks in real Oracle scripts (the actual NT Billing file format) — was gluing onto the next statement
+        and breaking its parse (falling back to regex, losing column detail) or skewing its line number.
+        Now skipped as a no-op when it's the sole content of its line.
+      Verified against three hand-written fixtures (an Oracle procedure+function file with nested `IF`,
+      `SELECT INTO`, and a trailing top-level `SELECT *`; a Postgres `$$`-quoted function with a subquery and a
+      join; a plain multi-statement file with one deliberately-broken statement to confirm partial-failure
+      resilience) plus empty-file, missing-file, and invalid-`--schema` error paths — all produce correct,
+      well-formed JSON. No Node/TS code touched by this task; `pythonBridgeParser.ts` (later task) is what
+      calls this script and persists its output.
+- [x] `server/scripts/perl_bridge.py` — done 2026-08-13. `python perl_bridge.py <file>`, same
+      `{nodes, edges, unresolved_refs}` JSON-on-stdout contract as `sql_bridge.py`. No `sqlglot`/new
+      dependency — pure stdlib regex, deliberately (Perl has no realistic regex-only full parse; Phase 40
+      already chose regex/heuristic over shelling out to real Perl + CPAN's `PPI` to avoid a third language
+      runtime). Finds `sub NAME { ... }` boundaries via a quote/comment-aware brace-depth counter (mirrors
+      `sql_bridge.py`'s BEGIN/END counter, scoped to Perl's `'`/`"`/`#`); scans each sub's body (and top-level
+      gaps between subs, where `use`/`require` almost always live) for `use`/`require` (kind: `'import'`),
+      plain bareword calls not preceded by `->` and not a Perl keyword/builtin (kind: `'call'`, denylist of
+      ~60 keywords to avoid `if(...)`/`print(...)` false positives), and `->do(...)`/`->prepare(...)` DBI
+      calls with a quoted SQL argument — classified as `'sql_exec'` (targets a stored procedure, matched via
+      `EXEC`/`CALL`/anonymous-block patterns) or a direct `READS_TABLE`/`WRITES_TABLE` edge (plain DML,
+      table-only via regex, no column-level detail — an embedded string with `?` placeholders isn't a
+      complete statement a real SQL parser handles well, so this doesn't pretend AST-level precision on it).
+      No fixture-testing tool available for this one (no `sqlglot`-equivalent to cross-check against) — relied
+      on hand-written fixtures and reasoning through each match instead, which caught three real bugs before
+      calling it done:
+      - **Bareword table/column names *inside SQL string literals* were matching the plain-call scan** — e.g.
+        `"INSERT INTO audit_log (acct_id...)"` reported a false call to `audit_log`. Fixed by masking string/
+        comment contents (blanked, not removed — offsets stay valid) before the `use`/`require` and call scans
+        run; DBI extraction still reads the real, unmasked text (it needs the actual SQL content).
+      - **`for my $i (1..$x)` matched as a call to `i`** — `$` isn't a word character, so a bare `\b` word
+        boundary is satisfied right after it. Fixed with a `(?<![$@%])` negative lookbehind excluding any
+        identifier immediately preceded by a sigil.
+      - Confirmed `->method(...)` calls (including non-DBI ones like `$self->calculate_total()`) are correctly
+        excluded from plain-call detection, nested braces (hash literals, `if`/`for` blocks) don't break sub
+        boundary detection, and escaped quotes (`\"`) inside a string don't break the scanner.
+      Verified against two hand-written fixtures (a DBI-heavy one — two subs, procedure call via `EXEC`, plain
+      `INSERT`/`SELECT`/`UPDATE` via `->do`/`->prepare`, cross-sub call, module import; one testing nested
+      braces/comments/escapes/non-DBI method calls) plus empty-file, missing-file, and no-subs-at-all cases —
+      all produce correct, well-formed JSON.
+- [x] `parsers/pythonBridgeParser.ts` — done 2026-08-13. Runs `sql_bridge.py` (dialect: `plsql` language ->
+      `oracle`, else `postgres`) or `perl_bridge.py` depending on the file's `CODE_EXT_LANGUAGE`, parses the
+      JSON, and normalizes it into `CodeNode[]`/`CodeEdge[]`/`UnresolvedRef[]` — same optional-Python,
+      try/catch → `console.warn` → graceful-empty-result fallback as `parseWithMarkItDown()`.
+      **Deliberately uses `execFile` (argv array), not `exec`** like `parseWithMarkItDown()`'s existing call —
+      `exec` runs through a shell, so a file path or `--schema` JSON containing shell metacharacters
+      (`` $(...) ``, backticks, `;`) would be a real command-injection vector once string-interpolated into a
+      shell command; `execFile` never invokes a shell, so this is immune to that regardless of what characters
+      either argument contains. Pre-existing `exec()` calls elsewhere weren't touched (out of scope for this
+      task) — this is about not *introducing* the same class of issue in new code.
+      **Correction, 2026-08-13, found while researching item 9**: the script paths were originally
+      `'server/scripts/sql_bridge.py'`/`'.../perl_bridge.py'`, matching `parseWithMarkItDown()`'s existing
+      convention — but `devbrain.sh`/`.ps1` both `cd server` before `npm run dev`, and the Docker image's
+      `WORKDIR` is `/app` mapped from the `server/` directory, so the *running server*'s cwd is always
+      `server/`, never the repo root. A `'server/scripts/...'` path from that cwd resolves to
+      `server/server/scripts/...`, which doesn't exist — `parseWithMarkItDown()` almost certainly has this
+      exact bug already (out of scope to fix here; not this task's file). Fixed in this module by resolving
+      `SQL_BRIDGE`/`PERL_BRIDGE` from `pythonBridgeParser.ts`'s own file location via `import.meta.url`
+      (mirroring how `treeSitterLoader.ts` already resolves its wasm directory via `require.resolve`, not a
+      cwd-relative guess) instead of a cwd-relative string — correct regardless of the caller's own cwd, which
+      matters because this module has two different callers with two different cwds: the running server
+      (`server/`) and `index-code-graph.ts`, a standalone CLI whose cwd depends on wherever a human invokes it
+      from. Updated the two dispatch tests that had been asserting the old (wrong) path string to compute and
+      check the real resolved absolute path instead.
+      **Closed the schema gap flagged when building `sql_bridge.py` (item 4)**: `READS_TABLE`/`WRITES_TABLE`
+      edges name a table, but tables aren't discovered as entities by any parser and `code_edges.target_id`
+      has an FK to `code_nodes`. Resolved by treating a table as a first-class `entityType: 'table'` node,
+      synthesized here (not by the Python scripts, which only know raw table names) via a new
+      `buildTableNodeId(projectId, tableName)` in `types.ts` — deliberately a different id shape from
+      `buildNodeId()` (no `filePath` component, since e.g. `accounts` referenced from ten different files must
+      resolve to the *same* one node, unlike a function/class id which is legitimately file-scoped). This
+      needed `code_nodes.file_path`/`start_line`/`end_line`/`content_hash` to become nullable (a referenced-
+      but-never-`CREATE TABLE`-defined table has none of those) — `add_code_intel_graph.ts` amended in place
+      again (still un-shipped beyond this session's own local DB) with explicit `ALTER COLUMN ... DROP NOT
+      NULL` statements, `schema.sql` and `types.ts`'s `CodeNode` updated to match, re-run and verified via `\d`.
+      Every file also gets the same one `entityType: 'script'` node `treeSitterParser.ts` already gives its
+      files, so a bridge's `from_entity_name: null` (file-scope, not any specific entity) has something to
+      resolve to — keeps the "every file has exactly one file-level node" invariant consistent across every
+      parser, tree-sitter- and bridge-based alike.
+      Entity content hashes are computed by slicing `source` with the bridge-reported `start_line`/`end_line`
+      (the bridges report line ranges, not byte offsets — they're not doing an AST parse with node spans the
+      way `treeSitterParser.ts` is).
+      12 new tests (`tests/services/codeIntel/pythonBridgeParser.test.ts`), `node:child_process` mocked the
+      same way `tests/services/parser.test.ts` already mocks it for `markitdown_bridge.py` (CI shouldn't need
+      Python/`sqlglot` installed to run this suite — the bridge scripts' *own* correctness was already verified
+      against a real local Python+`sqlglot` install while building them, items 4-5) — covering file/entity/
+      table-node construction, table-node de-duplication across multiple edges, dialect selection, `--schema`
+      pass-through, `from_entity_name: null` resolution, graceful degradation on process failure and malformed
+      JSON, and the extension-based dispatch (including that an unrecognized extension never even invokes the
+      bridge). Full suite: 76 files / 1253 passed + 1 skipped. `tsc --noEmit` and `eslint` both clean.
+- [x] `parsers/bashParser.ts` — done 2026-08-13. Layers SQL-client invocation detection on top of
+      `treeSitterParser.ts`'s generic bash extraction (calls `extractEntitiesForLanguage(..., 'bash')` for the
+      base pass, then does its own second tree-sitter walk reading `psql`/`sqlplus` commands' actual argument
+      nodes — deliberately AST-based, not regex-over-raw-text: a `sqlplus -s user/pass@db @job.sql` connection
+      string contains `@` too, just not as the script-invocation token, which a naive `@\S+` regex over raw
+      text would get wrong but reading the real sibling argument nodes off the parsed command doesn't).
+      **Refined the `kind` classification from this item's original one-line description** (which said
+      `psql -c`'s inline SQL becomes `kind: 'script_invocation'` same as `-f`) **after actually building it**:
+      `-f <file>`/`@<file>` (a real script/file reference) stays `'script_invocation'`; `-c "<sql>"` is instead
+      classified exactly like `sql_bridge.py`/`perl_bridge.py` already classify embedded SQL — a procedure call
+      (`EXEC`/`CALL`/anonymous-block pattern) becomes `'sql_exec'` (the same semantic event as Perl's embedded
+      DBI procedure calls, just a different host language), and plain DML becomes a direct `READS_TABLE`/
+      `WRITES_TABLE` edge with a `'table'` node via `buildTableNodeId()` (table-only, no columns — same
+      reasoning as `perl_bridge.py`: a string embedded in another language isn't a complete statement worth
+      pretending AST-level column precision on). This wasn't a late change of mind — the original Decided
+      section that introduced this task already grouped `psql -c "CALL proc(...)"` with the other
+      procedure-call cases; the later one-line task bullet was just imprecise in simplifying it down to a
+      single `kind`.
+      Generic bash extraction already reports a `psql`/`sqlplus` line as a `kind: 'call'` ref to the bare
+      command name (not useful — it never resolves to anything) — filtered out and replaced with this module's
+      precise refs, not left duplicated alongside them.
+      **Two id-consistency traps found and fixed during review, before any test caught them**: this module's
+      own tree-sitter walk needs to attribute refs to the *same* function/file node ids
+      `extractEntitiesForLanguage`'s base pass already produced (`code_unresolved_refs.from_entity_id` has a
+      real FK to `code_nodes.id` — a mismatched id isn't cosmetic, it's an insert-time failure). Recomputing
+      those ids independently here was the first instinct and is fragile — `treeSitterParser.ts`'s name
+      extraction has a fallback path (searches for an identifier/word child when the AST's `name` field itself
+      is absent) that a bare `childForFieldName('name')` read here wouldn't mirror, and any divergence goes
+      undetected until the DB rejects the row. Fixed by reading both ids back from `base.nodes` instead of
+      recomputing them — the file node directly (`entityType === 'script'`), function nodes via a
+      `startLine -> id` lookup built from `base.nodes` before this module's own walk runs — immune by
+      construction to ever drifting out of sync with however `treeSitterParser.ts` builds those ids.
+      8 new tests (`tests/services/codeIntel/bashParser.test.ts`), against the real tree-sitter-bash grammar
+      (no mocking needed — local WASM, not a subprocess) — covering `-f` script_invocation, `-c` sql_exec
+      classification, `-c` plain-DML table-edge classification, the `sqlplus`/connection-string `@`
+      disambiguation, top-level (no enclosing function) attribution to the file node, confirming the generic
+      `psql`/`sqlplus` call ref is gone (not duplicated), non-SQL-client generic call detection staying
+      untouched, and `BaseParser` conformance. Full suite: 77 files / 1261 passed + 1 skipped. `tsc --noEmit`
+      and `eslint` both clean.
+- [x] `analyzer/linkResolver.ts` — done 2026-08-13. `resolveLinks(projectId, refs)`: loads every `code_nodes`
+      row for the project (new `storage.ts` read, `getProjectNodeSummaries` — id/name/entity_type/language/
+      file_path only, not full signature/docstring text for nodes that mostly won't even match), groups by
+      `name`, and for each `UnresolvedRef`:
+      - Filters candidates by whether the ref's `kind` could even target that `entity_type` —
+        `call`→function/subroutine/procedure, `sql_exec`→procedure/function *and* `language` must be
+        `sql`/`plsql` (this is what stops `sql_exec` from ever matching a same-named Python function — verified
+        by a test with both present), `import`/`script_invocation`→`script`. `READS_TABLE`/`WRITES_TABLE` never
+        go through this path at all — parsers already emit those as direct edges, since a table name is
+        unambiguous the moment it's known.
+      - 1 candidate → resolved, `kind`→`relationship_type` (`call`/`sql_exec`→`CALLS`, `import`→`IMPORTS`,
+        `script_invocation`→`INCLUDES`). 0 candidates → unresolved, `reason: 'no matching name'`.
+      - 2+ candidates → tiebreak by preferring whichever one shares the calling entity's own `file_path`
+        (e.g. a locally-defined `helper` beats an unrelated file's same-named `helper`); still 0 or 2+ after
+        that → unresolved, `reason: 'ambiguous — N matches'`.
+      - `import`/`script_invocation` targets are often a path, not a bare name (`'../db/pool.js'`,
+        `'nightly_job.sql'`) — falls back to matching the raw target's own basename when the exact string
+        doesn't match anything (a file-level `'script'` node's `name` is always just its basename already).
+        Deliberately not full relative-path module resolution (a real project's directory layout isn't visible
+        from this pass) — a known, accepted limit on import-resolution accuracy, consistent with every other
+        "surfaced, not silently wrong" limitation across this phase.
+      Resolved refs become `CodeEdge`s via `upsertEdges`; the rest get `reason` attached and go to
+      `insertUnresolvedRefs` (extended to actually persist the `reason` column, which the item-2 migration
+      already had but nothing wrote to yet) — nothing is dropped either way. Added `reason?: string` to
+      `UnresolvedRef` in `types.ts`, set only by this module.
+      10 new tests (`tests/services/codeIntel/analyzer/linkResolver.test.ts`), `storage.ts` mocked at the
+      function boundary (same pattern `tests/services/embeddingHealthSnapshot.test.ts` already uses for its
+      own direct dependency) — covering single-match resolution for each of the four kinds, entity-type/
+      language filtering (the sql_exec-vs-Python-function case), no-match and genuine-ambiguity reasons, the
+      same-file tiebreak actually breaking a tie, the empty-input short-circuit (touches no storage function at
+      all), and a mixed batch partitioning correctly into edges vs. unresolved refs. One real bug this caught
+      before it shipped: two ambiguity-tiebreak tests initially omitted the calling entity itself from the
+      mocked node list — in real indexing it's always present (Pass 1 writes every node before Pass 2 runs),
+      and omitting it accidentally made the tiebreak look like it worked for the wrong reason (no source found
+      at all, rather than a real same-file check). Fixed the fixtures, not the implementation — this was a test
+      gap, not a code bug. Full suite: 78 files / 1271 passed + 1 skipped. `tsc --noEmit` and `eslint` both
+      clean.
+- [x] `server/scripts/index-code-graph.ts` — done 2026-08-13. `npx tsx scripts/index-code-graph.ts --project
+      <shortName> [--dir <path>]`, run from `server/`. `--project` is always required (it's what supplies
+      `project_id`, a real `NOT NULL` FK on every `code_nodes` row) — `--dir`, when given, overrides *which*
+      directory gets walked without touching the project's own stored `fs_path`; without it, `fs_path` is
+      used. This is a clarification of the original one-line description (which read as `--project`/`--dir`
+      being alternative modes) made concrete against the actual schema.
+      **Researched the codebase's own conventions before building this rather than guessing**: no reusable
+      recursive walker existed to reuse (`routes/project-files.ts`'s directory browsing is single-level,
+      client-driven recursion, not a real walker) — wrote one. Reused `project-files.ts`'s `ignore`-seeding
+      pattern (root `.gitignore` + hardcoded `.git`), but added `node_modules`/`.venv`/`__pycache__`/`dist`/
+      `build`/`vendor` as further hardcoded excludes, deliberately going beyond that precedent — browsing a
+      directory listing is harmless either way, but this walker *parses* every file it finds, so silently
+      descending into a vendored dependency tree isn't just slow, it pollutes the graph with irrelevant code.
+      **A real, valuable bug found and fixed while researching this** (not scope creep — directly relevant,
+      since this script is one of `pythonBridgeParser.ts`'s two callers): both `devbrain.sh`/`.ps1` `cd server`
+      before `npm run dev`, and the Docker image's `WORKDIR` is `/app` mapped from `server/` — so the running
+      server's cwd is always `server/`, never the repo root, which means `pythonBridgeParser.ts`'s original
+      `'server/scripts/sql_bridge.py'` path (copied from `parseWithMarkItDown()`'s existing convention) was
+      wrong, and `parseWithMarkItDown()` itself almost certainly has the same latent bug (out of scope to
+      touch). Fixed by resolving both script paths from `pythonBridgeParser.ts`'s own file location instead —
+      see that item's entry above for the full writeup.
+      Full pipeline per file: read → dispatch via `CODE_EXT_LANGUAGE`+per-language parser registry (bash always
+      resolves to `bashParser`, not `treeSitterParser`, even though `treeSitterParser.ts` also technically
+      covers bash internally — `bashParser.ts` wraps and enhances it, [[item 7]]) → for `sql`/`plsql` files,
+      calls `extractEntitiesWithSchema` with the project's `code_schema_columns` (loaded once up front; empty/
+      absent is fine, same graceful-without-schema behavior `sql_bridge.py` already has) instead of the plain
+      dispatch. `clearProjectGraph` runs first (always a full fresh rebuild — no incremental mode yet,
+      deliberately deferred per this phase's own "Decided" section); one `upsertNodes`/`upsertEdges` call each
+      at the end over everything collected across the whole run (**"batched" interpreted as "collect the whole
+      project then write once," not literal SQL multi-row inserts** — `storage.ts`'s upsert functions already
+      loop one row per query, a deliberate existing simplicity choice from item 1 this task didn't retroactively
+      expand); `resolveLinks` runs last over every file's accumulated `unresolvedRefs`. A single file's read or
+      parse failure is caught and recorded in the summary's `skipped` list with a reason, not fatal to the run.
+      **Refactored for testability before writing tests**: the script's logic lives in an exported
+      `runIndexer(rootDir, projectId, schema)`; `main()` (arg parsing, DB lookups, printing) is guarded by
+      `if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href)` — the Node ESM equivalent of
+      Python's `if __name__ == '__main__':` — so importing `runIndexer` from a test doesn't trigger a real run
+      (including a real `pool.end()`) as a side effect of the import itself. Verified the guard against the
+      real risk of a naive `` file://${process.argv[1]} `` string comparison silently failing on Windows
+      (backslashes, missing the extra `file:///` slash) by using `pathToFileURL` instead and actually running
+      the script directly (`npx tsx scripts/index-code-graph.ts`, no args) to confirm the usage message prints
+      and it exits 1, rather than trusting the guard unverified.
+      8 new tests (`tests/scripts/index-code-graph.test.ts`) — real temp directories via `fs.mkdtemp` (same
+      convention `tests/services/parser.test.ts` already uses for filesystem-touching tests), with `storage.ts`/
+      `linkResolver.ts`/the three parser modules/`db/pool.js` all mocked at their boundaries. Covers:
+      `clearProjectGraph` runs first, correct per-extension dispatch including recursion into subdirectories,
+      `node_modules` and `.gitignore`-listed files never reaching any parser, an unrecognized extension landing
+      in `skipped` rather than counted as parsed, schema-aware dispatch when a schema is supplied, aggregation
+      of nodes/edges/refs across multiple files into single batched writes, per-language counts in the summary,
+      and one file's parse failure not stopping the rest of the run. One real test-fixture bug caught before
+      shipping (not an implementation bug): an aggregation test initially used `mockResolvedValue` for
+      `treeSitterExtractMock`, forgetting the fixture tree has *two* Python files, so the mock fired twice and
+      duplicated the expected payload — fixed by differentiating the mock's response by file path. Full suite:
+      80 files / 1285 passed + 1 skipped. `tsc --noEmit` and `eslint` both clean.
+- [x] `analyzer/` — done 2026-08-13. `getCallers`/`getCallees`/`getImpactTree` were already fully implemented in
+      `storage.ts` back in item 1 — `analyzer/index.ts` re-exports them unchanged as the public query surface
+      routes should import from (so `server/routes/code-intel.ts`, next task, never reaches into `storage.ts`'s
+      raw SQL directly). `getContext` is the genuinely new piece: fetches the entity, its immediate callers
+      (`getIncomingEdgeDetails`, a new `storage.ts` read alongside the existing plain `getCallers` — keeps the
+      edge's own `relationship_type`/`columns`, which a bare node list can't carry) and callees
+      (`getOutgoingEdgeDetails`), reads the entity's own source by slicing its file on disk at `startLine`/
+      `endLine` (nodes don't store full source text, only structural metadata — deliberately, to avoid
+      duplicating a document store), and renders all of it as Markdown: source in a fenced code block tagged
+      with the entity's language, callers/callees as a bulleted list with relationship type and column detail
+      (e.g. "READS_TABLE — columns: id, balance") where present. This is the "LLM refactor context" output
+      from the spec that originally kicked off this phase, reshaped as a plain Markdown string so
+      `code-intel.ts` can serve it directly rather than it being a CLI-only feature. A `'table'` node (no file
+      location) or a source file that's moved/been deleted since indexing both degrade to an explanatory
+      placeholder instead of throwing.
+      6 new tests (`tests/services/codeIntel/analyzer/index.test.ts`), `storage.ts` and `node:fs/promises`
+      mocked at their boundaries — covering not-found handling, full Markdown assembly (docstring, sliced
+      source, callers, callees with column detail), empty caller/callee sections, a table node correctly
+      skipping the file-read attempt entirely, graceful degradation when the source file can't be read, and
+      that the three re-exports genuinely pass through to `storage.ts` unchanged. Full suite: 80 files / 1285
+      passed + 1 skipped. `tsc --noEmit` and `eslint` both clean.
+- [x] `server/routes/code-intel.ts` + mounted in `index.ts` — done 2026-08-13. `nodes?search=`, `callers/:id`,
+      `callees/:id`, `impact/:id?depth=` (default 3, capped at 10, falls back to the default on a non-integer
+      value), `context/:id`, `unresolved` — all six from "Decided" plus the extra `unresolved` endpoint. No
+      per-route auth middleware — the app-wide `app.use('/api', requireAuth)` in `index.ts` already covers
+      every route mounted after it, same as `runbooks.ts`/`documents.ts`. Checked first whether this app has any
+      project-membership ACL beyond that (grepped for it) — it doesn't; RBAC here is role-based, not
+      per-project row-level, so this doesn't invent a new restriction beyond existing convention. It does add
+      one real check: `callers`/`callees`/`impact`/`context` all fetch the entity via `getNodeById` first and
+      404 if it doesn't exist *or* its `projectId` doesn't match the URL's `:projectId` — without this, the
+      URL's own two params could silently disagree (query entity X from project A's URL, but X actually
+      belongs to project B) and return the wrong project's data.
+      Routes only import from `analyzer/index.ts` (added `getNodeById`/`searchNodes`/
+      `getUnresolvedRefsForProject` there as re-exports of two new `storage.ts` reads), never reach into
+      `storage.ts` directly — keeps the established routes → analyzer → storage layering intact.
+      14 new tests (`tests/routes/code-intel.test.ts`), using this codebase's own existing route-testing
+      convention (`tests/routes/runbooks.test.ts`) — extracting the handler function straight off the Express
+      Router's stack and invoking it with fake req/res, `analyzer/index.js` mocked at the boundary this file
+      directly touches. Covers the cross-project 404 check, all six endpoints' happy paths, depth
+      default/clamp/invalid-value handling, and the 500 error-envelope path. Full suite: 81 files / 1299
+      passed + 1 skipped. `tsc --noEmit` and `eslint` both clean.
+- [x] Unit tests per parser — done 2026-08-13. The four scenarios named here map onto the *actual* shipped
+      architecture, not the file names originally guessed before it existed — `python_parser.ts`/
+      `bash_parser.ts` were never separate files (python/typescript/javascript/bash all share
+      `treeSitterParser.ts`, with `bashParser.ts` layered on top for bash specifically):
+      - **"A Python function calling another function in the same file + an import"** — already fully covered
+        by `tests/services/codeIntel/treeSitterParser.test.ts` ([[item 3]]), no new file needed.
+      - **"A Bash function sourcing another script"** — while writing this test, found that `bashParser.ts`
+        had never actually implemented `source`/`.` handling, despite `treeSitterParser.ts`'s original
+        comments ([[item 3]]) explicitly flagging it as deferred to this later work. Fixed now: `source foo.sh`
+        / `. foo.sh` are extracted as `kind: 'script_invocation'` refs (same treatment as `psql -f`/`sqlplus
+        @`, [[item 7]]), replacing the generic (and useless — `rawTargetName: 'source'` resolves to nothing)
+        `call` ref the base extraction produces for the same line. 2 new tests in
+        `tests/services/codeIntel/bashParser.test.ts` (now 10, from 8).
+      - **"A Postgres SELECT/INSERT and an Oracle CREATE OR REPLACE PROCEDURE"** — new
+        `tests/scripts/sql_bridge.test.ts`, real subprocess calls to the actual `sql_bridge.py` (not the mocked
+        Node wrapper `pythonBridgeParser.test.ts` already covers) — deliberately the opposite mocking choice
+        from that file, since the whole point here is exercising the real Python/sqlglot logic.
+      - **"A Perl sub with a use and an embedded SQL string"** — new `tests/scripts/perl_bridge.test.ts`, same
+        real-subprocess approach against the actual `perl_bridge.py`; also covers the plain-DML-embedded-SQL
+        case (a `READS_TABLE` edge, not a `sql_exec` ref) since that path exists in the same script.
+      Both new files detect Python/`sqlglot` availability via a synchronous `execSync` check at load time and
+      `describe.skipIf(!available)` — skips gracefully (not fails) without it, same optional-dependency
+      contract as `markitdown_bridge.py`. Ran for real in this environment (Python + `sqlglot` are installed
+      here from items 4-5's development work) — all 4 pass. 6 new tests total. Full suite: 83 files / 1305
+      passed + 1 skipped. `tsc --noEmit` and `eslint` both clean.
+- [x] **Substitute smoke test done 2026-08-13** — the real NT Billing `fs_path` is still unset (`SELECT fs_path
+      FROM projects WHERE short_name = 'ntbilling'` returned empty), so the literal live run against NT
+      Billing's actual codebase remains genuinely pending — flagged to the user directly rather than silently
+      skipped or faked. **Full pipeline still verified for real** against the real `ntbilling` project row
+      (not mocked): a synthetic Perl/Bash/Oracle fixture tree — a `.spc` procedure writing to `accounts`, a
+      Perl sub calling it via embedded `EXEC` SQL, a Bash function calling it via `psql -c "CALL ..."` —
+      indexed with `index-code-graph.ts --project ntbilling --dir <synthetic tmp dir>` (the `--dir` override
+      built for exactly this: exercising the real project id/DB without touching its stored `fs_path`).
+      Confirmed via direct SQL against the resulting real rows, then via a live `getContext()` call, that the
+      procedure's Markdown context shows **both** the Perl subroutine and the Bash function as `CALLS` callers
+      (proving cross-language resolution — "which process calls this SQL procedure" — genuinely works, not
+      just in mocked tests) and the `accounts` `WRITES_TABLE` edge with real column detail (`id, status`). The
+      2 `use strict`/`use DBI` import refs correctly landed in `code_unresolved_refs` with `reason: 'no
+      matching name'` rather than silently vanishing. All synthetic graph rows were deleted from `ntbilling`
+      afterward (`code_nodes`/`code_unresolved_refs` confirmed back to 0 rows) so nothing fabricated was left
+      in the real project's data. **Still open**: the actual NT Billing source needs `fs_path` linked (Settings
+      → link folder, or `UPDATE projects SET fs_path = ...`) before the genuine run against real code can
+      happen — nothing else is blocking it once that's done.
+- [x] Done 2026-08-13. `README.md`: `server/scripts/` line now lists `sql_bridge.py`/`perl_bridge.py`/
+      `index-code-graph.ts` alongside the existing three; added a `services/codeIntel/` sub-line; added a new
+      **Code Intelligence graph** bullet under the existing "Code Tracking" features section, explicit that
+      it's CLI + read-only API only for now, no client UI. `CLAUDE.md`'s Project Structure tree: added
+      `routes/code-intel.ts`, `services/treeSitterLoader.ts`, and a `services/codeIntel/` subtree
+      (`types.ts`/`storage.ts`/`parsers/`/`analyzer/`), plus a `scripts/` line (this tree didn't have one
+      before this phase).

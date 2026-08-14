@@ -1,41 +1,6 @@
-import path from 'node:path'
-import { createRequire } from 'node:module'
-import { Parser, Language, type Node as SyntaxNode } from 'web-tree-sitter'
+import type { Node as SyntaxNode } from 'web-tree-sitter'
 import { countTokens, splitByTokenWindow, TARGET_CHUNK_TOKENS, MIN_CHUNK_TOKENS } from './tokenChunker.js'
-
-// web-tree-sitter and tree-sitter-wasms are pinned to exact versions in
-// package.json (0.25.10 / 0.1.13) — NOT a mismatch to "fix" by bumping.
-// web-tree-sitter >=0.26 changed the expected wasm module format (requires
-// a "dylink" metadata section); tree-sitter-wasms@0.1.13's prebuilt
-// grammars predate that and fail to load under it ("getDylinkMetadata"
-// error) even though both packages import/typecheck fine together. Bump
-// only after confirming a newer tree-sitter-wasms release is compatible.
-
-const require = createRequire(import.meta.url)
-
-// ── Language -> grammar wasm file ───────────────────────────────────────
-// Only languages with a prebuilt grammar in tree-sitter-wasms are listed.
-// Anything else (powershell, svelte, perl, sql, plsql, ...) has no entry,
-// so chunkCodeByAst() returns null and the caller falls back to the plain
-// token-window chunker — same fallback pattern parser.ts uses for MarkItDown.
-const LANGUAGE_WASM: Record<string, string> = {
-  typescript: 'tree-sitter-typescript.wasm',
-  javascript: 'tree-sitter-javascript.wasm',
-  python:     'tree-sitter-python.wasm',
-  dart:       'tree-sitter-dart.wasm',
-  java:       'tree-sitter-java.wasm',
-  kotlin:     'tree-sitter-kotlin.wasm',
-  go:         'tree-sitter-go.wasm',
-  rust:       'tree-sitter-rust.wasm',
-  ruby:       'tree-sitter-ruby.wasm',
-  php:        'tree-sitter-php.wasm',
-  swift:      'tree-sitter-swift.wasm',
-  c:          'tree-sitter-c.wasm',
-  cpp:        'tree-sitter-cpp.wasm',
-  csharp:     'tree-sitter-c_sharp.wasm',
-  bash:       'tree-sitter-bash.wasm',
-  vue:        'tree-sitter-vue.wasm',
-}
+import { getParser, TREE_SITTER_LANGUAGES } from './treeSitterLoader.js'
 
 // Node types that read as a "declaration" worth its own chunk, across
 // tree-sitter grammars generally. Grammars name nodes inconsistently
@@ -43,31 +8,6 @@ const LANGUAGE_WASM: Record<string, string> = {
 // this matches by substring instead of maintaining a per-language node-type
 // table for all 16 supported languages.
 const BOUNDARY_RE = /function|method|class|struct|enum|interface|impl|trait|constructor/i
-
-let wasmDir: string | null = null
-function getWasmDir(): string {
-  if (!wasmDir) {
-    wasmDir = path.join(path.dirname(require.resolve('tree-sitter-wasms/package.json')), 'out')
-  }
-  return wasmDir
-}
-
-let initPromise: Promise<void> | null = null
-function ensureInit(): Promise<void> {
-  if (!initPromise) initPromise = Parser.init()
-  return initPromise
-}
-
-const languageCache = new Map<string, Language>()
-
-async function loadLanguage(wasmFile: string): Promise<Language> {
-  const cached = languageCache.get(wasmFile)
-  if (cached) return cached
-  await ensureInit()
-  const lang = await Language.load(path.join(getWasmDir(), wasmFile))
-  languageCache.set(wasmFile, lang)
-  return lang
-}
 
 function pushChunk(chunks: string[], text: string): void {
   const trimmed = text.trim()
@@ -141,14 +81,10 @@ function walkNode(root: SyntaxNode, source: string): string[] {
  * degrades gracefully when an optional capability isn't available.
  */
 export async function chunkCodeByAst(text: string, language: string | null | undefined): Promise<string[] | null> {
-  if (!language) return null
-  const wasmFile = LANGUAGE_WASM[language]
-  if (!wasmFile) return null
+  const parser = await getParser(language)
+  if (!parser) return null
 
   try {
-    const lang = await loadLanguage(wasmFile)
-    const parser = new Parser()
-    parser.setLanguage(lang)
     const tree = parser.parse(text)
     if (!tree || tree.rootNode.hasError) return null
 
@@ -188,14 +124,10 @@ function collectSignatures(node: SyntaxNode, source: string, out: string[], cap:
  * fall back to a plain truncated snippet when this returns null.
  */
 export async function extractSymbolOutline(text: string, language: string | null | undefined, cap = 40): Promise<string[] | null> {
-  if (!language) return null
-  const wasmFile = LANGUAGE_WASM[language]
-  if (!wasmFile) return null
+  const parser = await getParser(language)
+  if (!parser) return null
 
   try {
-    const lang = await loadLanguage(wasmFile)
-    const parser = new Parser()
-    parser.setLanguage(lang)
     const tree = parser.parse(text)
     if (!tree || tree.rootNode.hasError) return null
 
@@ -207,4 +139,4 @@ export async function extractSymbolOutline(text: string, language: string | null
   }
 }
 
-export const AST_CHUNKABLE_LANGUAGES = Object.keys(LANGUAGE_WASM)
+export const AST_CHUNKABLE_LANGUAGES = TREE_SITTER_LANGUAGES

@@ -30,6 +30,7 @@ A private developer knowledge base for organizing work artifacts across all acti
 - **Component overview** — generate one combined architecture doc from every code file tagged to the same component.
 - **Duplicate detection** — two-phase (embedding shortlist + line-similarity scoring) scan for near-duplicate code files across a project.
 - **Links Graph View** — force-directed visualization of every cross-entity link (docs, issues, commands, releases, runbooks, code) as a companion to the chip-list Linked Items view.
+- **Code Intelligence graph** — static call/reference graph across Python, TypeScript/JavaScript, Bash, Perl, and Postgres/Oracle SQL (via `tree-sitter` and a `sqlglot`-backed Python bridge). Indexed on demand with `index-code-graph.ts`; answers "who calls this," "what does this touch," and exports LLM-ready refactor context, including SQL-procedure calls made from Perl/Bash and table read/write detail down to the column. CLI + read-only API for now — no client UI yet.
 
 ### AI (100% local via Ollama — zero cost)
 - **RAG document Q&A** — `mistral:7b` answers questions using only your documents; cites sources.
@@ -226,7 +227,10 @@ devbrain/
 │   ├── routes/               # REST endpoints
 │   ├── services/             # ai, ollama, rag, parser, embedder, notifier,
 │   │                         # ldap, crypto, backup, exporter, integrations
-│   ├── scripts/              # apprise_client.py, digest_scheduler.py, markitdown_bridge.py
+│   │   └── codeIntel/        # Code Intelligence graph engine — parsers/ (tree-sitter +
+│   │                         # Python-bridge), storage.ts, analyzer/ (queries + LLM context)
+│   ├── scripts/              # apprise_client.py, digest_scheduler.py, markitdown_bridge.py,
+│   │                         # sql_bridge.py, perl_bridge.py, index-code-graph.ts
 │   ├── lib/                  # env, errors, utilities
 │   └── db/                   # schema.sql, seed, migrations
 ├── integrations/

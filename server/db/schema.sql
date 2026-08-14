@@ -623,5 +623,79 @@ CREATE TABLE IF NOT EXISTS task_tree_cache (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ── Code intelligence graph ─────────────────────────────────────────────
+-- Unified Entity/Relationship graph for the Code Intelligence engine (see
+-- TASKS.md Phase 40). `language`/`entity_type` are plain TEXT, not narrow
+-- CHECK-constrained enums — the parser registry is designed to grow (new
+-- languages, new entity kinds) without a schema change. `relationship_type`
+-- IS a fixed vocabulary (the graph's actual traversal semantics), so it gets
+-- a CHECK. code_schema_tables/code_schema_columns are an optional table
+-- definition registry — empty until a user backfills them — that sharpens
+-- SQL column-lineage resolution once populated. code_unresolved_refs records
+-- call references static analysis couldn't resolve (dynamic dispatch,
+-- variable-built SQL, ...) instead of silently dropping them.
+
+-- file_path/start_line/end_line/content_hash are nullable — a 'table' node
+-- represents a table referenced in a READS_TABLE/WRITES_TABLE edge that may
+-- never be CREATE TABLE-defined anywhere in the indexed source, so it has no
+-- file location or content to hash. Every other entity type still always
+-- has all four — this is nullable for that one case, not optional in general.
+CREATE TABLE IF NOT EXISTS code_nodes (
+  id           TEXT        PRIMARY KEY,
+  project_id   TEXT        NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  file_path    TEXT,
+  language     TEXT        NOT NULL,
+  entity_type  TEXT        NOT NULL,
+  name         TEXT        NOT NULL,
+  signature    TEXT,
+  docstring    TEXT,
+  start_line   INTEGER,
+  end_line     INTEGER,
+  content_hash TEXT,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS code_nodes_project_idx ON code_nodes (project_id);
+CREATE INDEX IF NOT EXISTS code_nodes_file_path_idx ON code_nodes (file_path);
+
+-- `columns` is populated only for READS_TABLE/WRITES_TABLE edges once the SQL
+-- bridge can resolve column-level lineage — NULL means "unknown/unresolved",
+-- not "no columns".
+CREATE TABLE IF NOT EXISTS code_edges (
+  source_id         TEXT NOT NULL REFERENCES code_nodes(id) ON DELETE CASCADE,
+  target_id         TEXT NOT NULL REFERENCES code_nodes(id) ON DELETE CASCADE,
+  relationship_type TEXT NOT NULL
+                       CHECK (relationship_type IN ('CALLS', 'IMPORTS', 'READS_TABLE', 'WRITES_TABLE', 'INCLUDES')),
+  columns            TEXT[],
+  PRIMARY KEY (source_id, target_id, relationship_type)
+);
+CREATE INDEX IF NOT EXISTS code_edges_target_idx ON code_edges (target_id);
+CREATE INDEX IF NOT EXISTS code_edges_source_idx ON code_edges (source_id);
+
+CREATE TABLE IF NOT EXISTS code_schema_tables (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  table_name TEXT NOT NULL,
+  PRIMARY KEY (project_id, table_name)
+);
+
+CREATE TABLE IF NOT EXISTS code_schema_columns (
+  project_id  TEXT NOT NULL,
+  table_name  TEXT NOT NULL,
+  column_name TEXT NOT NULL,
+  data_type   TEXT,
+  PRIMARY KEY (project_id, table_name, column_name),
+  FOREIGN KEY (project_id, table_name)
+    REFERENCES code_schema_tables (project_id, table_name) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS code_unresolved_refs (
+  id              TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  project_id      TEXT        NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  from_entity_id  TEXT        NOT NULL REFERENCES code_nodes(id) ON DELETE CASCADE,
+  raw_target_name TEXT        NOT NULL,
+  kind            TEXT        NOT NULL CHECK (kind IN ('call', 'import', 'sql_exec', 'script_invocation')),
+  reason          TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS code_unresolved_refs_project_idx ON code_unresolved_refs (project_id);
 
 

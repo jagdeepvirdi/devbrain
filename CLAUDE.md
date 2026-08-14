@@ -119,7 +119,8 @@ devbrain/
 │   │   ├── search.ts                    # Hybrid search
 │   │   ├── chat.ts                      # RAG Q&A (streaming SSE)
 │   │   ├── claude-projects.ts           # Claude Code project discovery + task/session sync
-│   │   └── antigravity-projects.ts      # Antigravity project discovery + task/session sync
+│   │   ├── antigravity-projects.ts      # Antigravity project discovery + task/session sync
+│   │   └── code-intel.ts                # Code Intelligence graph — callers/callees/impact/context/unresolved
 │   ├── services/
 │   │   ├── ai.ts                        # Unified AI client (Ollama/Claude toggle)
 │   │   ├── ollama.ts                    # Ollama chat + embed + stream
@@ -127,7 +128,15 @@ devbrain/
 │   │   ├── embedder.ts                  # Chunk + embed docs
 │   │   ├── rag.ts                       # RAG retrieval + answer generation
 │   │   ├── summarizer.ts                # Issue summarization, release notes
-│   │   └── antigravity-discovery.ts     # Scans fs_path for Antigravity TASKS.md + sessions
+│   │   ├── antigravity-discovery.ts     # Scans fs_path for Antigravity TASKS.md + sessions
+│   │   ├── treeSitterLoader.ts          # Shared tree-sitter grammar loading (codeChunker.ts + codeIntel/)
+│   │   └── codeIntel/                   # Code Intelligence graph engine (see TASKS.md Phase 40)
+│   │       ├── types.ts                 # Unified Entity/Relationship types, buildNodeId/buildTableNodeId
+│   │       ├── storage.ts               # code_nodes/code_edges upsert + traversal queries
+│   │       ├── parsers/                 # treeSitterParser (py/ts/js/bash), bashParser, pythonBridgeParser
+│   │       └── analyzer/                # getCallers/getCallees/getImpactTree/getContext, linkResolver (Pass 2)
+│   ├── scripts/                         # apprise_client.py, digest_scheduler.py, markitdown_bridge.py,
+│   │                                     # sql_bridge.py, perl_bridge.py, index-code-graph.ts
 │   ├── db/
 │   │   ├── schema.sql
 │   │   ├── seed.ts                      # Seeds default projects on first run

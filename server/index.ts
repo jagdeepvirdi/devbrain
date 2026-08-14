@@ -208,6 +208,8 @@ import apiTokensRouter from './routes/api-tokens.js'
 app.use('/api/api-tokens', apiTokensRouter)
 import linksRouter from './routes/links.js'
 app.use('/api/links', linksRouter)
+import codeIntelRouter from './routes/code-intel.js'
+app.use('/api/code-intel', codeIntelRouter)
 
 // ── Static client (production) ────────────────────────────────────────────
 
