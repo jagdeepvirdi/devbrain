@@ -164,4 +164,75 @@ describe('POST /api/documents/:id/diagram', () => {
     await getHandler('/:id/diagram', 'post')(req, res, () => {})
     expect(res.status).toHaveBeenCalledWith(500)
   })
+
+  it('uses the app-wide default chat model (no per-call override)', async () => {
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [{ title: 'index.ts', content: 'x', file_type: 'code', language: 'typescript', content_hash: 'h7' }],
+      } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+    mockAiChat.mockResolvedValue('flowchart TD\n  A["x"]')
+
+    const req: any = { params: { id: 'doc-7' } }
+    const res = fakeRes()
+    await getHandler('/:id/diagram', 'post')(req, res, () => {})
+
+    // Exactly 2 args (prompt, system) — no third options arg. A larger/
+    // code-specialized model was tried as a fix and rejected after real
+    // hardware testing (too large or too slow on this app's 6GB-VRAM
+    // target — see the comment above this route).
+    expect(mockAiChat).toHaveBeenCalledWith(expect.any(String), expect.any(String))
+  })
+
+  it('accepts classDiagram/sequenceDiagram, not just flowchart', async () => {
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [{ title: 'model.ts', content: 'x', file_type: 'code', language: 'typescript', content_hash: 'h8' }],
+      } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+    mockAiChat.mockResolvedValue('classDiagram\n  class Foo')
+
+    const req: any = { params: { id: 'doc-8' } }
+    const res = fakeRes()
+    await getHandler('/:id/diagram', 'post')(req, res, () => {})
+
+    expect(res.json).toHaveBeenCalledWith({ data: { diagram: 'classDiagram\n  class Foo' } })
+  })
+
+  it('retries once when the model returns prose instead of a diagram, and succeeds on the second attempt', async () => {
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [{ title: 'big.sql', content: 'x', file_type: 'code', language: 'sql', content_hash: 'h9' }],
+      } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+    mockAiChat
+      .mockResolvedValueOnce('This procedure updates the accounts table and rolls back on error.')
+      .mockResolvedValueOnce('flowchart TD\n  A["proc"] --> B["accounts"]')
+
+    const req: any = { params: { id: 'doc-9' } }
+    const res = fakeRes()
+    await getHandler('/:id/diagram', 'post')(req, res, () => {})
+
+    expect(mockAiChat).toHaveBeenCalledTimes(2)
+    expect(res.json).toHaveBeenCalledWith({ data: { diagram: 'flowchart TD\n  A["proc"] --> B["accounts"]' } })
+  })
+
+  it('gives up with a 502 (and no DB write) after two consecutive non-diagram responses', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ title: 'big.sql', content: 'x', file_type: 'code', language: 'sql', content_hash: 'h10' }],
+    } as any)
+    mockAiChat
+      .mockResolvedValueOnce('This is an explanation, not a diagram.')
+      .mockResolvedValueOnce('Still just prose the second time.')
+
+    const req: any = { params: { id: 'doc-10' } }
+    const res = fakeRes()
+    await getHandler('/:id/diagram', 'post')(req, res, () => {})
+
+    expect(mockAiChat).toHaveBeenCalledTimes(2)
+    expect(res.status).toHaveBeenCalledWith(502)
+    // Only the initial SELECT ran — no UPDATE attempted, so a previously-good
+    // diagram (if any) is never clobbered by a failed regenerate.
+    expect(mockQuery).toHaveBeenCalledTimes(1)
+  })
 })

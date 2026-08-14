@@ -22,14 +22,20 @@ vi.mock('../../services/codeChunker.js', () => ({
   extractSymbolOutline: vi.fn(),
 }))
 
+vi.mock('../../services/codeIntel/parsers/pythonBridgeParser.js', () => ({
+  extractSqlOutline: vi.fn(),
+}))
+
 import documentsAiRouter from '../../routes/documents-ai.js'
 import { pool } from '../../db/pool.js'
 import { aiChat } from '../../services/ai.js'
 import { extractSymbolOutline } from '../../services/codeChunker.js'
+import { extractSqlOutline } from '../../services/codeIntel/parsers/pythonBridgeParser.js'
 
-const mockQuery   = vi.mocked(pool.query)
-const mockAiChat  = vi.mocked(aiChat)
-const mockOutline = vi.mocked(extractSymbolOutline)
+const mockQuery      = vi.mocked(pool.query)
+const mockAiChat     = vi.mocked(aiChat)
+const mockOutline    = vi.mocked(extractSymbolOutline)
+const mockSqlOutline = vi.mocked(extractSqlOutline)
 
 function getHandler(routePath: string, method: 'get' | 'post' | 'patch' | 'delete') {
   const layer = (documentsAiRouter as any).stack.find(
@@ -46,6 +52,7 @@ describe('POST /api/documents/:id/explain', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockOutline.mockResolvedValue(null)
+    mockSqlOutline.mockResolvedValue(null)
   })
 
   it('404s when the document does not exist', async () => {
@@ -133,6 +140,72 @@ describe('POST /api/documents/:id/explain', () => {
     expect(mockOutline).toHaveBeenCalledWith('def run(): pass', 'python')
     expect(mockAiChat.mock.calls[0][0]).toContain('Symbol outline')
     expect(mockAiChat.mock.calls[0][0]).toContain('def run()')
+  })
+
+  it('falls back to sql_bridge.py for the outline when language is plsql (tree-sitter has no SQL grammar)', async () => {
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [{ title: 'small.plsql', content: 'CREATE PROCEDURE getstartdate(...) IS BEGIN NULL; END;', file_type: 'code', language: 'plsql', content_hash: 'hash-plsql' }],
+      } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+
+    mockOutline.mockResolvedValue(null) // tree-sitter: no sql/plsql grammar
+    mockSqlOutline.mockResolvedValue(['PROCEDURE getstartdate(...) (lines 12-88) — writes: totadjustment_inv_temp'])
+    mockAiChat.mockResolvedValue('Explanation covering the whole file.')
+
+    const req: any = { params: { id: 'doc-sql' } }
+    const res = fakeRes()
+
+    await getHandler('/:id/explain', 'post')(req, res, () => {})
+
+    expect(mockSqlOutline).toHaveBeenCalledWith('CREATE PROCEDURE getstartdate(...) IS BEGIN NULL; END;', 'plsql')
+    expect(mockAiChat.mock.calls[0][0]).toContain('Symbol outline')
+    expect(mockAiChat.mock.calls[0][0]).toContain('getstartdate')
+  })
+
+  it('drops the raw truncated source and prompts from the outline alone for a large SQL/PLSQL file (verified: models ignore the outline when both are given together)', async () => {
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [{ title: 'TOT_SAPREVENUE', content: 'x'.repeat(211424), file_type: 'code', language: 'plsql', content_hash: 'hash-big-plsql' }],
+      } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+
+    mockOutline.mockResolvedValue(null)
+    mockSqlOutline.mockResolvedValue([
+      'PROCEDURE getstartdate(...) (lines 12-88) — writes: totadjustment_inv_temp',
+      'PROCEDURE proc_zero_invoice(...) (lines 788-967) — writes: totsapinvoicefeeddata_tmp1',
+    ])
+    mockAiChat.mockResolvedValue('Explanation covering all procedures.')
+
+    const req: any = { params: { id: 'doc-big-sql' } }
+    const res = fakeRes()
+
+    await getHandler('/:id/explain', 'post')(req, res, () => {})
+
+    const prompt = mockAiChat.mock.calls[0][0] as string
+    expect(prompt).toContain('proc_zero_invoice')
+    expect(prompt).toContain('Cover ALL of the procedures/functions listed above')
+    // The raw truncated source (a run of 12000 'x' characters) must NOT appear —
+    // that's the excerpt models were observed fixating on instead of the outline.
+    expect(prompt).not.toContain('x'.repeat(12000))
+  })
+
+  it('does not call the sql_bridge.py fallback for non-sql languages', async () => {
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [{ title: 'index.ts', content: 'export const x = 1', file_type: 'code', language: 'typescript', content_hash: 'hash-ts' }],
+      } as any)
+      .mockResolvedValueOnce({ rows: [] } as any)
+
+    mockOutline.mockResolvedValue(null)
+    mockAiChat.mockResolvedValue('Explanation.')
+
+    const req: any = { params: { id: 'doc-ts' } }
+    const res = fakeRes()
+
+    await getHandler('/:id/explain', 'post')(req, res, () => {})
+
+    expect(mockSqlOutline).not.toHaveBeenCalled()
   })
 
   it('asks for parameters, data sources, and output in the system prompt', async () => {

@@ -12,6 +12,7 @@ import { serverError } from '../lib/errors.js'
 import { requireRole } from '../middleware/auth.js'
 import { embedDocument } from '../services/embedder.js'
 import { extractSymbolOutline } from '../services/codeChunker.js'
+import { extractSqlOutline } from '../services/codeIntel/parsers/pythonBridgeParser.js'
 import { lineSimilarity } from '../services/duplicateDetector.js'
 
 // AI-generation and analysis endpoints for documents — split out of routes/documents.ts
@@ -61,13 +62,39 @@ router.post('/:id/explain', requireRole('member'), async (req, res) => {
     // Static-analysis signature outline (same tree-sitter pass component-overview uses) —
     // gives the model an accurate map of every function/class even when the raw source
     // above is truncated, so longer files don't lose coverage of what's past the cutoff.
-    const outline = await extractSymbolOutline(doc.content, doc.language)
+    // Tree-sitter has no grammar for sql/plsql and always returns null for them — fall
+    // back to sql_bridge.py (extractSqlOutline) for exactly those two languages, so large
+    // PL/SQL packages (the common case for oversized files in this app) aren't left with
+    // zero outline coverage past EXPLAIN_SOURCE_CHARS.
+    const isSql = doc.language === 'sql' || doc.language === 'plsql'
+    let outline = await extractSymbolOutline(doc.content, doc.language)
+    if (!outline && isSql) {
+      outline = await extractSqlOutline(doc.content, doc.language)
+    }
+
+    // Real-file testing (TASKS.md) found that on a large truncated SQL/PLSQL
+    // package, giving the model BOTH the truncated raw source AND the full-file
+    // outline together backfires — both mistral and llama3.2 fixated on the
+    // truncated excerpt and ignored the outline, describing only the handful of
+    // procedures that happened to fit before the cutoff. Dropping the raw source
+    // for exactly this case (large + truncated + a successful SQL outline) and
+    // asking the model to work from the outline alone — the same "rank symbols,
+    // don't dump everything" approach /component-overview already uses — got a
+    // response that actually covered the whole file's procedures instead of the
+    // first few. Every other case (small files, non-SQL languages, or SQL files
+    // where sql_bridge.py found nothing) keeps the original raw-source prompt.
+    const useOutlineOnly = isSql && truncated && outline !== null
+
     const outlineBlock = outline
       ? `Symbol outline (functions/classes found via static analysis, covers the whole file even if the source below is truncated):\n${outline.map(l => `  ${l}`).join('\n')}\n\n`
       : ''
 
+    const userPrompt = useOutlineOnly
+      ? `Explain what this ${lang} file ("${doc.title}") does, based on its full symbol outline (every procedure/function in the file, with the tables each one reads/writes):\n\n${outline!.map(l => `  ${l}`).join('\n')}\n\nCover ALL of the procedures/functions listed above, not just the first few — the outline is complete for the whole file.`
+      : `Explain what this ${lang} file ("${doc.title}") does:\n\n${outlineBlock}Source:\n\`\`\`${lang}\n${source}\n\`\`\`${truncated ? '\n\n(Source was truncated for length — use the symbol outline above, if present, to cover parts past the cutoff.)' : ''}`
+
     const explanation = await aiChat(
-      `Explain what this ${lang} file ("${doc.title}") does:\n\n${outlineBlock}Source:\n\`\`\`${lang}\n${source}\n\`\`\`${truncated ? '\n\n(Source was truncated for length — use the symbol outline above, if present, to cover parts past the cutoff.)' : ''}`,
+      userPrompt,
       `You are a technical assistant that explains source code clearly and in detail for a developer knowledge base. Use Markdown with these headings, omitting any that don't apply to this file:
 
 ## Overview
@@ -107,12 +134,30 @@ Be specific rather than generic — name the actual parameters, files, tables, a
 
 const DIAGRAM_SOURCE_CHARS = 12000
 
+// A larger/code-specialized model (qwen2.5-coder:14b) was tried here as a fix
+// for the failure mode described below and rejected after testing directly
+// against this project's own real large SQL files: at 8.37GB it doesn't fit
+// this app's target 6GB-VRAM hardware (near-guaranteed timeout, worse than
+// the problem it was meant to fix) — and gemma3:4b, small enough to fit,
+// still timed out past 120s on the same prompt even fully warm in VRAM, so
+// it's genuinely too slow on this content, not just a swap-time cost. The
+// default CHAT_MODEL (mistral) remains the fastest option in practice (~12s
+// on this same file) despite the unreliable-format problem the validation/
+// retry below exists to catch — see TASKS.md for the full investigation.
+//
 // Models routinely wrap the diagram in a ```mermaid fence despite being told
 // not to — strip it defensively rather than fail the render on that alone.
 function stripMermaidFence(raw: string): string {
   const fenced = raw.trim().match(/^```(?:mermaid)?\s*\n([\s\S]*?)\n?```$/)
   return (fenced ? fenced[1] : raw).trim()
 }
+
+// Matches exactly the three diagram types the system prompt below permits.
+// A response that fails this (prose, an explanation, anything not starting
+// with one of these) is not silently stored as a "diagram" — MermaidDiagram.tsx
+// would fail to render it client-side anyway, just confusingly (a red error
+// box in place of a diagram, easy to miss/misread as "nothing happened").
+const MERMAID_DIAGRAM_TYPE_RE = /^(flowchart|classDiagram|sequenceDiagram)\b/
 
 router.post('/:id/diagram', requireRole('member'), async (req, res) => {
   const id = req.params.id as string
@@ -131,12 +176,30 @@ router.post('/:id/diagram', requireRole('member'), async (req, res) => {
     const lang = doc.language ?? 'code'
     const truncated = doc.content.length > DIAGRAM_SOURCE_CHARS
     const source = doc.content.slice(0, DIAGRAM_SOURCE_CHARS)
-
-    const raw = await aiChat(
-      `Generate a Mermaid diagram of this ${lang} file ("${doc.title}")'s structure — its main functions/classes/methods and how they call or depend on each other:\n\n\`\`\`${lang}\n${source}\n\`\`\`${truncated ? '\n\n(File was truncated for length — diagram based on what is shown.)' : ''}`,
+    const userPrompt =
+      `Generate a Mermaid diagram of this ${lang} file ("${doc.title}")'s structure — its main functions/classes/methods and how they call or depend on each other:\n\n\`\`\`${lang}\n${source}\n\`\`\`${truncated ? '\n\n(File was truncated for length — diagram based on what is shown.)' : ''}`
+    const systemPrompt =
       'You are a technical assistant that generates Mermaid diagrams for a developer knowledge base. Respond with ONLY a valid Mermaid diagram definition — start directly with `flowchart TD` (or `classDiagram`/`sequenceDiagram` if clearly a better fit for this file). No prose, no markdown code fences, no explanation before or after. Keep node labels short. If the file has no meaningful internal structure to diagram (e.g. pure config/data), respond with exactly: flowchart TD\\n  A["No meaningful structure to diagram"]'
-    )
-    const diagram = stripMermaidFence(raw)
+
+    // Retrying gives the model a second, independent roll at complying with
+    // the format instruction — verified this does NOT reliably rescue large/
+    // dense files (both attempts returned prose, consistently, against a
+    // real 200KB+ SQL package in testing), but it's a free, harmless
+    // improvement for the more common case (most files aren't that large)
+    // and costs nothing when the first attempt already succeeds. Either way,
+    // two consecutive misses gives up cleanly (502, no DB write) rather than
+    // storing unrenderable text as if it were a valid diagram and silently
+    // clobbering a previously-good one.
+    let diagram: string | null = null
+    for (let attempt = 0; attempt < 2 && !diagram; attempt++) {
+      const raw = await aiChat(userPrompt, systemPrompt)
+      const stripped = stripMermaidFence(raw)
+      if (MERMAID_DIAGRAM_TYPE_RE.test(stripped)) diagram = stripped
+    }
+
+    if (!diagram) {
+      return res.status(502).json({ error: 'The AI did not return a valid diagram after 2 attempts — try again.' })
+    }
 
     await pool.query('UPDATE documents SET diagram = $2, diagram_hash = $3 WHERE id = $1', [id, diagram, doc.content_hash])
     res.json({ data: { diagram } })
