@@ -55,12 +55,29 @@ async function parseWithMarkItDown(filePath: string): Promise<string | null> {
 }
 
 // ── PDF ───────────────────────────────────────────────────────────────────
+// pdf-inspector (Rust/napi, no Python required) is tried first — it converts
+// straight to structured Markdown (real headings/tables/lists) and benchmarks
+// above MarkItDown specifically on PDFs (see its README), which is why 'pdf'
+// is deliberately absent from markItDownSupported below rather than routed
+// through the Python bridge first. Falls back to pdf-parse (raw text only,
+// no structure) on any failure — a corrupted file, an unsupported PDF
+// feature, or a scanned/image-based PDF with no extractable text layer —
+// same graceful-degradation contract as parseWithMarkItDown().
 
-async function parsePdf(filePath: string): Promise<string> {
+async function parsePdf(filePath: string): Promise<{ text: string; isMarkdown: boolean }> {
+  const buf = await fs.readFile(filePath)
+  try {
+    const { processPdfAsync } = await import('@firecrawl/pdf-inspector')
+    const result = await processPdfAsync(buf)
+    if (result.markdown && result.markdown.trim()) {
+      return { text: result.markdown, isMarkdown: true }
+    }
+  } catch (err) {
+    console.warn('pdf-inspector conversion failed, falling back to pdf-parse:', (err as Error).message)
+  }
   const { default: pdfParse } = await import('pdf-parse')
-  const buf  = await fs.readFile(filePath)
   const data = await pdfParse(buf)
-  return data.text
+  return { text: data.text, isMarkdown: false }
 }
 
 // ── DOCX ──────────────────────────────────────────────────────────────────
@@ -218,22 +235,28 @@ export async function parseFile(filePath: string, originalName: string): Promise
   let language: string | undefined
 
   // Support more formats via MarkItDown
-  // .ipynb is deliberately excluded — it's just JSON, so parseIpynb() handles
-  // it natively without needing the Python bridge at all.
-  const markItDownSupported = ['pdf', 'docx', 'xlsx', 'xls', 'pptx', 'ppt', 'csv', 'json', 'html', 'htm']
-  let viaMarkItDown = false
+  // .pdf is deliberately excluded — parsePdf() below tries pdf-inspector first
+  // (no Python required, benchmarks above MarkItDown on PDFs specifically),
+  // so there's no reason to pay for a slower Python subprocess call first.
+  // .ipynb is deliberately excluded too — it's just JSON, so parseIpynb()
+  // handles it natively without needing the Python bridge at all.
+  const markItDownSupported = ['docx', 'xlsx', 'xls', 'pptx', 'ppt', 'csv', 'json', 'html', 'htm']
+  let viaStructuredMarkdown = false
   if (markItDownSupported.includes(ext)) {
     text = await parseWithMarkItDown(filePath)
-    viaMarkItDown = text !== null
+    viaStructuredMarkdown = text !== null
   }
 
   // Fallback to legacy JS parsers if MarkItDown failed or isn't used for this ext
   if (text === null) {
     switch (ext) {
-      case 'pdf':
+      case 'pdf': {
         fileType = 'pdf'
-        text     = await parsePdf(filePath)
+        const parsed = await parsePdf(filePath)
+        text = parsed.text
+        viaStructuredMarkdown = parsed.isMarkdown
         break
+      }
       case 'docx':
         fileType = 'docx'
         text     = await parseDocx(filePath)
@@ -289,11 +312,11 @@ export async function parseFile(filePath: string, originalName: string): Promise
   }
 
   const trimmedText = text.trim()
-  // Only trust a heading pulled from markdown source or a MarkItDown
-  // conversion — native raw-text extraction (pdf-parse, mammoth, plain
-  // txt/csv/json) has no reliable heading marker, so a leading '#' there is
-  // more likely a comment than a title.
-  const heading = (ext === 'md' || viaMarkItDown) ? extractMarkdownHeadingTitle(trimmedText) : null
+  // Only trust a heading pulled from markdown source or a real markdown
+  // conversion (MarkItDown or pdf-inspector) — native raw-text extraction
+  // (pdf-parse, mammoth, plain txt/csv/json) has no reliable heading marker,
+  // so a leading '#' there is more likely a comment than a title.
+  const heading = (ext === 'md' || viaStructuredMarkdown) ? extractMarkdownHeadingTitle(trimmedText) : null
   const title   = heading
     ?? (AI_TITLE_FILE_TYPES.has(fileType) ? await generateTitleFromContent(trimmedText, originalName) : null)
     ?? baseName

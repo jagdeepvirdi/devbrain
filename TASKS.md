@@ -965,3 +965,63 @@ design, not oversight)*
       bump touched neither eslint itself nor anything it lints. Committed as `74e3567`; manually triggered
       `workflow_dispatch` run 31789474837 confirmed both `audit-server` and `audit-client` jobs green (no need
       to wait for the next Monday schedule to find out).
+
+---
+
+## Phase 42 — PDF Parsing via pdf-inspector (2026-08-14)
+
+> User found [firecrawl/pdf-inspector](https://github.com/firecrawl/pdf-inspector) (Rust/napi, MIT, 15k+ stars)
+> and asked whether it'd improve DevBrain's document ingestion. Evaluated against the existing PDF path in
+> `server/services/parser.ts` (MarkItDown-if-Python-installed, else `pdf-parse` as a pure-raw-text JS fallback
+> with no structure — which is why heading-based title extraction explicitly distrusted anything that didn't
+> come through MarkItDown). The repo's own benchmark against a 200-PDF corpus shows it beating MarkItDown
+> specifically on PDF quality (0.875 vs 0.589 overall score, 34x faster) while needing no Python at all — a
+> direct upgrade to both the primary and fallback PDF paths at once, not just a fallback swap.
+
+### Decided
+- **Becomes the primary PDF path, not just a better fallback** — `'pdf'` removed from `parseFile()`'s
+  `markItDownSupported` list; PDFs no longer even attempt the Python MarkItDown bridge. Justified by the
+  library's own benchmark data (see above), and it removes a Python-availability dependency for PDF quality
+  specifically (MarkItDown remains the primary path for docx/xlsx/pptx/etc., unchanged).
+- **Async API (`processPdfAsync`), not the sync one** — `processPdf`/`classifyPdf`/`extractPagesMarkdown` parse
+  on the calling thread (the Node event loop); their `*Async` counterparts run on the libuv thread pool instead.
+  Matches the event-loop-blocking concern already fixed elsewhere in this codebase (Phase 39's duplicate-
+  document-detection yield-to-event-loop fix) — a large PDF shouldn't be able to stall the whole server.
+- **Reuses the existing heading/title-trust machinery rather than adding a parallel one** — pdf-inspector's
+  Markdown output has real `#`/`##` headings (same as MarkItDown's), so the existing `viaMarkItDown` flag
+  (renamed `viaStructuredMarkdown`, since it's no longer MarkItDown-specific) and `extractMarkdownHeadingTitle()`
+  just work unchanged for the new path. Not consuming `PdfResult.title` (a field the library also returns) —
+  would have created a second, competing "prefer this title" mechanism to maintain for marginal gain over what
+  heading-extraction + the existing AI-title fallback already does.
+- **Falls back to `pdf-parse` on any failure** — a caught exception (corrupted file, an unsupported PDF
+  feature) or `result.markdown` coming back empty/undefined (a scanned/image-based PDF with no extractable text
+  layer — pdf-inspector classifies these but, same as every other path in this app, doesn't do OCR) — same
+  graceful-degradation contract as `parseWithMarkItDown()`'s own try/catch → `console.warn` → null pattern.
+
+### Tasks
+- [x] `npm install @firecrawl/pdf-inspector` in `server/` — done 2026-08-14. Verified no new `npm audit`
+      findings beyond the existing accepted-risk allowlist. Prebuilt binaries cover every platform this project
+      actually runs on: Windows x64 (dev), Linux x64 glibc (`ubuntu-latest` CI runners), and Linux x64 musl
+      (`server/Dockerfile` is `node:22-alpine`) — no gaps, confirmed against the package's own platform table
+      before installing, not assumed.
+- [x] `parsePdf()` rewritten in `server/services/parser.ts` — tries `processPdfAsync()` first, returns
+      `{ text, isMarkdown }`; falls back to the existing `pdf-parse` call on a thrown error or empty/undefined
+      `markdown`. `parseFile()`'s dispatch updated to call it directly in the `case 'pdf':` switch branch
+      (previously reached only when MarkItDown's own attempt returned `null`) and to set
+      `viaStructuredMarkdown` from the result instead of always `false` for this extension.
+- [x] Verified the native binary actually loads and works on this Windows dev machine, not just against mocks —
+      ran it directly against garbage bytes (threw a clean, catchable "Not a PDF: invalid PDF file header"
+      error, exactly the path `parsePdf()`'s try/catch handles) and confirmed the module's full export surface
+      resolves. `npm run build` (full `tsc` production build) also verified clean.
+- [x] `server/tests/services/parser.test.ts` — added a `vi.mock('@firecrawl/pdf-inspector', ...)` (the same
+      content-marker convention the file already uses elsewhere for controlling a mocked binary/subprocess
+      per-test: plain content → a normal Markdown conversion, `"trigger-scanned"` → classified but
+      `markdown: undefined` same as a real scanned PDF, `"trigger-error"` → the native call itself throwing).
+      Replaced the old ".pdf via MarkItDown" / ".pdf fallback when MarkItDown is unavailable" describe blocks
+      with ".pdf via pdf-inspector" (converted markdown + heading-title trust) / ".pdf fallback to pdf-parse"
+      (both failure modes). Full suite: 89 files / 1382 passed + 1 skipped, `tsc --noEmit` and `eslint .` both
+      clean (same 2 pre-existing `documents-ai.ts` warnings as before this phase, nothing new). Coverage
+      thresholds still clear with margin (96.68/93.27/94.99/97.8% stmts/branch/fn/lines).
+- [x] Docs: `CLAUDE.md`'s Tech Stack "File Parsing" line and `README.md`'s Tech Stack table's "File parsing"
+      row both updated to describe the new PDF-primary/`pdf-parse`-fallback path, MarkItDown scoped down to
+      "everything else" in both.

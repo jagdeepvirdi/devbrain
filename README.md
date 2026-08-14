@@ -90,7 +90,7 @@ A private developer knowledge base for organizing work artifacts across all acti
 | AI — embeddings | `nomic-embed-text` via Ollama |
 | AI — optional | Anthropic Claude API or Google Gemini (`AI_PROVIDER` env — `ollama` default) |
 | Search | pgvector cosine similarity + PostgreSQL tsvector hybrid |
-| File parsing | MarkItDown (Python bridge) with JS fallbacks (`pdf-parse`, `mammoth`, `marked`, `xlsx`) |
+| File parsing | PDF via `@firecrawl/pdf-inspector` (Rust/napi, structured Markdown, no Python) → `pdf-parse` fallback; everything else via MarkItDown (Python bridge) with JS fallbacks (`mammoth`, `marked`, `xlsx`) |
 | Notifications | Apprise (Python) — Telegram, Slack, Discord, and 80+ channels |
 | Code highlighting | Shiki |
 | Auth | bcrypt + JWT (local); LDAP/AD with auto-provisioning |

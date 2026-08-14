@@ -25,7 +25,7 @@ DevBrain is a private developer knowledge base for organizing work artifacts acr
   - Embeddings: `nomic-embed-text` (~300MB, ~50ms)
 - **AI (Optional / Manual only)**: Anthropic Claude API — only behind explicit "Enhance with Claude" button, never automatic
 - **Auth**: Local bcrypt + JWT (single user v1); LDAP/SSO for org v2
-- **File Parsing**: `pdf-parse` (PDF), `mammoth` (DOCX), `marked` (MD), `xlsx` (spreadsheets)
+- **File Parsing**: `@firecrawl/pdf-inspector` (PDF → structured Markdown, no Python needed, falls back to `pdf-parse` on failure/scanned PDFs), `mammoth` (DOCX), `marked` (MD), `xlsx` (spreadsheets)
 - **Code Highlighting**: Shiki
 - **Search**: pgvector (semantic) + PostgreSQL tsvector (full-text) hybrid
 

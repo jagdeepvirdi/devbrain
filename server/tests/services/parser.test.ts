@@ -29,13 +29,41 @@ vi.mock('word-extractor', () => ({
 }))
 
 // Mock pdf-parse and mammoth — a real PDF/DOCX needs a real binary fixture,
-// so the native-fallback path (MarkItDown unavailable) is tested with stubs,
-// same reasoning as word-extractor above.
+// so the native-fallback path (pdf-inspector/MarkItDown unavailable) is
+// tested with stubs, same reasoning as word-extractor above.
 vi.mock('pdf-parse', () => ({
   default: vi.fn().mockResolvedValue({ text: 'Extracted PDF text' }),
 }))
 vi.mock('mammoth', () => ({
   extractRawText: vi.fn().mockResolvedValue({ value: 'Extracted DOCX text' }),
+}))
+
+// Mock pdf-inspector (native Rust/napi module — no real binding to load in
+// tests). Content markers let individual tests pick the scenario: a plain
+// fixture gets a normal Markdown conversion; "trigger-scanned" simulates a
+// scanned PDF pdf-inspector can classify but not extract text from
+// (markdown undefined); "trigger-error" simulates the native call itself
+// throwing (corrupt file, unsupported PDF feature) — both fall through to
+// the mocked pdf-parse above.
+vi.mock('@firecrawl/pdf-inspector', () => ({
+  processPdfAsync: vi.fn(async (buf: Buffer) => {
+    const content = buf.toString('utf-8')
+    if (content.includes('trigger-scanned')) {
+      return {
+        pdfType: 'Scanned', markdown: undefined, pageCount: 1, processingTimeMs: 1,
+        pagesNeedingOcr: [1], ocrReasonsByPage: [], confidence: 0.9, isComplexLayout: false,
+        pagesWithTables: [], pagesWithColumns: [], hasEncodingIssues: false,
+      }
+    }
+    if (content.includes('trigger-error')) {
+      throw new Error('native module crashed')
+    }
+    return {
+      pdfType: 'TextBased', markdown: '# Mocked PDF Markdown\n\nContent.', pageCount: 1, processingTimeMs: 1,
+      pagesNeedingOcr: [], ocrReasonsByPage: [], confidence: 0.95, isComplexLayout: false,
+      pagesWithTables: [], pagesWithColumns: [], hasEncodingIssues: false,
+    }
+  }),
 }))
 
 // Mock the AI title fallback (pdf/docx content with no markdown heading).
@@ -212,24 +240,39 @@ describe('parseFile — .html fallback when MarkItDown is unavailable', () => {
   })
 })
 
-// ── PDF via MarkItDown ────────────────────────────────────────────────────────
+// ── PDF via pdf-inspector ───────────────────────────────────────────────────────
 
-describe('parseFile — .pdf via MarkItDown', () => {
-  it('maps fileType to pdf', async () => {
+describe('parseFile — .pdf via pdf-inspector', () => {
+  it('maps fileType to pdf and returns the converted markdown', async () => {
     const p = await writeTmp('doc.pdf', 'binary-junk')
     const result = await parseFile(p, 'doc.pdf')
 
     expect(result.fileType).toBe('pdf')
-    expect(result.text).toBe('Mocked Markdown Content')
+    expect(result.text).toBe('# Mocked PDF Markdown\n\nContent.')
+  })
+
+  it('trusts a heading from the converted markdown as the title, same as MarkItDown output', async () => {
+    const p = await writeTmp('doc.pdf', 'binary-junk')
+    const result = await parseFile(p, 'doc.pdf')
+
+    expect(result.title).toBe('Mocked PDF Markdown')
   })
 })
 
-// ── PDF native fallback ───────────────────────────────────────────────────────
+// ── PDF fallback to pdf-parse ─────────────────────────────────────────────────
 
-describe('parseFile — .pdf fallback when MarkItDown is unavailable', () => {
-  it('extracts text via pdf-parse', async () => {
-    const p = await writeTmp('doc-nomd.pdf', 'binary-junk')
-    const result = await parseFile(p, 'doc-nomd.pdf')
+describe('parseFile — .pdf fallback to pdf-parse', () => {
+  it('falls back when pdf-inspector finds no extractable markdown (e.g. a scanned PDF)', async () => {
+    const p = await writeTmp('scanned.pdf', 'trigger-scanned')
+    const result = await parseFile(p, 'scanned.pdf')
+
+    expect(result.fileType).toBe('pdf')
+    expect(result.text).toBe('Extracted PDF text')
+  })
+
+  it('falls back when pdf-inspector itself throws', async () => {
+    const p = await writeTmp('broken.pdf', 'trigger-error')
+    const result = await parseFile(p, 'broken.pdf')
 
     expect(result.fileType).toBe('pdf')
     expect(result.text).toBe('Extracted PDF text')
