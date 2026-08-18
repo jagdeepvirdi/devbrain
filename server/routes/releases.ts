@@ -313,9 +313,15 @@ router.get('/', async (req, res) => {
 
   try {
     const { rows } = await pool.query(
-      `SELECT r.*, p.name AS project_name, p.color AS project_color
+      `SELECT r.*, p.name AS project_name, p.color AS project_color,
+              COALESCE(li.issues, '[]'::json) AS linked_issue_details
        FROM releases r
        JOIN projects p ON p.id = r.project_id
+       LEFT JOIN LATERAL (
+         SELECT json_agg(json_build_object('id', i.id, 'title', i.title)) AS issues
+         FROM issues i
+         JOIN unnest(r.linked_issues) AS lid(id) ON i.id = lid.id
+       ) li ON true
        ${where}
        ORDER BY r.date DESC, r.created_at DESC`,
       values
@@ -413,8 +419,15 @@ router.get('/export', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT r.*, p.name AS project_name, p.color AS project_color
-       FROM releases r JOIN projects p ON p.id = r.project_id
+      `SELECT r.*, p.name AS project_name, p.color AS project_color,
+              COALESCE(li.issues, '[]'::json) AS linked_issue_details
+       FROM releases r
+       JOIN projects p ON p.id = r.project_id
+       LEFT JOIN LATERAL (
+         SELECT json_agg(json_build_object('id', i.id, 'title', i.title)) AS issues
+         FROM issues i
+         JOIN unnest(r.linked_issues) AS lid(id) ON i.id = lid.id
+       ) li ON true
        WHERE r.id = $1`,
       [req.params.id]
     )

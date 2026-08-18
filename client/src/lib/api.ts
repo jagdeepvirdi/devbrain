@@ -985,6 +985,9 @@ export type Release = {
   breaking_changes: string[]
   notes:            string
   linked_issues:    string[]
+  // Titles for linked_issues, resolved server-side (GET list/byId only — absent
+  // right after create/update, same as project_name/project_color below).
+  linked_issue_details?: { id: string; title: string }[]
   component:        string | null
   created_at:       string
   project_name:     string
