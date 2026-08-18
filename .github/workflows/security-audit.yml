@@ -46,8 +46,7 @@ jobs:
           cache: 'npm'
           cache-dependency-path: client/package-lock.json
       - run: npm ci
-      # Known accepted-risk finding as of 2026-07-24: react-router-dom's moderate open-
-      # redirect advisories require a v6 -> v7 major bump (breaking API changes), not
-      # done as a side effect of this audit job. Re-evaluate if this job starts failing
-      # on something new, or when the v7 migration is scheduled separately.
+      # react-router-dom bumped to ^7.18.2 on 2026-08-17 (tech-debt audit remediation),
+      # which resolved the two moderate open-redirect/constructor-injection advisories
+      # previously accepted here — 0 vulnerabilities as of that date, no allowlist needed.
       - run: npm audit --audit-level=high

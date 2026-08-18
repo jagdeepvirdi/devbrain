@@ -8,12 +8,18 @@ import { encrypt, decrypt } from '../services/crypto.js'
 
 const router = Router()
 
+const NotifyBody = z.object({
+  project: z.string().min(1).max(100),
+  title:   z.string().min(1).max(200),
+  body:    z.string().min(1).max(5000),
+  level:   z.enum(['info', 'success', 'warning', 'error']).default('info'),
+})
+
 // ── POST /api/notify (Public hook for Claude Code sessions or other tools) ───
 router.post('/', async (req, res) => {
-  const { project: shortName, title, body, level = 'info' } = req.body
-  if (!shortName || !title || !body) {
-    return res.status(400).json({ error: 'Missing required fields: project, title, body' })
-  }
+  const parsed = NotifyBody.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
+  const { project: shortName, title, body, level } = parsed.data
 
   try {
     const { rows: projRows } = await pool.query('SELECT * FROM projects WHERE short_name = $1', [shortName])

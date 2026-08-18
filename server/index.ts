@@ -110,6 +110,22 @@ app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiSpec))
 import authRouter from './routes/auth.js'
 app.use('/api/auth', authRouter)
 
+// POST /api/notify is the one route that's both unauthenticated (called by
+// local tooling/hooks with no browser session, so it can't require the JWT)
+// and mounted ahead of the baseline apiLimiter below — without its own
+// limiter here it'd be an open spam vector the moment this server is ever
+// reachable beyond localhost.
+const notifyLimiter = rateLimit({
+  windowMs:        60 * 1000,  // 1 minute
+  max:             20,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  handler: (_req, res) => {
+    res.status(429).json({ error: 'Too many requests — slow down' })
+  },
+})
+app.post('/api/notify', notifyLimiter)
+
 import notifyRouter from './routes/notify.js'
 app.use('/api/notify', notifyRouter)
 

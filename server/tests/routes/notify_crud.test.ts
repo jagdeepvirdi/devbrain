@@ -53,6 +53,32 @@ describe('POST /api/notify', () => {
     expect(res.status).toHaveBeenCalledWith(400)
   })
 
+  it('400s on an unrecognized level instead of forwarding it verbatim', async () => {
+    const res = fakeRes()
+    await getHandler('/', 'post')({ body: { project: 'x', title: 'T', body: 'B', level: 'critical' } }, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({ error: 'Validation error', issues: expect.any(Array) })
+    expect(mockQuery).not.toHaveBeenCalled()
+  })
+
+  it('400s a body over the 5000-char cap', async () => {
+    const res = fakeRes()
+    await getHandler('/', 'post')({ body: { project: 'x', title: 'T', body: 'B'.repeat(5001) } }, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(mockQuery).not.toHaveBeenCalled()
+  })
+
+  it('defaults level to info when omitted', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'p1' }] } as never)
+    mockGetUsersToNotify.mockResolvedValueOnce(['u1'])
+    mockSendApprise.mockResolvedValueOnce([] as never)
+    const res = fakeRes()
+
+    await getHandler('/', 'post')({ body: { project: 'x', title: 'T', body: 'B' } }, res, () => {})
+
+    expect(mockSendApprise).toHaveBeenCalledWith(expect.objectContaining({ level: 'info' }))
+  })
+
   it('sums delivered_to across users with differing per-user delivery counts', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ id: 'p1', short_name: 'proj' }] } as never)
     mockGetUsersToNotify.mockResolvedValueOnce(['u1', 'u2', 'u3'])

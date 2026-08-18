@@ -18,10 +18,25 @@ import { encrypt, decrypt } from '../services/crypto.js'
 // /backup-config, /backup-now, /backup-config/test-remote, /zip-import) with no :id-style
 // params anywhere in this router, so there's no path-ordering concern with the other
 // settings sub-routers regardless of mount order.
+//
+// This file is ~600 lines and creeping back toward god-file size (2026-08-17 audit) —
+// not worth splitting preemptively, but the next feature landing here (a new backup
+// destination, another import format, …) should pull its own concern into a sibling
+// file rather than growing this one further.
 
 const upload = multer({ dest: path.join(os.tmpdir(), 'devbrain-uploads'), limits: { fileSize: 200 * 1024 * 1024 } })
 
 const router = Router()
+
+// adm-zip <0.6.0 has an unpatched DoS advisory: a crafted zip can declare an
+// enormous uncompressed size in its (attacker-controlled) header, which then
+// gets fully allocated in memory the moment something calls entry.getData().
+// Multer's fileSize limit only bounds the *compressed* upload — it does
+// nothing against a small zip bomb — so zip-import validates each entry's
+// declared header.size itself, before ever touching getData(), and rejects
+// anything past a sane cap rather than trusting the archive's own claims.
+const MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES = 50  * 1024 * 1024  // 50MB per file
+const MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES = 200 * 1024 * 1024  // 200MB per archive
 
 // GET /api/settings/backup — full JSON export (excludes raw document content + chunk embeddings)
 router.get('/backup', async (_req, res) => {
@@ -426,6 +441,24 @@ router.post('/zip-import', requireRole('admin'), upload.single('file'), async (r
   try {
     const zip     = new AdmZip(req.file.path)
     const entries = zip.getEntries()
+
+    // Validate declared (uncompressed) entry sizes before any entry.getData()
+    // call decompresses anything — see MAX_ZIP_* comment above.
+    let totalUncompressed = 0
+    for (const entry of entries) {
+      if (entry.isDirectory) continue
+      if (entry.header.size > MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES) {
+        return res.status(400).json({
+          error: `Zip entry "${entry.entryName}" declares an uncompressed size over the ${MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES / (1024 * 1024)}MB per-file limit`,
+        })
+      }
+      totalUncompressed += entry.header.size
+      if (totalUncompressed > MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES) {
+        return res.status(400).json({
+          error: `Zip archive's total uncompressed size exceeds the ${MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES / (1024 * 1024)}MB limit`,
+        })
+      }
+    }
 
     type Tally = { created: number; skipped: number }
     const summary: Record<string, Tally> = { documents: { created: 0, skipped: 0 }, issues: { created: 0, skipped: 0 }, commands: { created: 0, skipped: 0 } }

@@ -557,6 +557,41 @@ describe('POST /api/settings/zip-import', () => {
     expect(res.status).toHaveBeenCalledWith(400)
   })
 
+  // adm-zip <0.6.0's unpatched DoS advisory lets a crafted zip declare a huge
+  // uncompressed size and blow up memory the moment something decompresses
+  // it — these confirm the route rejects on the declared header.size *before*
+  // any entry.getData() call, using genuinely oversized (compressible, so the
+  // zip file on disk stays small) content rather than a hand-forged header.
+  it('400s a single entry over the 50MB per-file uncompressed cap, without decompressing it', async () => {
+    const zip = new AdmZip()
+    zip.addFile('playcru/documents/big.md', Buffer.alloc(51 * 1024 * 1024, 'x'))
+    const zipPath = path.join(tmpDir, 'big-entry.zip')
+    zip.writeZip(zipPath)
+
+    const res = fakeRes()
+    await getHandler('/zip-import', 'post')({ file: { path: zipPath }, query: {} }, res, () => {})
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({ error: expect.stringContaining('per-file limit') })
+    expect(mockConnect).not.toHaveBeenCalled()
+  })
+
+  it('400s an archive whose entries sum past the 200MB total uncompressed cap, even if each is individually under the per-file cap', async () => {
+    const zip = new AdmZip()
+    for (let i = 0; i < 5; i++) {
+      zip.addFile(`playcru/documents/part-${i}.md`, Buffer.alloc(41 * 1024 * 1024, 'x')) // 5 * 41MB = 205MB
+    }
+    const zipPath = path.join(tmpDir, 'big-total.zip')
+    zip.writeZip(zipPath)
+
+    const res = fakeRes()
+    await getHandler('/zip-import', 'post')({ file: { path: zipPath }, query: {} }, res, () => {})
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({ error: expect.stringContaining('total uncompressed size') })
+    expect(mockConnect).not.toHaveBeenCalled()
+  })
+
   it('dry run: counts new documents/issues/commands, skips duplicates, unknown projects, and non-.md/directory entries', async () => {
     const zipPath = buildZip([
       { name: 'playcru/documents/api-notes.md', content: docMd },
