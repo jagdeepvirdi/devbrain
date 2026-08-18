@@ -27,6 +27,7 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
   const [suggestedTags, setSuggestedTags] = useState<string[]>([])
   const [component,     setComponent]     = useState('')
   const [componentOptions, setComponentOptions] = useState<string[]>([])
+  const [issueCode,     setIssueCode]     = useState('')
   const relatedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const suggestTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -121,6 +122,7 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
         project_id: projectId,
         tags,
         component: component.trim() || null,
+        issue_code: issueCode.trim() || null,
         investigation_steps,
       })
       onCreate(issue)
@@ -179,17 +181,30 @@ export function NewIssueModal({ onClose, onCreate }: { onClose: () => void; onCr
           </select>
         </div>
 
-        <input
-          value={title}
-          onChange={e => setTitle(e.target.value)}
-          placeholder="Issue title"
-          autoFocus
-          style={{
-            padding: '8px 10px', borderRadius: 6,
-            border: '1px solid var(--line-2)', background: 'var(--bg)',
-            color: 'var(--fg)', fontSize: '13px', outline: 'none',
-          }}
-        />
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            value={title}
+            onChange={e => setTitle(e.target.value)}
+            placeholder="Issue title"
+            autoFocus
+            style={{
+              flex: 1, padding: '8px 10px', borderRadius: 6,
+              border: '1px solid var(--line-2)', background: 'var(--bg)',
+              color: 'var(--fg)', fontSize: '13px', outline: 'none',
+            }}
+          />
+          <input
+            value={issueCode}
+            onChange={e => setIssueCode(e.target.value)}
+            placeholder="Issue ID"
+            title="External case/ticket reference (optional) — e.g. S210005"
+            style={{
+              width: 110, padding: '8px 10px', borderRadius: 6,
+              border: '1px solid var(--line-2)', background: 'var(--bg)',
+              color: 'var(--fg)', fontSize: '13px', outline: 'none', fontFamily: 'var(--font-mono)',
+            }}
+          />
+        </div>
 
         {related.length > 0 && (
           <div style={{ background: 'var(--bg)', border: '1px solid var(--line-2)', borderRadius: 6, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 4 }}>

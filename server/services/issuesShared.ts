@@ -11,7 +11,7 @@ export const ISSUE_COLS = `
   i.id, i.project_id, i.title, i.description, i.status, i.priority,
   i.linked_docs, i.linked_commands, i.pr_url,
   i.resolution, i.tags, i.component, i.embedding_status, i.summary,
-  i.source, i.external_id,
+  i.source, i.external_id, i.issue_code,
   i.created_at, i.updated_at, i.resolved_at,
   p.name  AS project_name,
   p.color AS project_color,

@@ -27,6 +27,7 @@ const CreateBody = z.object({
   project_id:          z.string().nullable().optional(),
   tags:                z.array(z.string()).default([]),
   component:           z.string().max(200).trim().nullable().optional(),
+  issue_code:          z.string().max(50).trim().nullable().optional(),
   investigation_steps: z.array(StepSchema).default([]),
 })
 
@@ -38,6 +39,7 @@ const UpdateBody = z.object({
   project_id:          z.string().nullable().optional(),
   tags:                z.array(z.string()).optional(),
   component:           z.string().max(200).trim().nullable().optional(),
+  issue_code:          z.string().max(50).trim().nullable().optional(),
   investigation_steps: z.array(StepSchema).optional(),
   resolution:          z.string().max(5000).optional(),
   pr_url:              z.string().url().max(500).nullable().optional(),
@@ -124,7 +126,7 @@ router.get('/', async (req, res) => {
   }
 
   if (q) {
-    conditions.push(`(i.tsv @@ plainto_tsquery('english', $${idx}) OR i.title ILIKE $${idx + 1} OR i.description ILIKE $${idx + 1})`)
+    conditions.push(`(i.tsv @@ plainto_tsquery('english', $${idx}) OR i.title ILIKE $${idx + 1} OR i.description ILIKE $${idx + 1} OR i.issue_code ILIKE $${idx + 1})`)
     values.push(q)
     values.push(`%${q}%`)
     idx += 2
@@ -328,17 +330,17 @@ router.post('/', requireRole('member'), async (req, res) => {
   const parsed = CreateBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
-  const { title, description, status, priority, project_id, tags, component, investigation_steps } = parsed.data
+  const { title, description, status, priority, project_id, tags, component, issue_code, investigation_steps } = parsed.data
 
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
 
     const { rows } = await client.query(
-      `INSERT INTO issues (project_id, title, description, status, priority, tags, component)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO issues (project_id, title, description, status, priority, tags, component, issue_code)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id`,
-      [project_id ?? null, title, description, status, priority, tags, component?.trim() || null]
+      [project_id ?? null, title, description, status, priority, tags, component?.trim() || null, issue_code?.trim() || null]
     )
     const issueId = rows[0].id
 
@@ -368,7 +370,7 @@ router.post('/', requireRole('member'), async (req, res) => {
 
 // ── PUT /api/issues/:id ───────────────────────────────────────────────────
 
-const ISSUE_UPDATABLE_COLS = new Set(['title', 'description', 'status', 'priority', 'project_id', 'tags', 'component', 'resolution', 'pr_url'])
+const ISSUE_UPDATABLE_COLS = new Set(['title', 'description', 'status', 'priority', 'project_id', 'tags', 'component', 'issue_code', 'resolution', 'pr_url'])
 
 router.put('/:id', requireRole('member'), async (req, res) => {
   const parsed = UpdateBody.safeParse(req.body)

@@ -16,10 +16,12 @@ export function fmtDate(d: string) {
 
 export function today() { return new Date().toISOString().split('T')[0] }
 
-// Label for a linked-issue badge — the issue's title (which carries the Case ID as
-// its leading token for bulk-imported NT Billing issues, e.g. "CASE-1234 — ...")
-// when resolved, falling back to a truncated id for releases where the join hasn't
-// run yet (just-created/just-edited releases — see linked_issue_details in api.ts).
-export function issueLabel(id: string, details?: { id: string; title: string }[]) {
-  return details?.find(d => d.id === id)?.title ?? `#${id.slice(0, 8)}`
+// Label for a linked-issue badge — "<issue code> — <title>" when the issue has one
+// (e.g. NT Billing's "S210005"), else just the title, falling back to a truncated id
+// for releases where the join hasn't run yet (just-created/just-edited releases — see
+// linked_issue_details in api.ts).
+export function issueLabel(id: string, details?: { id: string; title: string; issue_code?: string | null }[]) {
+  const d = details?.find(d => d.id === id)
+  if (!d) return `#${id.slice(0, 8)}`
+  return d.issue_code ? `${d.issue_code} — ${d.title}` : d.title
 }

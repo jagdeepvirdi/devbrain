@@ -318,7 +318,7 @@ router.get('/', async (req, res) => {
        FROM releases r
        JOIN projects p ON p.id = r.project_id
        LEFT JOIN LATERAL (
-         SELECT json_agg(json_build_object('id', i.id, 'title', i.title)) AS issues
+         SELECT json_agg(json_build_object('id', i.id, 'title', i.title, 'issue_code', i.issue_code)) AS issues
          FROM issues i
          JOIN unnest(r.linked_issues) AS lid(id) ON i.id = lid.id
        ) li ON true
@@ -424,7 +424,7 @@ router.get('/:id', async (req, res) => {
        FROM releases r
        JOIN projects p ON p.id = r.project_id
        LEFT JOIN LATERAL (
-         SELECT json_agg(json_build_object('id', i.id, 'title', i.title)) AS issues
+         SELECT json_agg(json_build_object('id', i.id, 'title', i.title, 'issue_code', i.issue_code)) AS issues
          FROM issues i
          JOIN unnest(r.linked_issues) AS lid(id) ON i.id = lid.id
        ) li ON true

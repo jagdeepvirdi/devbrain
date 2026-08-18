@@ -700,6 +700,7 @@ export type Issue = {
   pr_url:              string | null
   tags:                string[]
   component:           string | null
+  issue_code:          string | null
   summary:             string | null
   source:              string
   external_id:         string | null
@@ -712,6 +713,7 @@ export type Issue = {
 export type IssueInput = Pick<Issue, 'title' | 'description' | 'status' | 'priority' | 'tags'> & {
   project_id?: string | null
   component?: string | null
+  issue_code?: string | null
   investigation_steps?: IssueStep[]
 }
 
@@ -988,7 +990,7 @@ export type Release = {
   linked_issues:    string[]
   // Titles for linked_issues, resolved server-side (GET list/byId only — absent
   // right after create/update, same as project_name/project_color below).
-  linked_issue_details?: { id: string; title: string }[]
+  linked_issue_details?: { id: string; title: string; issue_code: string | null }[]
   component:        string | null
   created_at:       string
   project_name:     string

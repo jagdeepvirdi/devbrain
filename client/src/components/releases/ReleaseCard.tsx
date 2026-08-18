@@ -154,7 +154,7 @@ export function ReleaseCard({ release, onEdit, onDelete }: {
             {release.linked_issues.length > 0 && (
               <div>
                 <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 6 }}>
-                  Case / Issue
+                  Issue ID
                 </div>
                 <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
                   {release.linked_issues.map(id => {

@@ -50,7 +50,7 @@ export function ReleaseTable({ releases, showProject, onEdit, onDelete }: {
             <SortableTh sortKeyName="type" label="Type" width={80} />
             <SortableTh sortKeyName="component" label="Component" width={160} />
             {showProject && <th style={{ ...thStyle, width: 140 }}>Project</th>}
-            <th style={{ ...thStyle, width: 160 }}>Case / Issue</th>
+            <th style={{ ...thStyle, width: 160 }}>Issue ID</th>
             <th style={thStyle}>Summary</th>
             <th style={{ ...thStyle, width: 110, textAlign: 'right' }}>Actions</th>
           </tr>

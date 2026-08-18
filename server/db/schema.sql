@@ -444,6 +444,16 @@ ALTER TABLE issues ADD COLUMN IF NOT EXISTS source      TEXT NOT NULL DEFAULT 'd
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS external_id TEXT;
 CREATE INDEX IF NOT EXISTS issues_external_id_idx ON issues (external_id) WHERE external_id IS NOT NULL;
 
+-- Phase 44: Issue Code — a free-text, user-entered ticket/case reference (e.g. NT Billing's
+-- "S210005"), shown to users as "Issue ID". Named issue_code rather than issue_id at the
+-- column/API level to avoid colliding with the issue_id FK convention already used by
+-- issue_steps/issue_notes/issue_commits (all genuine foreign keys to issues.id) — a column
+-- named issue_id sitting on the issues table itself would misleadingly read as a self-FK.
+-- Also distinct from external_id above, which is system-managed by the GitHub/Jira/Linear
+-- sync integrations in services/integrations.ts and upserted on via ON CONFLICT.
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS issue_code TEXT;
+CREATE INDEX IF NOT EXISTS issues_issue_code_idx ON issues (issue_code) WHERE issue_code IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS integrations (
   id                  TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
   provider            TEXT        NOT NULL,

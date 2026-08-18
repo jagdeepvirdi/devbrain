@@ -64,6 +64,15 @@ export function IssueRow({ issue, onClick, selected, onToggleSelect, hasSelectio
             {issue.source}
           </span>
         )}
+        {issue.issue_code && (
+          <span style={{
+            fontSize: '10.5px', fontFamily: 'var(--font-mono)', color: 'var(--fg-3)',
+            background: 'var(--bg-elev-2)', border: '1px solid var(--line-2)',
+            borderRadius: 3, padding: '1px 5px', flexShrink: 0,
+          }}>
+            {issue.issue_code}
+          </span>
+        )}
         {issue.title}
       </span>
 

@@ -37,6 +37,8 @@ export function IssueDetail({ issueId, onBack, onDeleted }: { issueId: string; o
   const [editingComponent, setEditingComponent] = useState(false)
   const [componentDraft, setComponentDraft] = useState('')
   const [componentOptions, setComponentOptions] = useState<string[]>([])
+  const [editingIssueCode, setEditingIssueCode] = useState(false)
+  const [issueCodeDraft, setIssueCodeDraft] = useState('')
   const { toast } = useToast()
   const { track } = useRecentlyViewed()
 
@@ -350,6 +352,38 @@ export function IssueDetail({ issueId, onBack, onDeleted }: { issueId: string; o
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+
+          {/* Issue ID pill */}
+          <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
+            {editingIssueCode ? (
+              <input
+                autoFocus
+                value={issueCodeDraft}
+                onChange={e => setIssueCodeDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') { patch({ issue_code: issueCodeDraft.trim() || null }); setEditingIssueCode(false) }
+                  if (e.key === 'Escape') setEditingIssueCode(false)
+                }}
+                onBlur={() => { patch({ issue_code: issueCodeDraft.trim() || null }); setEditingIssueCode(false) }}
+                style={{ fontSize: '11.5px', padding: '3px 8px', borderRadius: 5, border: '1px solid var(--line-2)', background: 'var(--bg)', color: 'var(--fg)', width: 100, outline: 'none', fontFamily: 'var(--font-mono)' }}
+              />
+            ) : (
+              <button
+                onClick={() => { setIssueCodeDraft(issue.issue_code ?? ''); setEditingIssueCode(true) }}
+                title="Issue ID — external ticket/case reference"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  fontSize: '11.5px', padding: '3px 8px', borderRadius: 5, fontFamily: 'var(--font-mono)',
+                  color: issue.issue_code ? 'var(--accent-2)' : 'var(--fg-4)',
+                  background: issue.issue_code ? 'var(--accent-dim)' : 'var(--bg-elev-2)',
+                  border: `1px solid ${issue.issue_code ? 'var(--accent-line)' : 'var(--line-2)'}`,
+                  cursor: 'default',
+                }}
+              >
+                {issue.issue_code || '+ Issue ID'}
+              </button>
             )}
           </div>
 
