@@ -1,6 +1,13 @@
 import { spawn } from 'child_process'
+import path from 'path'
+import { fileURLToPath } from 'node:url'
 import { pool } from '../db/pool.js'
 import { decrypt } from './crypto.js'
+
+// Resolved from this file's own location, not a cwd-relative guess — a literal
+// 'server/scripts/...' path resolves to server/server/scripts/... when the process
+// is launched from inside server/ (see the same fix in services/parser.ts).
+const SCRIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts')
 
 export async function sendAppriseNotification(params: {
   userId: string
@@ -49,7 +56,7 @@ export async function sendAppriseNotification(params: {
 
   // Deliver via Python script
   const results = await new Promise<{ sent: boolean; error?: string }>((resolve) => {
-    const child = spawn('python', ['server/scripts/apprise_client.py'])
+    const child = spawn('python', [path.join(SCRIPTS_DIR, 'apprise_client.py')])
     let stdout = ''
     let stderr = ''
 

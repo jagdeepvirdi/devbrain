@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EventEmitter } from 'node:events'
+import path from 'path'
+import { fileURLToPath } from 'node:url'
+
+// Same '../scripts/...' climb from this file's own location as notifications.ts uses
+// from services/ — both are one directory away from server/, so this lands on the
+// same real absolute path notifications.ts actually invokes.
+const DIGEST_SCHEDULER_PY = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../scripts/digest_scheduler.py')
 
 vi.mock('../../db/pool.js', () => ({
   pool: {
@@ -227,7 +234,7 @@ describe('startDigestScheduler', () => {
 
     await startDigestScheduler()
 
-    expect(mockSpawn).toHaveBeenCalledWith('python', ['server/scripts/digest_scheduler.py'], {
+    expect(mockSpawn).toHaveBeenCalledWith('python', [DIGEST_SCHEDULER_PY], {
       stdio: 'inherit',
       env: process.env,
     })

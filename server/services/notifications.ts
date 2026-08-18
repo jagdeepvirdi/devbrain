@@ -1,6 +1,13 @@
 import { spawn } from 'child_process'
+import path from 'path'
+import { fileURLToPath } from 'node:url'
 import { pool } from '../db/pool.js'
 import { withAdvisoryLock, tryAcquireLongLivedLock, LOCK_KEYS } from '../lib/advisoryLock.js'
+
+// Resolved from this file's own location, not a cwd-relative guess — a literal
+// 'server/scripts/...' path resolves to server/server/scripts/... when the process
+// is launched from inside server/ (see the same fix in services/parser.ts).
+const SCRIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts')
 
 
 export async function createNotification(userId: string, params: {
@@ -135,7 +142,7 @@ export async function startDigestScheduler(): Promise<void> {
   }
 
   console.log('  digest-scheduler: starting Python background process...')
-  const child = spawn('python', ['server/scripts/digest_scheduler.py'], {
+  const child = spawn('python', [path.join(SCRIPTS_DIR, 'digest_scheduler.py')], {
     stdio: 'inherit',
     env: process.env
   })
