@@ -6,6 +6,7 @@ import { runSeed } from '../db/seed.js'
 import { env } from '../lib/env.js'
 import { requireRole } from '../middleware/auth.js'
 import { refreshProjectWatch } from '../services/tasks-watcher.js'
+import { triggerBackupNow, DEFAULT_BACKUP_RETENTION_COUNT, resolveRemoteConfig } from '../services/backup.js'
 
 const router = Router()
 
@@ -181,15 +182,84 @@ router.put('/:id/link', requireRole('member'), async (req, res) => {
 })
 
 // ── DELETE /api/projects/:id ──────────────────────────────────────────────
+// Hard delete — irreversible aside from whatever backup this route takes.
+// FK ON DELETE CASCADE handles documents/issues/commands/releases/etc, but
+// entity_links is polymorphic (a_type/a_id as plain TEXT) so it can't carry
+// an FK — we prune its rows for this project's entities ourselves, in the
+// same transaction, before the cascade fires.
+
+const ConfirmBody = z.object({
+  confirm_name: z.string().min(1),
+})
 
 router.delete('/:id', requireRole('admin'), async (req, res) => {
+  const parsed = ConfirmBody.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'confirm_name is required to delete a project' })
+  }
+
   try {
-    const { rows } = await pool.query(
-      `DELETE FROM projects WHERE id = $1 RETURNING id, name`,
-      [req.params.id]
+    const { rows: existing } = await pool.query(
+      `SELECT id, name FROM projects WHERE id = $1`,
+      [req.params.id],
     )
-    if (rows.length === 0) return res.status(404).json({ error: 'Project not found' })
-    res.json({ data: { deleted: rows[0] } })
+    if (existing.length === 0) return res.status(404).json({ error: 'Project not found' })
+    if (parsed.data.confirm_name !== existing[0].name) {
+      return res.status(400).json({ error: 'confirm_name does not match the project name' })
+    }
+
+    // Best-effort safety net: if a backup destination is configured, snapshot
+    // everything before the irreversible delete. If one IS configured but the
+    // backup fails, abort rather than deleting on a false sense of safety.
+    const { rows: settingsRows } = await pool.query(
+      `SELECT value FROM app_settings WHERE key = 'backup_settings'`,
+    )
+    const backupCfg = settingsRows[0]?.value as
+      { path: string | null; retention_count?: number | null; remote?: unknown } | undefined
+
+    if (backupCfg?.path) {
+      try {
+        await triggerBackupNow(
+          backupCfg.path,
+          backupCfg.retention_count ?? DEFAULT_BACKUP_RETENTION_COUNT,
+          resolveRemoteConfig(backupCfg.remote),
+        )
+      } catch (err) {
+        return res.status(500).json({ error: `Pre-delete backup failed, project was not deleted: ${(err as Error).message}` })
+      }
+    }
+
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+
+      await client.query(
+        `WITH ids AS (
+           SELECT 'document' AS t, id FROM documents WHERE project_id = $1
+           UNION ALL SELECT 'issue',   id FROM issues    WHERE project_id = $1
+           UNION ALL SELECT 'command', id FROM commands  WHERE project_id = $1
+           UNION ALL SELECT 'release', id FROM releases  WHERE project_id = $1
+           UNION ALL SELECT 'task',    id FROM tasks     WHERE project_id = $1
+         )
+         DELETE FROM entity_links el
+         WHERE EXISTS (SELECT 1 FROM ids WHERE ids.t = el.a_type AND ids.id = el.a_id)
+            OR EXISTS (SELECT 1 FROM ids WHERE ids.t = el.b_type AND ids.id = el.b_id)`,
+        [req.params.id],
+      )
+
+      const { rows } = await client.query(
+        `DELETE FROM projects WHERE id = $1 RETURNING id, name`,
+        [req.params.id],
+      )
+
+      await client.query('COMMIT')
+      res.json({ data: { deleted: rows[0] } })
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
   }

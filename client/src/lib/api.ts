@@ -303,7 +303,8 @@ export const projectsApi = {
   create:    (body: ProjectInput)            => request<Project>('/projects', { method: 'POST', body: JSON.stringify(body) }),
   update:    (id: string, body: Partial<ProjectInput>) =>
     request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
-  remove:    (id: string)                   => request<{ deleted: { id: string; name: string } }>(`/projects/${id}`, { method: 'DELETE' }),
+  remove:    (id: string, confirmName: string) =>
+    request<{ deleted: { id: string; name: string } }>(`/projects/${id}`, { method: 'DELETE', body: JSON.stringify({ confirm_name: confirmName }) }),
   seedReset: ()                             => request<{ message: string }>('/projects/seed/reset', { method: 'POST' }),
   link:      (id: string, fsPath: string | null) =>
     request<Project>(`/projects/${id}/link`, { method: 'PUT', body: JSON.stringify({ fs_path: fsPath }) }),

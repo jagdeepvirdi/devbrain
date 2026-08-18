@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../../db/pool.js', () => ({
-  pool: { query: vi.fn() },
+  pool: { query: vi.fn(), connect: vi.fn() },
 }))
 
 vi.mock('../../db/seed.js', () => ({
@@ -10,6 +10,12 @@ vi.mock('../../db/seed.js', () => ({
 
 vi.mock('../../services/tasks-watcher.js', () => ({
   refreshProjectWatch: vi.fn(),
+}))
+
+vi.mock('../../services/backup.js', () => ({
+  triggerBackupNow: vi.fn(),
+  resolveRemoteConfig: vi.fn(() => ({ type: 'none' })),
+  DEFAULT_BACKUP_RETENTION_COUNT: 30,
 }))
 
 vi.mock('../../lib/env.js', () => ({
@@ -24,13 +30,33 @@ import projectsRouter from '../../routes/projects.js'
 import { pool } from '../../db/pool.js'
 import { runSeed } from '../../db/seed.js'
 import { refreshProjectWatch } from '../../services/tasks-watcher.js'
+import { triggerBackupNow } from '../../services/backup.js'
 import { env } from '../../lib/env.js'
 import { promises as fsPromises } from 'node:fs'
 
 const mockQuery = vi.mocked(pool.query)
+const mockConnect = vi.mocked(pool.connect)
 const mockRunSeed = vi.mocked(runSeed)
 const mockRefreshProjectWatch = vi.mocked(refreshProjectWatch)
+const mockTriggerBackupNow = vi.mocked(triggerBackupNow)
 const mockStat = vi.mocked(fsPromises.stat)
+
+// DELETE /:id opens a transaction via pool.connect() — this stubs a client
+// whose .query() resolves BEGIN/COMMIT with {} and returns `deleteRows` for
+// the `DELETE FROM projects ... RETURNING` call specifically.
+function stubTxClient(deleteRows: unknown[]) {
+  const client = {
+    query: vi.fn().mockImplementation((sql: string) => {
+      if (typeof sql === 'string' && sql.trim().startsWith('DELETE FROM projects')) {
+        return Promise.resolve({ rows: deleteRows })
+      }
+      return Promise.resolve({ rows: [] })
+    }),
+    release: vi.fn(),
+  }
+  mockConnect.mockResolvedValueOnce(client as never)
+  return client
+}
 
 type RouteLayer = { route?: { path: string; methods: Record<string, boolean>; stack: { handle: (...args: unknown[]) => unknown }[] } }
 
@@ -230,24 +256,101 @@ describe('PUT /api/projects/:id/link', () => {
 })
 
 describe('DELETE /api/projects/:id', () => {
-  it('deletes the project', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'p1', name: 'PlayCru' }] } as never)
+  it('rejects when confirm_name is missing', async () => {
     const res = fakeRes()
-    await getHandler('/:id', 'delete')({ params: { id: 'p1' } }, res, () => {})
-    expect(res.json).toHaveBeenCalledWith({ data: { deleted: { id: 'p1', name: 'PlayCru' } } })
+    await getHandler('/:id', 'delete')({ params: { id: 'p1' }, body: {} }, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(mockQuery).not.toHaveBeenCalled()
   })
 
   it('404s when not found', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] } as never)
     const res = fakeRes()
-    await getHandler('/:id', 'delete')({ params: { id: 'missing' } }, res, () => {})
+    await getHandler('/:id', 'delete')({ params: { id: 'missing' }, body: { confirm_name: 'x' } }, res, () => {})
     expect(res.status).toHaveBeenCalledWith(404)
+  })
+
+  it('rejects when confirm_name does not match the project name', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'p1', name: 'PlayCru' }] } as never)
+    const res = fakeRes()
+    await getHandler('/:id', 'delete')({ params: { id: 'p1' }, body: { confirm_name: 'wrong' } }, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(mockConnect).not.toHaveBeenCalled()
+  })
+
+  it('deletes the project, pruning entity_links in the same transaction', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'p1', name: 'PlayCru' }] } as never) // existence check
+      .mockResolvedValueOnce({ rows: [] } as never) // backup_settings — none configured, skip backup
+
+    const client = stubTxClient([{ id: 'p1', name: 'PlayCru' }])
+
+    const res = fakeRes()
+    await getHandler('/:id', 'delete')({ params: { id: 'p1' }, body: { confirm_name: 'PlayCru' } }, res, () => {})
+
+    expect(mockTriggerBackupNow).not.toHaveBeenCalled()
+    expect(client.query).toHaveBeenCalledWith('BEGIN')
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('DELETE FROM entity_links'), ['p1'])
+    expect(client.query).toHaveBeenCalledWith('COMMIT')
+    expect(client.release).toHaveBeenCalled()
+    expect(res.json).toHaveBeenCalledWith({ data: { deleted: { id: 'p1', name: 'PlayCru' } } })
+  })
+
+  it('snapshots via triggerBackupNow first when a backup path is configured', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'p1', name: 'PlayCru' }] } as never)
+      .mockResolvedValueOnce({ rows: [{ value: { path: '/backups', retention_count: 10, remote: { type: 'none' } } }] } as never)
+
+    stubTxClient([{ id: 'p1', name: 'PlayCru' }])
+
+    const res = fakeRes()
+    await getHandler('/:id', 'delete')({ params: { id: 'p1' }, body: { confirm_name: 'PlayCru' } }, res, () => {})
+
+    expect(mockTriggerBackupNow).toHaveBeenCalledWith('/backups', 10, { type: 'none' })
+    expect(res.json).toHaveBeenCalledWith({ data: { deleted: { id: 'p1', name: 'PlayCru' } } })
+  })
+
+  it('aborts the delete (no transaction opened) when the pre-delete backup fails', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'p1', name: 'PlayCru' }] } as never)
+      .mockResolvedValueOnce({ rows: [{ value: { path: '/backups' } }] } as never)
+    mockTriggerBackupNow.mockRejectedValueOnce(new Error('disk full'))
+
+    const res = fakeRes()
+    await getHandler('/:id', 'delete')({ params: { id: 'p1' }, body: { confirm_name: 'PlayCru' } }, res, () => {})
+
+    expect(res.status).toHaveBeenCalledWith(500)
+    expect(mockConnect).not.toHaveBeenCalled()
+  })
+
+  it('rolls back and responds 500 when the transaction fails', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'p1', name: 'PlayCru' }] } as never)
+      .mockResolvedValueOnce({ rows: [] } as never)
+
+    const client = {
+      query: vi.fn().mockImplementation((sql: string) => {
+        if (typeof sql === 'string' && sql.trim().startsWith('DELETE FROM projects')) {
+          return Promise.reject(new Error('db down'))
+        }
+        return Promise.resolve({ rows: [] })
+      }),
+      release: vi.fn(),
+    }
+    mockConnect.mockResolvedValueOnce(client as never)
+
+    const res = fakeRes()
+    await getHandler('/:id', 'delete')({ params: { id: 'p1' }, body: { confirm_name: 'PlayCru' } }, res, () => {})
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK')
+    expect(client.release).toHaveBeenCalled()
+    expect(res.status).toHaveBeenCalledWith(500)
   })
 
   it('responds 500 on a query failure', async () => {
     mockQuery.mockRejectedValueOnce(new Error('db down'))
     const res = fakeRes()
-    await getHandler('/:id', 'delete')({ params: { id: 'p1' } }, res, () => {})
+    await getHandler('/:id', 'delete')({ params: { id: 'p1' }, body: { confirm_name: 'PlayCru' } }, res, () => {})
     expect(res.status).toHaveBeenCalledWith(500)
   })
 })

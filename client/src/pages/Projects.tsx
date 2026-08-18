@@ -27,6 +27,8 @@ export function ProjectsPage() {
   const [error, setError]           = useState<string | null>(null)
   const [modal, setModal]     = useState<'create' | Project | null>(null)
   const [deleting, setDeleting] = useState<DeleteState>(null)
+  const [deleteConfirmText, setDeleteConfirmText] = useState('')
+  const [deleteBusy, setDeleteBusy] = useState(false)
   const [panel, setPanel]     = useState<PanelState>(null)
   const [linking, setLinking] = useState<LinkingState>(null)
   const [linkPath, setLinkPath]     = useState('')
@@ -65,15 +67,18 @@ export function ProjectsPage() {
   }
 
   async function handleDelete() {
-    if (!deleting) return
+    if (!deleting || deleteConfirmText !== deleting.name) return
+    setDeleteBusy(true)
     try {
-      await projectsApi.remove(deleting.id)
+      await projectsApi.remove(deleting.id, deleteConfirmText)
       setDeleting(null)
+      setDeleteConfirmText('')
       toast(`"${deleting.name}" deleted`)
       await load()
     } catch (err) {
       toast((err as Error).message, 'error')
-      setDeleting(null)
+    } finally {
+      setDeleteBusy(false)
     }
   }
 
@@ -313,7 +318,7 @@ export function ProjectsPage() {
                   )}
                   {isAdmin && (
                     <button
-                      onClick={() => setDeleting({ id: p.id, name: p.name })}
+                      onClick={() => { setDeleting({ id: p.id, name: p.name }); setDeleteConfirmText('') }}
                       style={{ height: 24, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid rgba(240,90,90,.25)', background: 'rgba(240,90,90,.08)', color: '#F8A8A8', fontSize: '11.5px' }}
                     >
                       Delete
@@ -434,20 +439,33 @@ export function ProjectsPage() {
       {/* Delete confirm dialog */}
       {deleting && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(5,5,10,.65)', backdropFilter: 'blur(4px)', zIndex: 300, display: 'grid', placeItems: 'center' }}>
-          <div style={{ background: 'var(--bg-elev)', border: '1px solid var(--line-3)', borderRadius: '10px', padding: '24px', maxWidth: '360px', width: '100%', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ background: 'var(--bg-elev)', border: '1px solid var(--line-3)', borderRadius: '10px', padding: '24px', maxWidth: '380px', width: '100%', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ fontSize: '22px' }}>⚠</div>
             <div>
               <p style={{ margin: '0 0 4px', fontSize: '14px', fontWeight: 600, color: 'var(--fg)' }}>Delete "{deleting.name}"?</p>
-              <p style={{ margin: 0, fontSize: '12.5px', color: 'var(--fg-3)' }}>All documents, issues, commands, and releases for this project will be permanently deleted.</p>
+              <p style={{ margin: 0, fontSize: '12.5px', color: 'var(--fg-3)' }}>All documents, issues, commands, and releases for this project will be permanently deleted. This cannot be undone.</p>
+            </div>
+            <div style={{ textAlign: 'left' }}>
+              <label style={{ display: 'block', fontSize: '11.5px', color: 'var(--fg-3)', marginBottom: '6px' }}>
+                Type <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg)' }}>{deleting.name}</span> to confirm
+              </label>
+              <input
+                type="text"
+                value={deleteConfirmText}
+                onChange={e => setDeleteConfirmText(e.target.value)}
+                autoFocus
+                onKeyDown={e => { if (e.key === 'Enter' && deleteConfirmText === deleting.name) handleDelete() }}
+                style={{ height: 32, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg)', color: 'var(--fg)', fontSize: '12.5px', fontFamily: 'var(--font-mono)', outline: 'none', width: '100%', boxSizing: 'border-box' }}
+              />
             </div>
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-              <button onClick={() => setDeleting(null)}
+              <button onClick={() => { setDeleting(null); setDeleteConfirmText('') }} disabled={deleteBusy}
                 style={{ height: 28, padding: '0 16px', borderRadius: 'var(--radius)', border: '1px solid var(--line-2)', background: 'var(--bg-elev)', color: 'var(--fg-2)', fontSize: '12.5px' }}>
                 Cancel
               </button>
-              <button onClick={handleDelete}
-                style={{ height: 28, padding: '0 16px', borderRadius: 'var(--radius)', border: 'none', background: '#F05A5A', color: 'white', fontSize: '12.5px' }}>
-                Delete
+              <button onClick={handleDelete} disabled={deleteBusy || deleteConfirmText !== deleting.name}
+                style={{ height: 28, padding: '0 16px', borderRadius: 'var(--radius)', border: 'none', background: '#F05A5A', color: 'white', fontSize: '12.5px', opacity: (deleteBusy || deleteConfirmText !== deleting.name) ? 0.5 : 1, cursor: (deleteBusy || deleteConfirmText !== deleting.name) ? 'not-allowed' : 'pointer' }}>
+                {deleteBusy ? 'Deleting…' : 'Delete'}
               </button>
             </div>
           </div>
