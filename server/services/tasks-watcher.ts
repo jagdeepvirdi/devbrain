@@ -98,10 +98,35 @@ function buildPhase(current: { name: string; items: TaskItem[] }): TaskPhase {
   return { name: current.name, total, done, pct, items: current.items }
 }
 
+// ── Locating TASKS.md ────────────────────────────────────────────────────────
+// The DevBrain x Claude Code hook always scaffolds TASKS.md at the repo root,
+// but at least one linked project (FlowForge) predates/diverges from that
+// convention and keeps it under docs/ instead. Root wins when both exist,
+// matching the hook's own convention; docs/TASKS.md is a fallback, not a
+// second tracked file — codeSync.ts's doc-sync already excludes any file
+// named exactly TASKS.md by basename regardless of location, so whichever
+// path resolves here is the single source of truth for it either way.
+
+async function resolveTasksFilePath(fsPath: string): Promise<string> {
+  const root = path.join(fsPath, 'TASKS.md')
+  try {
+    await fs.access(root)
+    return root
+  } catch {
+    const nested = path.join(fsPath, 'docs', 'TASKS.md')
+    try {
+      await fs.access(nested)
+      return nested
+    } catch {
+      return root // neither exists — callers already handle that (ENOENT) gracefully
+    }
+  }
+}
+
 // ── Public: one-shot read ─────────────────────────────────────────────────────
 
 export async function readTaskTree(projectId: string, fsPath: string): Promise<TaskTree> {
-  const tasksFile = path.join(fsPath, 'TASKS.md')
+  const tasksFile = await resolveTasksFilePath(fsPath)
   try {
     const content = await fs.readFile(tasksFile, 'utf-8')
     return parseTasksFile(content, projectId)
@@ -202,8 +227,8 @@ export function stopListening(): void {
 
 const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
-function startWatch(projectId: string, fsPath: string) {
-  const tasksFile = path.join(fsPath, 'TASKS.md')
+async function startWatch(projectId: string, fsPath: string): Promise<void> {
+  const tasksFile = await resolveTasksFilePath(fsPath)
 
   const watcher = chokidar.watch(tasksFile, {
     persistent: true,
@@ -239,7 +264,7 @@ export async function refreshProjectWatch(projectId: string, fsPath: string | nu
   const timer = debounceTimers.get(projectId)
   if (timer) { clearTimeout(timer); debounceTimers.delete(projectId) }
 
-  if (fsPath) startWatch(projectId, fsPath)
+  if (fsPath) await startWatch(projectId, fsPath)
 }
 
 export async function initTasksWatcher() {
@@ -249,7 +274,7 @@ export async function initTasksWatcher() {
       `SELECT id, fs_path FROM projects WHERE fs_path IS NOT NULL`
     )
     for (const row of rows) {
-      startWatch(row.id, row.fs_path)
+      await startWatch(row.id, row.fs_path)
     }
     console.log(`  tasks-watcher: watching ${rows.length} project(s) ✓`)
   } catch (err) {
