@@ -239,10 +239,23 @@ export type BatchResult = { id: string; chunkCount: number; error?: string }
  *
  * One document's failure is captured in its BatchResult, not thrown — it
  * never aborts the rest of the batch.
+ *
+ * @param opts.skipSummary - Skip Phase 1 (and the Phase 3 summary-chunk insert)
+ *   entirely — no mistral calls at all, just nomic-embed-text over real
+ *   content. Real-world timing forced this: 18 short source files took over
+ *   30 minutes with summaries on (each aiChat call can legitimately take up
+ *   to its 120s timeout on a 6GB GPU with no output-length cap — see
+ *   services/ai.ts), because mistral generation dominates versus embedding's
+ *   ~50ms/chunk. Used by codeSync.ts's git-sync path, which runs
+ *   unattended after every Claude Code session and can't afford that cost
+ *   per file; every other caller (bulk re-embed, rechunk_all_documents.ts)
+ *   keeps summaries since a user is there deliberately requesting document
+ *   quality, not a background sync of possibly dozens of files.
  */
 export async function embedDocumentsBatch(
   docs: BatchDoc[],
-  onProgress?: (docId: string, done: number, total: number) => void
+  onProgress?: (docId: string, done: number, total: number) => void,
+  opts: { skipSummary?: boolean } = {}
 ): Promise<BatchResult[]> {
   if (docs.length === 0) return []
 
@@ -250,8 +263,10 @@ export async function embedDocumentsBatch(
 
   // Phase 1 — all summaries (mistral loaded once for the whole batch)
   const summaries = new Map<string, string | null>()
-  for (const doc of docs) {
-    summaries.set(doc.id, await summarizeDocument(doc.content))
+  if (!opts.skipSummary) {
+    for (const doc of docs) {
+      summaries.set(doc.id, await summarizeDocument(doc.content))
+    }
   }
 
   // Phase 2 — chunking is CPU-only (tree-sitter / token-window), no model calls

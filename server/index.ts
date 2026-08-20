@@ -129,6 +129,43 @@ app.post('/api/notify', notifyLimiter)
 import notifyRouter from './routes/notify.js'
 app.use('/api/notify', notifyRouter)
 
+// POST /api/documents/sync-code is the SessionEnd-hook counterpart to
+// /api/notify above — same reasoning (local tooling, no browser session to
+// carry a JWT) and same need for its own limiter here, ahead of the
+// baseline apiLimiter below. Capped much lower than notify's 20/min since
+// each call can trigger real embedding work across many files on a single
+// GPU, not just a logged ping. See routes/sync-code.ts for why this is
+// still safe to leave unauthenticated.
+const syncCodeLimiter = rateLimit({
+  windowMs:        60 * 1000,  // 1 minute
+  max:             6,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  handler: (_req, res) => {
+    res.status(429).json({ error: 'Too many requests — slow down' })
+  },
+})
+app.post('/api/documents/sync-code', syncCodeLimiter)
+
+import syncCodeRouter from './routes/sync-code.js'
+app.use('/api/documents/sync-code', syncCodeRouter)
+
+// POST /api/documents/sync-docs — docs counterpart to sync-code above, same
+// reasoning and same limiter shape. See routes/sync-docs.ts.
+const syncDocsLimiter = rateLimit({
+  windowMs:        60 * 1000,  // 1 minute
+  max:             6,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  handler: (_req, res) => {
+    res.status(429).json({ error: 'Too many requests — slow down' })
+  },
+})
+app.post('/api/documents/sync-docs', syncDocsLimiter)
+
+import syncDocsRouter from './routes/sync-docs.js'
+app.use('/api/documents/sync-docs', syncDocsRouter)
+
 // ── Auth middleware (protects all routes below) ───────────────────────────
 
 import { requireAuth } from './middleware/auth.js'

@@ -104,6 +104,26 @@ $job = Start-Job -ScriptBlock {
         Invoke-RestMethod -Uri "http://localhost:3001/api/notify" -Method Post -Body $body -ContentType "application/json" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
     } catch {}
 
+    # -- Sync this project's source files into DevBrain's Codes tab --
+    # Best-effort: DevBrain resolves the project by $cwd (fs_path), so this is a
+    # no-op (404, swallowed) for any directory that isn't a linked DevBrain
+    # project. No timeout cap — a first sync on a large repo embeds many files
+    # on a single 6GB GPU and can legitimately take minutes; this already runs
+    # detached in this background job, nothing is waiting on it.
+    try {
+        $syncBody = @{ fsPath = $cwd } | ConvertTo-Json
+        Invoke-RestMethod -Uri "http://localhost:3001/api/documents/sync-code" -Method Post -Body $syncBody -ContentType "application/json" -ErrorAction SilentlyContinue | Out-Null
+    } catch {}
+
+    # -- Sync this project's markdown docs into DevBrain's Documents tab --
+    # Same best-effort/no-timeout reasoning as sync-code above. Excludes
+    # TASKS.md and sessions/* server-side (see services/codeSync.ts) since
+    # those already have their own live Tasks/Sessions tabs.
+    try {
+        $docsBody = @{ fsPath = $cwd } | ConvertTo-Json
+        Invoke-RestMethod -Uri "http://localhost:3001/api/documents/sync-docs" -Method Post -Body $docsBody -ContentType "application/json" -ErrorAction SilentlyContinue | Out-Null
+    } catch {}
+
 } -ArgumentList $sessionsRoot, $tasksFile, $utcNow, $timestamp, $cwd
 
 

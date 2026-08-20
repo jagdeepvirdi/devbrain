@@ -58,6 +58,26 @@ print('unknown')
     -d "{\"project\":\"$PROJECT_NAME\",\"title\":\"Session complete — $PROJECT_NAME\",\"body\":\"Duration: ${DURATION}m, Files changed: $FILES_COUNT\",\"level\":\"info\"}" \
     --max-time 3 >/dev/null 2>&1
 
+  # Sync this project's source files into DevBrain's Codes tab. Best-effort:
+  # DevBrain resolves the project by $CWD (fs_path), so this is a no-op (404,
+  # swallowed) for any directory that isn't a linked DevBrain project. No
+  # --max-time cap — a first sync on a large repo embeds many files on a
+  # single GPU and can legitimately take minutes; this already runs detached
+  # in this background subshell, nothing is waiting on it.
+  curl -s -X POST http://localhost:3001/api/documents/sync-code \
+    -H "Content-Type: application/json" \
+    -d "{\"fsPath\":\"$CWD\"}" \
+    >/dev/null 2>&1
+
+  # Sync this project's markdown docs into DevBrain's Documents tab. Same
+  # best-effort/no-timeout reasoning as sync-code above. Excludes TASKS.md
+  # and sessions/* server-side (see services/codeSync.ts) since those
+  # already have their own live Tasks/Sessions tabs.
+  curl -s -X POST http://localhost:3001/api/documents/sync-docs \
+    -H "Content-Type: application/json" \
+    -d "{\"fsPath\":\"$CWD\"}" \
+    >/dev/null 2>&1
+
 ) &>/dev/null &
 
 exit 0
