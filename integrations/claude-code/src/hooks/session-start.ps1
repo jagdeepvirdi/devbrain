@@ -54,7 +54,7 @@ function Get-DaysSince ([string]$dateStr) {
 # Skips YAML frontmatter. Counts all - [ ] / [x] / [~] / [!] items per phase.
 # =============================================================================
 function Get-TaskPhases ([string]$filePath) {
-    $phases = [System.Collections.Generic.List[hashtable]]::new()
+    $phases = [System.Collections.Generic.List[psobject]]::new()
     $current = $null
     $fmCount = 0  # counts --- delimiters to skip frontmatter
 
@@ -64,7 +64,7 @@ function Get-TaskPhases ([string]$filePath) {
 
         if ($line -match '^## (.+)') {
             if ($current) { $phases.Add($current) }
-            $current = @{ Name = $Matches[1].Trim(); Total = 0; Done = 0 }
+            $current = [PSCustomObject]@{ Name = $Matches[1].Trim(); Total = 0; Done = 0 }
         } elseif ($current -and $line -match '^- \[') {
             $current.Total++
             if ($line -match '^- \[x\]') { $current.Done++ }

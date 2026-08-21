@@ -31,7 +31,7 @@
     ]
   },
 
-  "_windows_paths": "Use these command values on native Windows (PowerShell) — note ~\\.claude, not %APPDATA%\\Claude",
+  "_windows_paths": "Use these command values on native Windows (PowerShell) — note ~\\.claude, not %APPDATA%\\Claude. Claude Code always runs hook commands through Git Bash, even on native Windows, so the command must call powershell.exe explicitly with forward-slash paths -- a bare 'C:\\...\\foo.ps1' path fails (bash eats the backslashes and doesn't know .ps1 needs an interpreter).",
   "hooks_windows": {
     "SessionStart": [
       {
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "C:\\Users\\<your-username>\\.claude\\scripts\\session-start.ps1",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:/Users/<your-username>/.claude/scripts/session-start.ps1'",
             "timeout": 30
           }
         ]
@@ -51,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "C:\\Users\\<your-username>\\.claude\\scripts\\session-end.ps1",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:/Users/<your-username>/.claude/scripts/session-end.ps1'",
             "timeout": 60
           }
         ]

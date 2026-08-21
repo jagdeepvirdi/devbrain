@@ -96,7 +96,7 @@ $job = Start-Job -ScriptBlock {
     try {
         $body = @{
             project = $projectName
-            title = "Session complete — $projectName"
+            title = "Session complete - $projectName"
             body = "Duration: ${duration}m, Files changed: $filesCount"
             level = "info"
         } | ConvertTo-Json

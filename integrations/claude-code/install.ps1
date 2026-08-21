@@ -28,9 +28,16 @@ $DestSkills   = Join-Path $ClaudeDir "skills\devbrain"
 $SettingsFile = Join-Path $ClaudeDir "settings.json"
 $SettingsBak  = Join-Path $ClaudeDir "settings.json.devbrain-backup"
 
-# Absolute paths written into settings.json -- what Claude Code resolves
-$HookStartCmd = Join-Path $DestScripts "session-start.ps1"
-$HookEndCmd   = Join-Path $DestScripts "session-end.ps1"
+# Absolute paths written into settings.json -- what Claude Code resolves.
+# Claude Code always invokes hook commands through Git Bash, even on native
+# Windows installs, so a bare "C:\...\session-start.ps1" path fails: bash
+# doesn't know .ps1 needs an interpreter, and it eats the backslashes as
+# escape characters. Wrap in an explicit powershell.exe call with forward
+# slashes so the command string survives bash unmangled.
+$HookStartPath = (Join-Path $DestScripts "session-start.ps1") -replace '\\', '/'
+$HookEndPath   = (Join-Path $DestScripts "session-end.ps1")   -replace '\\', '/'
+$HookStartCmd  = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File '$HookStartPath'"
+$HookEndCmd    = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File '$HookEndPath'"
 
 # -- Uninstall ----------------------------------------------------------------
 if ($Uninstall) {
