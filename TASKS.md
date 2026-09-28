@@ -1025,3 +1025,109 @@ design, not oversight)*
 - [x] Docs: `CLAUDE.md`'s Tech Stack "File Parsing" line and `README.md`'s Tech Stack table's "File parsing"
       row both updated to describe the new PDF-primary/`pdf-parse`-fallback path, MarkItDown scoped down to
       "everything else" in both.
+
+---
+
+## Phase 43 — Tech-Debt Audit Remediation (2026-08-17)
+
+> Ran a full codebase health check (architecture/layering, SQL safety, `any` usage, Zod coverage, error
+> handling, dead code, test coverage, security smells, dependency audit) via the tech-debt-tracker skill,
+> checked against this project's own CLAUDE.md conventions. Overall verdict: unusually disciplined for its
+> size (zero `any` in client code outside test mocks, near-1:1 server test/route correspondence, no SQL
+> injection risk, no hardcoded secrets) — the real gaps were dependency risk with no upstream fix and thin
+> client-side test coverage. Fixed all 10 items from the resulting prioritized list.
+
+### Tasks
+- [x] **[High]** `routes/settings-backup.ts`'s zip-import now validates every entry's declared (attacker-
+      controlled) `header.size` against a 50MB-per-file / 200MB-total cap *before* any `entry.getData()` call
+      decompresses anything — the actual mitigation for adm-zip's unpatched `GHSA-xcpc-8h2w-3j85` DoS advisory
+      (multer's existing 200MB `fileSize` limit only bounds the compressed upload, not a zip bomb's declared
+      uncompressed size). Two new tests in `tests/routes/settings_backup.test.ts` use genuinely oversized
+      (compressible) content rather than a hand-forged header, since our check reads the same `header.size`
+      field a real attack would forge.
+- [x] **[High]** `client/src/pages/DocChat.tsx` (the RAG chat UI, previously 0 tests despite being the
+      product's core feature) — new `DocChat.test.tsx`, 7 tests covering SSE-style streaming via `chatStream`'s
+      `onChunk`/`onCitations`/`onSession` callbacks, citation card rendering, scope switching, error display,
+      and — the load-bearing one — that the AI response's `escapeHtml()` call actually prevents injected HTML
+      (e.g. `<img onerror=...>`) from becoming a real DOM element rather than literal text. Needed a
+      `scrollIntoView` polyfill added to `client/src/test/setup.ts` (jsdom doesn't implement it; several pages
+      call it unconditionally on mount).
+- [x] **[Medium]** `routes/notify.ts`'s public `POST /api/notify` hook now validates its body with a real Zod
+      schema (`project`/`title`/`body` length caps, `level` restricted to the enum `sendAppriseNotification`
+      actually accepts) instead of a bare truthiness check that let an unbounded `level` string and body
+      through unchecked.
+- [x] **[Medium]** Added `notifyLimiter` (20 req/min/IP) in `server/index.ts`, applied to `POST /api/notify`
+      specifically, ahead of the router mount — this route sits before both `requireAuth` and the baseline
+      `apiLimiter` (it must stay unauthenticated for local hook/tooling callers with no browser session), so it
+      had no rate ceiling at all before this.
+- [x] **[Medium]** `client/`: `react-router-dom` bumped `^6.28.0` → `^7.18.2`, clearing the two moderate
+      open-redirect/constructor-injection advisories (`npm audit fix` alone couldn't cross the major-version
+      boundary). Audited the app's actual usage first — only `useNavigate`/`useLocation`/`useSearchParams`/
+      `BrowserRouter`/`MemoryRouter`, no `<Routes>`/`<Route>` matching anywhere (navigation is manual
+      tab/panel state, not router-driven) — a low-risk surface for a major bump. Verified: `tsc --noEmit`,
+      full `vitest run` (108/108 before any other Phase 43 change), and `npm run build` all clean; `npm audit`
+      now 0 vulnerabilities. Also updated `.github/workflows/security-audit.yml`'s `audit-client` job comment,
+      which had gone stale — it previously said this fix "requires a v6 -> v7 major bump... not done as a side
+      effect of this audit job," written back when a 2026-08-03 `npm audit fix` resolved a then-current
+      advisory within the `^6.28.0` range without a major bump; a new advisory since then needed the real one.
+- [x] **[Medium]** Split `client/src/pages/Releases.tsx` (1,231 lines — timeline card, sortable table, and 4
+      modals for create/edit, git-import, compare, and AI-draft, all in one file, previously 0 tests) into
+      `components/releases/{shared,ItemList,ReleaseModal,ReleaseCard,ReleaseTable,ImportGitModal,CompareModal,
+      DraftAiModal}.tsx`, mirroring the `components/settings/*.tsx` split pattern from Phase 39. Pure
+      extraction, no behavior change — verified via `tsc --noEmit`, full `vitest run`, and `npm run build`.
+      Added `Releases.test.tsx` (5 tests: timeline load, empty state, table-view switch, new-release modal,
+      delete-with-confirm) since nothing exercised this page end-to-end before.
+- [x] **[Low]** `server/services/treeSitterLoader.ts` (shared grammar-loading path behind both
+      `codeChunker.ts` and `services/codeIntel`'s parsers, previously only exercised indirectly through
+      `treeSitterParser.test.ts`) — new `tests/services/treeSitterLoader.test.ts`, 5 tests against the real
+      WASM loading path (same no-mocking convention `treeSitterParser.test.ts` already uses): a working parser
+      for a supported language, cache reuse across repeated calls, and the "never throws, returns null"
+      contract for both an unsupported language and a null/undefined one.
+- [x] **[Low]** `routes/settings-backup.ts` — left a dated comment (2026-08-17) at the top flagging that the
+      file (~600 lines, already split out of `settings.ts` once in Phase 39) is creeping back toward god-file
+      size, so the next feature landing here pulls its own concern into a sibling file rather than growing this
+      one further. No split now — the audit's own call was "not urgent," and one wasn't warranted by any
+      change actually needed today.
+- [x] **[Low]** Backfilled smoke-test coverage for the three other large, previously-untested pages: new
+      `Dashboard.test.tsx` (load + stats/issues render, error state), `Documents.test.tsx` (list load, empty
+      state), `Codes.test.tsx` (list load scoped to `file_type=code`, empty state) — 6 tests total, matching
+      the audit's "opportunistic, not a dedicated deep-coverage effort" framing rather than fully
+      characterizing all three pages' upload/bulk-action/filter logic.
+- [x] **[Info]** `sharp`/`xlsx`/`adm-zip` high-severity advisories (no upstream fix) were already tracked as
+      accepted risk in `.github/workflows/security-audit.yml`'s `audit-server` allowlist since 2026-08-03
+      (`GHSA-xcpc-8h2w-3j85`, `GHSA-f88m-g3jw-g9cj`, `GHSA-4r6h-8v6p-xvw6`, `GHSA-5pgg-2g8v-p4x9`) — reverified
+      today's `npm audit --omit=dev` in `server/` still surfaces exactly those four and no others, so the
+      allowlist stays accurate; no change needed beyond this confirmation.
+- [x] Full verification after all nine code changes: server `tsc --noEmit` clean, full `vitest run` — 89 files,
+      1392 passed + 1 skipped (up from 1382+1 at the end of Phase 42); client `tsc --noEmit` clean, full
+      `vitest run` — 14 files, 119 passed (up from 101 at the start of this phase), `npm run build` succeeds.
+
+---
+
+## Phase 44 — Security Audit Workflow Recovery, round 2 (2026-09-28)
+
+> The weekly `Security Audit` workflow had failed on both `audit-server` and `audit-client` jobs for 5
+> consecutive Monday runs (2026-08-31 through 2026-09-28), all on newly-published `npm audit` advisories
+> landing upstream since the last remediation in [[Phase 41]]/[[Phase 43]], not on anything in this repo.
+> `audit-server`'s allowlist-checking `scripts/audit-check.mjs` flagged 8 high-severity findings —
+> `@huggingface/transformers`/`@xmldom/xmldom`/`adm-zip`/`deepmerge-ts`/`html-to-text`/`js-yaml`/
+> `onnxruntime-node`/`sharp` — against an allowlist that only covered 4 old GHSA IDs; `audit-client`'s plain
+> `npm audit --audit-level=high` flagged `browserslist`/`fast-uri`, both new since Phase 43's "0
+> vulnerabilities" note.
+
+### Tasks
+- [x] `server/`: bumped `adm-zip` `^0.5.17` → `^0.6.1` directly in `package.json` (fixes new advisories
+      `GHSA-vwc7-r8mq-g2x9`/`GHSA-7q85-xj36-vmfc` plus the already-mitigated `GHSA-xcpc-8h2w-3j85`). Checked
+      the bump against real usage first — `routes/settings-backup.ts`'s zip-import only calls
+      `getEntries()`/`entry.getData()` in-memory, never `extractAllTo()`, so the new symlink-following-
+      extraction advisory doesn't apply to this call site regardless. Then ran plain `npm audit fix` (no
+      `--force`), which cleared `sharp`/`@xmldom/xmldom`/`js-yaml`/`deepmerge-ts`/`html-to-text`/
+      `onnxruntime-node`/`@huggingface/transformers` as derived fixes. Only `xlsx`'s two advisories (no
+      upstream fix) remain — trimmed `security-audit.yml`'s allowlist from 4 GHSA IDs down to those 2. <!-- done: 2026-09-28 -->
+- [x] `client/`: ran plain `npm audit fix` (no `--force`), resolving `browserslist` and `fast-uri` (plus
+      `js-yaml`); only a moderate `vitest`/`@vitest/mocker` finding remains, below the job's
+      `--audit-level=high` gate. <!-- done: 2026-09-28 -->
+- [x] Verified: server `tsc --noEmit` clean, full `vitest run` — 93 files, 1419 passed + 1 skipped; client
+      `tsc --noEmit` clean, full `vitest run` — 14 files, 119 passed; client `npm run build` succeeds.
+      Committed as `bbde91c`, pushed, and manually triggered `workflow_dispatch` run 36438167085 confirmed
+      both `audit-server` and `audit-client` jobs green. <!-- done: 2026-09-28 -->
