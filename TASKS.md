@@ -57,20 +57,31 @@ Current state (read 2026-11-12): `POST /api/notify` (zod-validated, rate-limited
 `/channels*`, `/project-prefs`; Claude Code `session-end.ps1/.sh` POST to `/api/notify` fire-and-forget (3s
 timeout); `POST /api/issues` requires `member` role (Outpost needs an API token, minted under Settings →
 Account → API Tokens); daily digest via `scripts/digest_scheduler.py` (APScheduler, spawned by the server).
-- [ ] **`POST /api/notify` is unauthenticated** (only the rate limiter protects it): anyone who can reach the
+- [x] **`POST /api/notify` is unauthenticated** <!-- done: 2026-11-12 --> (only the rate limiter protects it): anyone who can reach the
       port can send notifications to every channel of every user on any project. Decide + implement: accept
       loopback callers without a token (existing hooks keep working), require a valid `dbrn_` token for
       non-loopback callers (Outpost runs on a remote host). Add tests for both paths.
-- [ ] **Shell injection in `routes/git.ts`**: `GET /:projectId/compare` interpolates `base`/`head` and
+      **Done differently:** the route now requires `requireAuth` for *all* callers (JWT or `dbrn_` token), with no
+      loopback exemption (`req.socket.remoteAddress` is spoofable behind a proxy). The session-end hooks (Claude Code
+      + Antigravity, `.ps1`/`.sh`) send `Authorization: Bearer $DEVBRAIN_API_TOKEN` when that env var is set. When
+      `AUTH_PASSWORD` is unset (local dev) auth is a pass-through. **Owner action:** mint a token (Settings → Account →
+      API Tokens), set `DEVBRAIN_API_TOKEN`, and re-run both `install.ps1` scripts — until then session-end
+      notifications get a 401 and silently stop.
+- [x] **Shell injection in `routes/git.ts`** <!-- done: 2026-11-12 -->: `GET /:projectId/compare` interpolates `base`/`head` and
       `GET /:projectId/diff/:sha` interpolates `sha` straight into an `exec()` shell string, and `/commits`
       interpolates `limit` the same way (clamped, but still a shell string). Any logged-in user could run
       arbitrary commands on the server host. Switch to `execFile('git', [args…])` and validate refs against
       `^[A-Za-z0-9._/-]+$`. Fix **before** step 2 reuses git execution.
+      **Done:** all local git calls go through a `git(args, cwd)` `execFile` helper; `sha`/`base`/`head` are
+      validated (`^[A-Za-z0-9_][A-Za-z0-9._/@^~-]{0,199}$`, no leading `-`) and 400 otherwise; `limit` is parsed as
+      an int and clamped 1–50. Injection tests added in `git_crud.test.ts`.
 - [ ] Verify Outpost-style callers are idempotent against `POST /api/issues`: confirm whether repeated
       identical reports create duplicate issues; if so add a dedupe key (e.g. `external_ref` +
       unique-per-project index) and a test.
-- [ ] Add route-level tests for `/api/notify` happy path, unknown project (404), validation (400),
+- [~] Add route-level tests for `/api/notify` happy path, unknown project (404), validation (400),
       and token enforcement (above); keep the coverage gate green.
+      Happy path, 404 and 400 already existed; the `requireAuth`-on-route check was added 2026-11-12. Still open: a
+      test that exercises the real 401 (no token) / 200 (valid token) behaviour end to end, and the coverage-gate run.
 
 ---
 
