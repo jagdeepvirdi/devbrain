@@ -8,7 +8,7 @@ vi.mock('../../db/pool.js', () => ({
 }))
 
 vi.mock('node:child_process', () => ({
-  exec: vi.fn(),
+  execFile: vi.fn(),
 }))
 
 vi.mock('../../services/crypto.js', () => ({
@@ -23,7 +23,7 @@ vi.mock('../../middleware/auth.js', () => ({
 // Import router (we'll call its handlers directly for unit testing logic)
 import router from '../../routes/git.js'
 import { pool } from '../../db/pool.js'
-import { exec } from 'node:child_process'
+import { execFile as exec } from 'node:child_process'
 
 const mockQuery = vi.mocked(pool.query)
 const mockExec  = vi.mocked(exec)
@@ -39,7 +39,7 @@ describe('Git Route Logic', () => {
       rows: [{ repo_url: 'https://github.com/org/repo', github_pat_enc: null, fs_path: '/local/path' }],
     } as any)
 
-    mockExec.mockImplementation(((_cmd: string, _opts: any, cb: any) => {
+    mockExec.mockImplementation(((_file: string, _args: string[], _opts: any, cb: any) => {
       cb(null, { stdout: 'sha1|message1|author1|2026-01-01T00:00:00Z\nsha2|message2|author2|2026-01-02T00:00:00Z' })
     }) as any)
 
@@ -51,7 +51,8 @@ describe('Git Route Logic', () => {
     await handler!(req as any, res as any, () => {})
 
     expect(mockExec).toHaveBeenCalledWith(
-      expect.stringContaining('git log'),
+      'git',
+      expect.arrayContaining(['log']),
       expect.objectContaining({ cwd: '/local/path' }),
       expect.any(Function)
     )
@@ -68,7 +69,7 @@ describe('Git Route Logic', () => {
       rows: [{ repo_url: 'https://github.com/org/repo', github_pat_enc: 'enc:token', fs_path: '/bad/path' }],
     } as any)
 
-    mockExec.mockImplementation(((_cmd: string, _opts: any, cb: any) => {
+    mockExec.mockImplementation(((_file: string, _args: string[], _opts: any, cb: any) => {
       cb(new Error('Git not found'), { stdout: '' })
     }) as any)
 

@@ -1,13 +1,24 @@
 import { Router } from 'express'
 import { z }      from 'zod'
-import { exec }   from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { pool }   from '../db/pool.js'
 import { encrypt, decrypt } from '../services/crypto.js'
 import { requireRole } from '../middleware/auth.js'
 
 const router = Router()
-const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
+
+// Run git with an argument array — no shell is involved, so request-derived
+// values (sha, base, head) can never be interpreted as shell syntax.
+function git(args: string[], cwd: string) {
+  return execFileAsync('git', args, { cwd, maxBuffer: 16 * 1024 * 1024 })
+}
+
+// Conservative ref/SHA allowlist: branch names, tags, SHAs, HEAD~2, v1.0^ etc.
+// The leading character can't be '-', so a value can't be parsed as a git option.
+const SAFE_REF = /^[A-Za-z0-9_][A-Za-z0-9._/@^~-]{0,199}$/
+const isSafeRef = (v: unknown): v is string => typeof v === 'string' && SAFE_REF.test(v)
 
 function parseGitHubRepo(url: string): { owner: string; repo: string } | null {
   try {
@@ -85,7 +96,8 @@ router.get('/:projectId/repo', async (req, res) => {
 // ── GET /api/git/:projectId/commits  — fetch recent commits ────────────────
 
 router.get('/:projectId/commits', async (req, res) => {
-  const limit = Math.min(Number(req.query.limit ?? 20), 50)
+  const rawLimit = Number.parseInt(String(req.query.limit ?? '20'), 10)
+  const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 20, 1), 50)
 
   try {
     const { rows } = await pool.query(
@@ -99,7 +111,7 @@ router.get('/:projectId/commits', async (req, res) => {
     // Prefer local git if fs_path is set
     if (fs_path) {
       try {
-        const { stdout } = await execAsync(`git log --format="%H|%s|%an|%aI" -n ${limit}`, { cwd: fs_path })
+        const { stdout } = await git(['log', '--format=%H|%s|%an|%aI', '-n', String(limit)], fs_path)
         const commits = stdout.trim().split('\n').filter(Boolean).map(line => {
           const [full_sha, message, author, date] = line.split('|')
           return {
@@ -165,11 +177,11 @@ router.get('/:projectId/branches', async (req, res) => {
     const { fs_path } = rows[0]
     if (!fs_path) return res.json({ data: [] })
 
-    const { stdout } = await execAsync('git branch -a --format="%(refname:short)"', { cwd: fs_path })
+    const { stdout } = await git(['branch', '-a', '--format=%(refname:short)'], fs_path)
     const branches = stdout.trim().split('\n').filter(Boolean)
     
     // Get current branch
-    const { stdout: current } = await execAsync('git branch --show-current', { cwd: fs_path })
+    const { stdout: current } = await git(['branch', '--show-current'], fs_path)
 
     res.json({ data: { branches, current: current.trim() } })
   } catch (err) {
@@ -187,7 +199,9 @@ router.get('/:projectId/diff/:sha', async (req, res) => {
     const { fs_path } = rows[0]
     if (!fs_path) return res.status(400).json({ error: 'Project has no linked local path' })
 
-    const { stdout } = await execAsync(`git show ${req.params.sha} --stat --patch`, { cwd: fs_path })
+    if (!isSafeRef(req.params.sha)) return res.status(400).json({ error: 'Invalid sha' })
+
+    const { stdout } = await git(['show', req.params.sha, '--stat', '--patch'], fs_path)
     res.json({ data: { diff: stdout } })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
@@ -241,6 +255,7 @@ router.delete('/:projectId/link/:sha', requireRole('member'), async (req, res) =
 router.get('/:projectId/compare', async (req, res) => {
   const { base, head } = req.query as { base?: string; head?: string }
   if (!base || !head) { res.status(400).json({ error: 'base and head query params required' }); return }
+  if (!isSafeRef(base) || !isSafeRef(head)) { res.status(400).json({ error: 'Invalid base or head ref' }); return }
 
   try {
     const { rows } = await pool.query(
@@ -253,7 +268,7 @@ router.get('/:projectId/compare', async (req, res) => {
 
     if (fs_path) {
       try {
-        const { stdout } = await execAsync(`git log ${base}..${head} --format="%h %s"`, { cwd: fs_path })
+        const { stdout } = await git(['log', `${base}..${head}`, '--format=%h %s'], fs_path)
         res.json({ data: { commits: stdout.trim(), count: stdout.trim().split('\n').filter(Boolean).length } })
         return
       } catch (err) {

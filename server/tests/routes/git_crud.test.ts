@@ -5,7 +5,7 @@ vi.mock('../../db/pool.js', () => ({
 }))
 
 vi.mock('node:child_process', () => ({
-  exec: vi.fn(),
+  execFile: vi.fn(),
 }))
 
 vi.mock('../../services/crypto.js', () => ({
@@ -15,7 +15,7 @@ vi.mock('../../services/crypto.js', () => ({
 
 import gitRouter from '../../routes/git.js'
 import { pool } from '../../db/pool.js'
-import { exec } from 'node:child_process'
+import { execFile as exec } from 'node:child_process'
 import { encrypt, decrypt } from '../../services/crypto.js'
 
 const mockQuery = vi.mocked(pool.query)
@@ -37,7 +37,7 @@ function fakeRes() {
 }
 
 function mockExecOnce(err: Error | null, stdout: string) {
-  mockExec.mockImplementationOnce(((_cmd: string, _opts: unknown, cb: (err: Error | null, result: { stdout: string; stderr: string }) => void) => {
+  mockExec.mockImplementationOnce(((_file: string, _args: string[], _opts: unknown, cb: (err: Error | null, result: { stdout: string; stderr: string }) => void) => {
     cb(err, { stdout, stderr: '' })
   }) as never)
 }
@@ -209,7 +209,7 @@ describe('GET /api/git/:projectId/commits', () => {
     mockExecOnce(null, '')
     const res = fakeRes()
     await getHandler('/:projectId/commits', 'get')({ params: { projectId: 'p1' }, query: { limit: '500' } }, res, () => {})
-    expect(mockExec).toHaveBeenCalledWith(expect.stringContaining('-n 50'), expect.anything(), expect.any(Function))
+    expect(mockExec).toHaveBeenCalledWith('git', expect.arrayContaining(['-n', '50']), expect.anything(), expect.any(Function))
   })
 
   it('responds 500 on a query failure', async () => {
@@ -275,7 +275,7 @@ describe('GET /api/git/:projectId/diff/:sha', () => {
     mockExecOnce(null, 'diff --git a/x b/x\n+added line')
     const res = fakeRes()
     await getHandler('/:projectId/diff/:sha', 'get')({ params: { projectId: 'p1', sha: 'abc123' } }, res, () => {})
-    expect(mockExec).toHaveBeenCalledWith(expect.stringContaining('git show abc123'), expect.anything(), expect.any(Function))
+    expect(mockExec).toHaveBeenCalledWith('git', ['show', 'abc123', '--stat', '--patch'], expect.anything(), expect.any(Function))
     expect(res.json).toHaveBeenCalledWith({ data: { diff: 'diff --git a/x b/x\n+added line' } })
   })
 
@@ -357,7 +357,7 @@ describe('GET /api/git/:projectId/compare', () => {
 
     await getHandler('/:projectId/compare', 'get')({ params: { projectId: 'p1' }, query: { base: 'main', head: 'feature' } }, res, () => {})
 
-    expect(mockExec).toHaveBeenCalledWith(expect.stringContaining('git log main..feature'), expect.anything(), expect.any(Function))
+    expect(mockExec).toHaveBeenCalledWith('git', ['log', 'main..feature', '--format=%h %s'], expect.anything(), expect.any(Function))
     expect(res.json).toHaveBeenCalledWith({ data: { commits: 'abc1234 First commit\ndef5678 Second commit', count: 2 } })
   })
 
@@ -415,5 +415,44 @@ describe('GET /api/git/:projectId/compare', () => {
     const res = fakeRes()
     await getHandler('/:projectId/compare', 'get')({ params: { projectId: 'p1' }, query: { base: 'a', head: 'b' } }, res, () => {})
     expect(res.status).toHaveBeenCalledWith(500)
+  })
+})
+
+describe('git route shell-injection hardening', () => {
+  const payloads = ['abc; rm -rf /', 'abc && whoami', '$(whoami)', '`id`', 'a b', '--output=/tmp/x', '-p', 'x|y', 'a\nb']
+
+  it.each(payloads)('diff/:sha rejects %j without running git', async sha => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ fs_path: '/repo' }] } as never)
+    const res = fakeRes()
+    await getHandler('/:projectId/diff/:sha', 'get')({ params: { projectId: 'p1', sha }, query: {} }, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(mockExec).not.toHaveBeenCalled()
+  })
+
+  it.each(payloads)('compare rejects %j as base or head without running git', async bad => {
+    for (const query of [{ base: bad, head: 'main' }, { base: 'main', head: bad }]) {
+      const res = fakeRes()
+      await getHandler('/:projectId/compare', 'get')({ params: { projectId: 'p1' }, query }, res, () => {})
+      expect(res.status).toHaveBeenCalledWith(400)
+    }
+    expect(mockQuery).not.toHaveBeenCalled()
+    expect(mockExec).not.toHaveBeenCalled()
+  })
+
+  it('commits clamps a non-numeric limit to the default and never reaches a shell', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ repo_url: null, github_pat_enc: null, fs_path: '/repo' }] } as never)
+    mockExecOnce(null, '')
+    await getHandler('/:projectId/commits', 'get')({ params: { projectId: 'p1' }, query: { limit: '5; id' } }, fakeRes(), () => {})
+    expect(mockExec).toHaveBeenCalledWith('git', expect.arrayContaining(['-n', '5']), expect.anything(), expect.any(Function))
+  })
+
+  it('still accepts normal refs, tags and SHAs', async () => {
+    for (const sha of ['abc123', 'v1.2.3', 'feature/x-y_z', 'HEAD~2', 'origin/main']) {
+      mockQuery.mockResolvedValueOnce({ rows: [{ fs_path: '/repo' }] } as never)
+      mockExecOnce(null, 'ok')
+      const res = fakeRes()
+      await getHandler('/:projectId/diff/:sha', 'get')({ params: { projectId: 'p1', sha }, query: {} }, res, () => {})
+      expect(res.json).toHaveBeenCalledWith({ data: { diff: 'ok' } })
+    }
   })
 })
