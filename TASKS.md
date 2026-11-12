@@ -88,10 +88,15 @@ Account → API Tokens); daily digest via `scripts/digest_scheduler.py` (APSched
       external_id IS NOT NULL`, but `schema.sql` / `add_phase24_25.ts` only create a *non-unique* index on
       `external_id`, which Postgres rejects for that clause. Check the live DB's indexes; if confirmed, make that
       index `UNIQUE` (P2).
-- [~] Add route-level tests for `/api/notify` happy path, unknown project (404), validation (400),
+- [x] Add route-level tests for `/api/notify` happy path, unknown project (404), validation (400),
       and token enforcement (above); keep the coverage gate green.
-      Happy path, 404 and 400 already existed; the `requireAuth`-on-route check was added 2026-11-12. Still open: a
-      test that exercises the real 401 (no token) / 200 (valid token) behaviour end to end, and the coverage-gate run.
+      Happy path, 404 and 400 already existed. Added 2026-11-12: `tests/routes/notify_auth.test.ts` runs the route's
+      real middleware chain (real `requireAuth`, mocked env/DB) — 401 for no creds / bad or forged JWT / legacy JWT /
+      unknown or expired `dbrn_` token; 200 for a valid JWT and a valid `dbrn_` token (asserts only the sha256 reaches
+      the DB); pass-through when `AUTH_PASSWORD` is unset. Mutation-checked: removing `requireAuth` fails 7 tests.
+      Coverage gate green (96.63 / 93.2 / 95.06 / 97.85 vs 96 / 93 / 94 / 97 — branches has only 0.2 pt of headroom).
+      Note: `settings_backup.test.ts` "200MB total cap" test builds a 200MB zip and exceeds the default 5s timeout
+      under `--coverage` (≈19s) — passes without coverage; give it an explicit timeout if CI ever runs coverage.
 
 ---
 
@@ -107,9 +112,33 @@ Account → API Tokens); daily digest via `scripts/digest_scheduler.py` (APSched
 | Browsing categories (name + one-line description each) and a never-store domain blocklist | Step 4 | Banking, health, email, anything private |
 | How to schedule the browsing import | Step 4 | A fully reliable History read needs the browser closed (or a temp copy that can fail); a nightly job needs a Windows Task Scheduler entry, or the server running |
 
-- [ ] **Link projects to their local folders** (Projects page → Link folder) — six projects have no `fs_path`:
-      `devbrain` (`D:/Project/devbrain`), `playcru`, `quantcru`, `musicplayer`, `ntbilling`, `general`. Link the ones that
-      have local repos. Prerequisite for [[Phase 46]] Step 2 (and for indexing the code graph in P2).
+### P1 answers — decided 2026-11-12 ("go with the recommendations")
+
+1. **Clone paths** (found by scanning `D:/Project`, `D:/PlayCru`, `~/Downloads`; not yet linked — server wasn't running):
+   | DevBrain project | Path | Notes |
+   |---|---|---|
+   | `devbrain` | `D:/Project/devbrain` | remote `jagdeepvirdi/devbrain` |
+   | `quantcru` | `D:/Project/QuantCru` | git repo, **no remote** |
+   | `playcru` | `D:/PlayCru/play_cru` | git repo, **no remote**; Flutter app (the web app, if separate, is not located) |
+   | `musicplayer` | — | only UI mockup PNGs in `~/Downloads/MusicPlayer`; no repo yet — skip |
+   | `ntbilling` | — | no repo on this machine (`D:/OfficeWork` holds docs/schemas, not a repo) — skip |
+   | `general` | — | not a code project — skip |
+2. **ActivityWatch:** install it and read via its **local REST API** (`http://localhost:5600/api/0`). *Install not done* —
+   the automated `winget install ActivityWatch.ActivityWatch` was blocked by the permission classifier; run it yourself
+   (`! winget install --id ActivityWatch.ActivityWatch -e`) then launch `aw-qt`.
+3. **Browsing categories — DRAFT, edit before Step 4:** `Dev` (code, GitHub, Stack Overflow, package registries, cloud
+   consoles) · `Docs` (official documentation, API references, wikis) · `Research` (articles, papers, comparisons) ·
+   `Learning` (courses, tutorials, video lessons) · `Communication` (work chat/email *categories only, no titles*) ·
+   `Social` · `Media` (video/music/streaming) · `Shopping` · `Other`. **Draft never-store blocklist** (domain *and* title
+   dropped, event discarded before storage): banking/payments/brokerage, health/medical, webmail, password managers,
+   government/tax, anything under `localhost`/private IP ranges, and incognito/private windows. Store domain + title only,
+   never full URLs/query strings.
+4. **Browsing-import schedule:** nightly **Windows Task Scheduler** job that reads a *temp copy* of the browser History DB
+   (browser may stay open) and retries on a locked file; the server is not required to be running.
+
+- [ ] **Link projects to their local folders** (Projects page → Link folder) — link the three rows above that have a path
+      (`devbrain`, `quantcru`, `playcru`); `musicplayer`, `ntbilling` and `general` have no local repo. Prerequisite for
+      [[Phase 46]] Step 2 (and for indexing the code graph in P2).
 
 ### Phase 46 — Cross-Project Activity, Time Tracking & Browsing Categorization (2026-11-12) — overview, constraints & safety guard
 
