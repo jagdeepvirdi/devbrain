@@ -1164,7 +1164,9 @@ design, not oversight)*
 
 ### Open
 - [ ] Migrate `zod` 3 → 4 (26 files) and drop the `GHSA-mrhx-c7xc-m3w5` allowlist entry.
-- [ ] Upgrade `multer` 1.4.5-lts.2 → 2.x (uploads path); review API changes first.
+- [x] Upgraded `multer` 1.4.5-lts.2 → 2.5.0 (+ `@types/multer` 2.3.0); no code changes needed (routes only use
+      `dest`/`limits`/`upload.single` + `req.file.path`/`originalname`). Verified with `tsc`, full server vitest
+      (1419 passed) and a live multer smoke test (upload OK, missing file 400, oversize `LIMIT_FILE_SIZE`). <!-- done: 2026-11-12 -->
 - [ ] Revert `e2e` runner pin to `ubuntu-latest` once Playwright supports Ubuntu 26.04.
 - [ ] Rotate the admin password and the `dbrn_` API token (both were stored in plain text in
       `.claude/settings.local.json` allow-rules; rules removed, credentials not yet rotated).
