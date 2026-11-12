@@ -7,6 +7,23 @@ import { typeStyle, fmtDate, issueLabel } from './shared'
 
 type SortKey = 'version' | 'date' | 'type' | 'component'
 
+const thStyle: React.CSSProperties = { padding: '9px 12px', cursor: 'default', userSelect: 'none', whiteSpace: 'nowrap' }
+
+function SortableTh({ sortKeyName, label, width, activeKey, dir, onSort }: {
+  sortKeyName: SortKey
+  label: string
+  width?: number
+  activeKey: SortKey
+  dir: 'asc' | 'desc'
+  onSort: (key: SortKey) => void
+}) {
+  return (
+    <th onClick={() => onSort(sortKeyName)} style={{ ...thStyle, width }}>
+      {label} {activeKey === sortKeyName ? (dir === 'asc' ? '▲' : '▼') : ''}
+    </th>
+  )
+}
+
 export function ReleaseTable({ releases, showProject, onEdit, onDelete }: {
   releases: Release[]
   showProject: boolean
@@ -30,25 +47,17 @@ export function ReleaseTable({ releases, showProject, onEdit, onDelete }: {
     return sortDir === 'asc' ? cmp : -cmp
   })
 
-  const thStyle: React.CSSProperties = { padding: '9px 12px', cursor: 'default', userSelect: 'none', whiteSpace: 'nowrap' }
-
-  function SortableTh({ sortKeyName, label, width }: { sortKeyName: SortKey; label: string; width?: number }) {
-    return (
-      <th onClick={() => toggleSort(sortKeyName)} style={{ ...thStyle, width }}>
-        {label} {sortKey === sortKeyName ? (sortDir === 'asc' ? '▲' : '▼') : ''}
-      </th>
-    )
-  }
+  const sortProps = { activeKey: sortKey, dir: sortDir, onSort: toggleSort }
 
   return (
     <div style={{ overflowX: 'auto', border: '1px solid var(--line)', borderRadius: 8 }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px', textAlign: 'left' }}>
         <thead>
           <tr style={{ borderBottom: '1px solid var(--line)', background: 'var(--bg-elev)', color: 'var(--fg-3)', fontWeight: 500 }}>
-            <SortableTh sortKeyName="version" label="Version" width={190} />
-            <SortableTh sortKeyName="date" label="Date" width={100} />
-            <SortableTh sortKeyName="type" label="Type" width={80} />
-            <SortableTh sortKeyName="component" label="Component" width={160} />
+            <SortableTh sortKeyName="version" label="Version" width={190} {...sortProps} />
+            <SortableTh sortKeyName="date" label="Date" width={100} {...sortProps} />
+            <SortableTh sortKeyName="type" label="Type" width={80} {...sortProps} />
+            <SortableTh sortKeyName="component" label="Component" width={160} {...sortProps} />
             {showProject && <th style={{ ...thStyle, width: 140 }}>Project</th>}
             <th style={{ ...thStyle, width: 160 }}>Issue ID</th>
             <th style={thStyle}>Summary</th>
