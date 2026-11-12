@@ -29,9 +29,12 @@ jobs:
       # adm-zip and sharp were bumped to patched versions this same date and dropped
       # from the allowlist. scripts/audit-check.mjs fails only on high/critical
       # advisories NOT in this allowlist, so new findings still break the build.
+      # zod GHSA-mrhx-c7xc-m3w5 added 2026-11-12: memory exhaustion validating oversized
+      # constrained collections. Fixed only in zod 4.x, a breaking major migration across
+      # ~26 files; accepted for this single-tenant local app until that migration is done.
       - run: |
           node ../scripts/audit-check.mjs \
-            "GHSA-4r6h-8v6p-xvw6,GHSA-5pgg-2g8v-p4x9"
+            "GHSA-4r6h-8v6p-xvw6,GHSA-5pgg-2g8v-p4x9,GHSA-mrhx-c7xc-m3w5"
 
   audit-client:
     name: npm audit — client
@@ -50,4 +53,6 @@ jobs:
       # react-router-dom bumped to ^7.18.2 on 2026-08-17 (tech-debt audit remediation),
       # which resolved the two moderate open-redirect/constructor-injection advisories
       # previously accepted here — 0 vulnerabilities as of that date, no allowlist needed.
-      - run: npm audit --audit-level=high
+      # zod GHSA-mrhx-c7xc-m3w5 accepted 2026-11-12 (fix requires zod 4 major migration;
+      # see server job note). Same allowlist script as the server job.
+      - run: node ../scripts/audit-check.mjs "GHSA-mrhx-c7xc-m3w5"
