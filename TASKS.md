@@ -28,24 +28,69 @@ Pending work is grouped below, starting with **Pending Work — At a Glance**.
 
 ## Pending Work — At a Glance
 
-> Single entry point for everything still open (reorganized 2026-11-12). Completed work lives in
-> `TASKS_ARCHIVE.md`. Details and checkboxes are in the sections below, grouped by theme and ordered by priority.
+> Single entry point for everything still open, ordered by priority (restructured 2026-11-12). Each task appears once,
+> under the tier that matches when it should be done. Completed work lives in `TASKS_ARCHIVE.md`.
 
-| # | Group | Where | Needs |
+| Tier | What it holds | Open | Start here |
 |---|---|---|---|
-| 1 | **Security & hardening** — `/api/notify` unauthenticated; shell injection in `routes/git.ts`; admin password rotation | [[Phase 46]] Step 1 · Maintenance → Security & credentials | Claude (code) + you (password) |
-| 2 | **Phase 46 — activity feed, time tracking, browsing categorization** | [[Phase 46]] Steps 2–4 | Your inputs: repo paths, ActivityWatch decision, browsing categories + blocklist |
-| 3 | **Dependencies & CI** — zod 4, E2E runner pin, optional major upgrades | Maintenance → Dependencies & CI | Claude |
-| 4 | **Testing & code quality** — throwaway E2E DB, lint warnings, upload smoke test | Maintenance → Testing & quality | Claude (+ you for the UI smoke test) |
-| 5 | **Data & indexing** — link projects, code graph, DB/backups checks | Maintenance → Data & indexing | You + Claude |
-| 6 | **Feature backlog** — webhook sync, push-back sync | [[Phase 39]] Tier 3 | A design decision |
-| 7 | **Market-readiness** — tenancy, billing, SSO, privacy docs | [[Phase 39]] Tier 4 | Only if DevBrain stops being a personal tool |
+| **P0 — Do now** | Security fixes and credential rotation; nothing blocked | 5 | Rotate the admin password, then Phase 46 Step 1 (`/api/notify` auth, `git.ts` shell injection) |
+| **P1 — Needs your input first** | Phase 46 Steps 2–4 (git digest, time tracking, browsing categorization) + project linking | 24 | The "input needed from you" table at the top of P1 |
+| **P2 — Maintenance** | Dependencies & CI, testing & code quality, data & indexing, security hygiene | 10 | zod 4 migration; local E2E against a throwaway DB |
+| **P3 — Optional & market-readiness** | Parked major upgrades, webhook/push-back sync, multi-tenant/billing/SSO | 10 | Only if you want them — nothing here is urgent |
 
 Task markers: `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked
 
 ---
 
-## Phase 46 — Cross-Project Activity, Time Tracking & Browsing Categorization (2026-11-12)
+## P0 — Do now
+
+> Security fixes and credential hygiene. Nothing here is blocked on a decision or on new information — start at the
+> top. The first item is yours (a few minutes); the rest is code work for Claude, all under Phase 46 Step 1.
+
+- [ ] **Rotate the admin password** *(owner action)* — it was stored in plaintext inside `.claude/settings.local.json`
+      allow-rules until 2026-11-12 (those rules are removed) and appeared in a session transcript. The matching
+      `dbrn_` API token (`Temp-Claude`) was revoked 2026-11-12 (its `api_tokens` row deleted).
+
+### Phase 46 · Step 1 — Notification Hub audit & hardening (prerequisite for Outpost → `/notify` + `/issues`)
+Current state (read 2026-11-12): `POST /api/notify` (zod-validated, rate-limited, looks up project by
+`short_name`, fans out to Apprise channels), `/send-digest` (loopback only), `/log`, `/test`, `/retry/:id`,
+`/channels*`, `/project-prefs`; Claude Code `session-end.ps1/.sh` POST to `/api/notify` fire-and-forget (3s
+timeout); `POST /api/issues` requires `member` role (Outpost needs an API token, minted under Settings →
+Account → API Tokens); daily digest via `scripts/digest_scheduler.py` (APScheduler, spawned by the server).
+- [ ] **`POST /api/notify` is unauthenticated** (only the rate limiter protects it): anyone who can reach the
+      port can send notifications to every channel of every user on any project. Decide + implement: accept
+      loopback callers without a token (existing hooks keep working), require a valid `dbrn_` token for
+      non-loopback callers (Outpost runs on a remote host). Add tests for both paths.
+- [ ] **Shell injection in `routes/git.ts`**: `GET /:projectId/compare` interpolates `base`/`head` and
+      `GET /:projectId/diff/:sha` interpolates `sha` straight into an `exec()` shell string, and `/commits`
+      interpolates `limit` the same way (clamped, but still a shell string). Any logged-in user could run
+      arbitrary commands on the server host. Switch to `execFile('git', [args…])` and validate refs against
+      `^[A-Za-z0-9._/-]+$`. Fix **before** step 2 reuses git execution.
+- [ ] Verify Outpost-style callers are idempotent against `POST /api/issues`: confirm whether repeated
+      identical reports create duplicate issues; if so add a dedupe key (e.g. `external_ref` +
+      unique-per-project index) and a test.
+- [ ] Add route-level tests for `/api/notify` happy path, unknown project (404), validation (400),
+      and token enforcement (above); keep the coverage gate green.
+
+---
+
+## P1 — Needs your input first
+
+> Ready to build as soon as the inputs below arrive. Phase 46 Steps 2–4 live here; Step 1 (hardening) is in P0 because
+> it needs nothing from you and the later steps build on it.
+
+| Input needed from you | Unblocks | Notes |
+|---|---|---|
+| Local clone paths + which DevBrain project each belongs to | Step 2 | Prefer linking via `projects.fs_path` (see the first item below) |
+| ActivityWatch: install it? Read via local REST API (recommended) or its SQLite file? | Step 3 | Not installed on this machine yet |
+| Browsing categories (name + one-line description each) and a never-store domain blocklist | Step 4 | Banking, health, email, anything private |
+| How to schedule the browsing import | Step 4 | A fully reliable History read needs the browser closed (or a temp copy that can fail); a nightly job needs a Windows Task Scheduler entry, or the server running |
+
+- [ ] **Link projects to their local folders** (Projects page → Link folder) — six projects have no `fs_path`:
+      `devbrain` (`D:/Project/devbrain`), `playcru`, `quantcru`, `musicplayer`, `ntbilling`, `general`. Link the ones that
+      have local repos. Prerequisite for [[Phase 46]] Step 2 (and for indexing the code graph in P2).
+
+### Phase 46 — Cross-Project Activity, Time Tracking & Browsing Categorization (2026-11-12) — overview, constraints & safety guard
 
 > **Status: PLANNED — nothing built yet.** Extends DevBrain from "knowledge base" toward a personal
 > activity hub: weekly git digests across repos, per-project time tracking, and categorized browsing
@@ -68,28 +113,7 @@ Task markers: `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked
 > `AI_PROVIDER` is not `ollama`. Personal-data features (browsing history and window titles especially)
 > must refuse to run unless `AI_PROVIDER=ollama`.
 
-### Step 1 — Notification Hub audit & hardening (prerequisite for Outpost → `/notify` + `/issues`)
-Current state (read 2026-11-12): `POST /api/notify` (zod-validated, rate-limited, looks up project by
-`short_name`, fans out to Apprise channels), `/send-digest` (loopback only), `/log`, `/test`, `/retry/:id`,
-`/channels*`, `/project-prefs`; Claude Code `session-end.ps1/.sh` POST to `/api/notify` fire-and-forget (3s
-timeout); `POST /api/issues` requires `member` role (Outpost needs an API token, minted under Settings →
-Account → API Tokens); daily digest via `scripts/digest_scheduler.py` (APScheduler, spawned by the server).
-- [ ] **`POST /api/notify` is unauthenticated** (only the rate limiter protects it): anyone who can reach the
-      port can send notifications to every channel of every user on any project. Decide + implement: accept
-      loopback callers without a token (existing hooks keep working), require a valid `dbrn_` token for
-      non-loopback callers (Outpost runs on a remote host). Add tests for both paths.
-- [ ] **Shell injection in `routes/git.ts`**: `GET /:projectId/compare` interpolates `base`/`head` and
-      `GET /:projectId/diff/:sha` interpolates `sha` straight into an `exec()` shell string, and `/commits`
-      interpolates `limit` the same way (clamped, but still a shell string). Any logged-in user could run
-      arbitrary commands on the server host. Switch to `execFile('git', [args…])` and validate refs against
-      `^[A-Za-z0-9._/-]+$`. Fix **before** step 2 reuses git execution.
-- [ ] Verify Outpost-style callers are idempotent against `POST /api/issues`: confirm whether repeated
-      identical reports create duplicate issues; if so add a dedupe key (e.g. `external_ref` +
-      unique-per-project index) and a test.
-- [ ] Add route-level tests for `/api/notify` happy path, unknown project (404), validation (400),
-      and token enforcement (above); keep the coverage gate green.
-
-### Step 2 — Cross-project weekly git digest (reuse the release-notes summarizer)
+### Phase 46 · Step 2 — Cross-project weekly git digest (reuse the release-notes summarizer)
 Reuse the `POST /api/releases/import-git` approach (`aiChat` + strict-JSON prompt → parsed arrays) rather
 than inventing a new pipeline; all Ollama calls already go through the serialized `withOllamaQueue`.
 - [ ] **BLOCKED ON USER:** list of local clone paths (+ which DevBrain project each belongs to). Prefer the
@@ -108,7 +132,7 @@ than inventing a new pipeline; all Ollama calls already go through the serialize
       Notification Hub (Apprise) when generated. Dashboard widget + per-project drill-down.
 - [ ] Tests: git collector (temp repo fixture), chunking/merge, malformed-JSON handling, route validation.
 
-### Step 3 — Time tracking (ActivityWatch import + git-timestamp backfill)
+### Phase 46 · Step 3 — Time tracking (ActivityWatch import + git-timestamp backfill)
 - [ ] **DECISION NEEDED:** read ActivityWatch via its local REST API (`http://localhost:5600/api/0/...`,
       still 100% local, no lock/schema coupling) **or** directly from its SQLite file
       (`%LOCALAPPDATA%\activitywatch\activitywatch\aw-server\peewee-sqlite.v2.db` by default — confirm).
@@ -129,7 +153,7 @@ than inventing a new pipeline; all Ollama calls already go through the serialize
 - [ ] API + UI: `GET /api/time?from&to&project`, project/week/month rollups, source breakdown; tests for
       event merging, rule priority, idempotent re-import, and the git-gap clustering.
 
-### Step 4 — Browsing history, categorized (scheduled batch job, no extension)
+### Phase 46 · Step 4 — Browsing history, categorized (scheduled batch job, no extension)
 Chrome and Edge profiles both exist locally (`%LOCALAPPDATA%\Google\Chrome\User Data\<Profile>\History`,
 `%LOCALAPPDATA%\Microsoft\Edge\User Data\<Profile>\History`).
 - [ ] **DECISION NEEDED:** your category list (name + short description each) and a domain blocklist
@@ -153,67 +177,73 @@ Chrome and Edge profiles both exist locally (`%LOCALAPPDATA%\Google\Chrome\User 
 - [ ] Tests: timestamp conversion, copy-failure path, URL sanitization, blocklist enforcement, batch
       classifier JSON parsing, and the `AI_PROVIDER=ollama` guard.
 
-### Cross-cutting
+### Phase 46 · Cross-cutting
 - [ ] `requireLocalAI()` guard (see Safety guard above) with a test that cloud providers are rejected.
 - [ ] Update `docs/FEATURE_GUIDE.md`, `CLAUDE.md` project structure, and `CHANGELOG.md` per step.
 - [ ] Each step lands as its own commit(s); CI must be green before starting the next step.
 
 ---
 
-## Maintenance Backlog (carried over from Phase 45 and the 2026-11-12 health audit)
+## P2 — Maintenance
 
-> Open items found while recovering CI and auditing the codebase/database on 2026-11-12, regrouped by theme.
-> Completed Phase 45 work is archived in `TASKS_ARCHIVE.md`.
-
-### Security & credentials
-- [ ] **Rotate the admin password** *(owner action)* — it was stored in plaintext inside `.claude/settings.local.json`
-      allow-rules until 2026-11-12 (those rules are removed) and appeared in a session transcript. The matching
-      `dbrn_` API token (`Temp-Claude`) was revoked 2026-11-12 (its `api_tokens` row deleted).
-- [ ] *(optional)* Trim the remaining over-broad allow rules in `.claude/settings.local.json` — e.g. `Bash(git *)`
-      (includes force-push), `Bash(grep *)`, `Bash(python *)`, `Bash(docker exec *)`, `PowerShell(Remove-Item *)`,
-      `Bash(Remove-Item *)`. Replace with narrower prefixes or run `/fewer-permission-prompts`.
+> Worth doing, nothing is on fire. Items under each group are roughly in priority order. Found while recovering CI and
+> auditing the codebase and database on 2026-11-12 (Phase 45, archived in `TASKS_ARCHIVE.md`).
 
 ### Dependencies & CI
 - [ ] **Migrate `zod` 3 → 4** (26 files under `server/` and `client/src/`) and drop the `GHSA-mrhx-c7xc-m3w5`
       entry from `.github/workflows/security-audit.yml`'s allowlists (both jobs).
 - [ ] Revert the `e2e` job in `ci.yml` from `ubuntu-24.04` back to `ubuntu-latest` once Playwright supports
       Ubuntu 26.04 (error was: "Playwright does not support chromium on ubuntu26.04-x64").
-- [ ] *(optional)* Major upgrades currently parked: Express 5, React 19 (+ `@types/react*`), Tailwind 4,
-      `marked` 18, `pdf-parse` 2 (or drop it if `@firecrawl/pdf-inspector` fully covers PDFs),
-      `vitest` / `@vitest/coverage-v8` 5, TypeScript 7.
-- [ ] *(optional)* Moderate `npm audit` findings that only clear with `--force` (below the CI gate, which fails on
-      high/critical only): `deepmerge` (via `vite-plugin-pwa` / `workbox`), `glob`, `minimatch`, `katex`.
-      Revisit together with the major upgrades above.
 
 ### Testing & code quality
 - [ ] **Run local E2E against a throwaway database**, not the `.env` one — local Playwright runs hit the real DB
       and a killed run left test users/projects behind (cleaned up 2026-11-12). CI already uses its own Postgres.
+- [ ] Manual smoke test of a document upload through the running UI (`multer` 2.x was verified by unit tests and a
+      live upload / no-file / size-limit smoke test, but not against the running app).
 - [ ] Clear lint warnings: client 60 (38 `react-hooks/set-state-in-effect`, 6 `refs`, 5 `exhaustive-deps`,
       4 `only-export-components`, 3 `preserve-manual-memoization`, 1 `purity`, 3 other) and server 5
       (non-null assertions). Warnings will become errors as the react-hooks rules tighten.
-- [ ] Manual smoke test of a document upload through the running UI (`multer` 2.x was verified by unit tests and a
-      live upload / no-file / size-limit smoke test, but not against the running app).
 
 ### Data & indexing
-- [ ] Link the `devbrain` project to `D:/Project/devbrain` (Projects page) and run
-      `npx tsx scripts/index-code-graph.ts --project devbrain` from `server/` so `code_nodes` / `code_edges`
-      (empty today) are populated. Note: the session hook's node count comes from the separate
-      `.code-review-graph` tool, not these tables.
-- [ ] Six projects have no `fs_path` (`devbrain`, `playcru`, `quantcru`, `musicplayer`, `ntbilling`, `general`) —
-      link the ones with local repos (also required by [[Phase 46]] Step 2).
+- [ ] Once `devbrain` is linked (P1), run `npx tsx scripts/index-code-graph.ts --project devbrain` from `server/` so
+      `code_nodes` / `code_edges` (empty today) are populated. Note: the session hook's node count comes from the
+      separate `.code-review-graph` tool, not these tables.
+- [ ] Verify a recent scheduled backup exists (`backup_settings` is configured; not checked 2026-11-12).
 - [ ] Investigate the one document with no chunks, and verify `embedding_health_snapshots` is written while the
       server runs (latest row dated 2026-08-11).
-- [ ] Verify a recent scheduled backup exists (`backup_settings` is configured; not checked 2026-11-12).
+
+### Release management
+- [ ] **Cut v1.3.0** — the Release Status table still ends at v1.2.0 (2026-06-15) while `CHANGELOG.md`'s `[Unreleased]`
+      section covers Phases 36–45 and the 2026-11-12 CI/dependency fixes. Move `[Unreleased]` under a dated
+      `[1.3.0]` heading, add the row to Release Status, tag and publish (`gh release create`).
+
+### Security hygiene (non-urgent)
+- [ ] Trim the remaining over-broad allow rules in `.claude/settings.local.json` — e.g. `Bash(git *)`
+      (includes force-push), `Bash(grep *)`, `Bash(python *)`, `Bash(docker exec *)`, `PowerShell(Remove-Item *)`,
+      `Bash(Remove-Item *)`. Replace with narrower prefixes or run `/fewer-permission-prompts`.
 
 ---
 
-## Phase 39 — Consolidated Priority Backlog (2026-08-07) — open items only
+## P3 — Optional & market-readiness
+
+> Parked on purpose. Optional upgrades, feature ideas awaiting a design decision, and items that only matter if DevBrain
+> stops being a personal tool.
+
+### Optional dependency work
+- [ ] Major upgrades currently parked: Express 5, React 19 (+ `@types/react*`), Tailwind 4, `marked` 18,
+      `pdf-parse` 2 (or drop it if `@firecrawl/pdf-inspector` fully covers PDFs), `vitest` /
+      `@vitest/coverage-v8` 5, TypeScript 7.
+- [ ] Moderate `npm audit` findings that only clear with `--force` (below the CI gate, which fails on
+      high/critical only): `deepmerge` (via `vite-plugin-pwa` / `workbox`), `glob`, `minimatch`, `katex`.
+      Revisit together with the major upgrades above.
+
+### Phase 39 — open tiers (feature backlog & market-readiness)
 
 > Tier 1 (correctness & reliability) and Tier 2 (code quality / maintainability) are complete and archived in
 > `TASKS_ARCHIVE.md`. Only the feature-enhancement and market-readiness tiers remain open; original wording is
 > preserved from the source sections ([[Phase 33]] review and the V2 Roadmap's Two-Way Integration Sync).
 
-### Tier 3 — Feature enhancements
+#### Tier 3 — Feature enhancements
 
 - [ ] **Webhook-based live sync** *(from V2 Roadmap — Two-Way Integration Sync)* — alternative to the current
       manual `POST /api/integrations/:id/sync` pull-only trigger — investigate per-provider webhook setup
@@ -223,7 +253,7 @@ Chrome and Edge profiles both exist locally (`%LOCALAPPDATA%\Google\Chrome\User 
       DevBrain, not just import — needs a design decision on conflict resolution once sync is bidirectional
       (simultaneous edits on both sides). Blocked on the design decision, not effort.
 
-### Tier 4 — Nice-to-have / market-readiness (only relevant if this stops being a personal tool)
+#### Tier 4 — Nice-to-have / market-readiness (only relevant if this stops being a personal tool)
 
 *(from [[Phase 33]] — all explicitly framed there as non-goals for personal/local-first use; lowest priority by
 design, not oversight)*
