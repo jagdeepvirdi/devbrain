@@ -28,6 +28,9 @@ const CreateBody = z.object({
   tags:                z.array(z.string()).default([]),
   component:           z.string().max(200).trim().nullable().optional(),
   issue_code:          z.string().max(50).trim().nullable().optional(),
+  // Caller-supplied idempotency key (e.g. an Outpost error fingerprint). Repeating a create
+  // with the same (project_id, external_ref) returns the existing issue instead of a duplicate.
+  external_ref:        z.string().min(1).max(200).trim().nullable().optional(),
   investigation_steps: z.array(StepSchema).default([]),
 })
 
@@ -330,18 +333,35 @@ router.post('/', requireRole('member'), async (req, res) => {
   const parsed = CreateBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
 
-  const { title, description, status, priority, project_id, tags, component, issue_code, investigation_steps } = parsed.data
+  const { title, description, status, priority, project_id, tags, component, issue_code, external_ref, investigation_steps } = parsed.data
+  const ref = external_ref?.trim() || null
 
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
 
+    // The ON CONFLICT clause is only added when a ref is supplied, so callers that don't send one
+    // never depend on the unique index and keep the old always-insert behaviour.
     const { rows } = await client.query(
-      `INSERT INTO issues (project_id, title, description, status, priority, tags, component, issue_code)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO issues (project_id, title, description, status, priority, tags, component, issue_code, external_ref)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ${ref ? `ON CONFLICT ((COALESCE(project_id, '')), external_ref) WHERE external_ref IS NOT NULL DO NOTHING` : ''}
        RETURNING id`,
-      [project_id ?? null, title, description, status, priority, tags, component?.trim() || null, issue_code?.trim() || null]
+      [project_id ?? null, title, description, status, priority, tags, component?.trim() || null, issue_code?.trim() || null, ref]
     )
+
+    if (!rows.length) {
+      // Duplicate report: nothing was inserted. Return the issue that already holds this ref.
+      await client.query('ROLLBACK')
+      const { rows: existing } = await pool.query(
+        `SELECT ${ISSUE_COLS} FROM issues i ${ISSUE_JOINS}
+         WHERE COALESCE(i.project_id, '') = COALESCE($1, '') AND i.external_ref = $2
+         GROUP BY i.id, p.name, p.color`,
+        [project_id ?? null, ref]
+      )
+      if (!existing.length) return res.status(409).json({ error: 'Conflicting external_ref' })
+      return res.status(200).json({ data: existing[0], deduplicated: true })
+    }
     const issueId = rows[0].id
 
     for (const step of investigation_steps) {

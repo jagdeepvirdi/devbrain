@@ -454,6 +454,12 @@ CREATE INDEX IF NOT EXISTS issues_external_id_idx ON issues (external_id) WHERE 
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS issue_code TEXT;
 CREATE INDEX IF NOT EXISTS issues_issue_code_idx ON issues (issue_code) WHERE issue_code IS NOT NULL;
 
+-- Phase 46 Step 1: caller-supplied idempotency key for POST /api/issues (e.g. an Outpost error
+-- fingerprint). Unique per project (COALESCE so project-less issues dedupe too); NULL = no dedupe.
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS external_ref TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS issues_project_external_ref_uidx
+  ON issues ((COALESCE(project_id, '')), external_ref) WHERE external_ref IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS integrations (
   id                  TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
   provider            TEXT        NOT NULL,

@@ -350,6 +350,88 @@ describe('POST /api/issues', () => {
     )).toBe(true))
   })
 
+  it('without external_ref, never emits ON CONFLICT and binds a null ref (old always-insert behaviour)', async () => {
+    const client = fakeClient()
+    client.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('INSERT INTO issues')) return { rows: [{ id: 'i1' }] }
+      return { rows: [] }
+    })
+    mockConnect.mockResolvedValueOnce(client as never)
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'i1', title: 'Bug', description: '' }] } as never)
+    mockAiEmbed.mockResolvedValueOnce([])
+
+    await getHandler('/', 'post')({ body: { title: 'Bug' } }, fakeRes(), () => {})
+
+    const insert = client.query.mock.calls.find(c => String(c[0]).includes('INSERT INTO issues'))!
+    expect(String(insert[0])).not.toContain('ON CONFLICT')
+    expect((insert[1] as unknown[])[8]).toBeNull()
+  })
+
+  it('with external_ref, inserts with ON CONFLICT DO NOTHING and returns 201 for a first report', async () => {
+    const client = fakeClient()
+    client.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('INSERT INTO issues')) return { rows: [{ id: 'i1' }] }
+      return { rows: [] }
+    })
+    mockConnect.mockResolvedValueOnce(client as never)
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'i1', title: 'Bug', description: '' }] } as never)
+    mockAiEmbed.mockResolvedValueOnce([])
+    const res = fakeRes()
+
+    await getHandler('/', 'post')({ body: { title: 'Bug', project_id: 'p1', external_ref: '  fp-123  ' } }, res, () => {})
+
+    const insert = client.query.mock.calls.find(c => String(c[0]).includes('INSERT INTO issues'))!
+    expect(String(insert[0])).toContain('ON CONFLICT')
+    expect(String(insert[0])).toContain('DO NOTHING')
+    expect((insert[1] as unknown[])[8]).toBe('fp-123') // trimmed
+    expect(res.status).toHaveBeenCalledWith(201)
+  })
+
+  it('a repeated external_ref returns the existing issue (200, deduplicated) without steps, commit or re-embed', async () => {
+    const client = fakeClient()
+    client.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('INSERT INTO issues')) return { rows: [] } // ON CONFLICT DO NOTHING -> no row
+      return { rows: [] }
+    })
+    mockConnect.mockResolvedValueOnce(client as never)
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'existing', title: 'Bug' }] } as never)
+    const res = fakeRes()
+    const steps = [{ id: 's1', order: 1, instruction: 'Check logs', done: false }]
+
+    await getHandler('/', 'post')(
+      { body: { title: 'Bug', project_id: 'p1', external_ref: 'fp-123', investigation_steps: steps } }, res, () => {},
+    )
+
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith({ data: { id: 'existing', title: 'Bug' }, deduplicated: true })
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK')
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT')
+    expect(client.query.mock.calls.some(c => String(c[0]).includes('INSERT INTO issue_steps'))).toBe(false)
+    expect(mockAiEmbed).not.toHaveBeenCalled()
+    expect(String(mockQuery.mock.calls[0][0])).toContain('i.external_ref = $2')
+    expect(mockQuery.mock.calls[0][1]).toEqual(['p1', 'fp-123'])
+    expect(client.release).toHaveBeenCalled()
+  })
+
+  it('409s if the conflicting row vanished before it could be read back', async () => {
+    const client = fakeClient()
+    mockConnect.mockResolvedValueOnce(client as never)
+    mockQuery.mockResolvedValueOnce({ rows: [] } as never)
+    const res = fakeRes()
+    await getHandler('/', 'post')({ body: { title: 'Bug', external_ref: 'fp-1' } }, res, () => {})
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(client.release).toHaveBeenCalled()
+  })
+
+  it('400s an empty or oversized external_ref', async () => {
+    for (const external_ref of ['', 'x'.repeat(201)]) {
+      const res = fakeRes()
+      await getHandler('/', 'post')({ body: { title: 'Bug', external_ref } }, res, () => {})
+      expect(res.status).toHaveBeenCalledWith(400)
+    }
+    expect(mockConnect).not.toHaveBeenCalled()
+  })
+
   it('creates an issue with no steps (skips the step-insert loop)', async () => {
     const client = fakeClient()
     client.query.mockImplementation(async (sql: string) => {
