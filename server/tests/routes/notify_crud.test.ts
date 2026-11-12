@@ -18,6 +18,7 @@ vi.mock('../../services/crypto.js', () => ({
 }))
 
 import notifyRouter from '../../routes/notify.js'
+import { requireAuth } from '../../middleware/auth.js'
 import { pool } from '../../db/pool.js'
 import { sendAppriseNotification } from '../../services/notifier.js'
 import { getUsersToNotify } from '../../services/notifications.js'
@@ -47,6 +48,13 @@ beforeEach(() => {
 })
 
 describe('POST /api/notify', () => {
+  it('is guarded by requireAuth (not publicly callable)', () => {
+    const layer = (notifyRouter as unknown as { stack: RouteLayer[] }).stack.find(
+      s => s.route?.path === '/' && s.route.methods.post
+    )
+    expect(layer!.route!.stack[0].handle).toBe(requireAuth)
+  })
+
   it('400s when project, title, or body is missing', async () => {
     const res = fakeRes()
     await getHandler('/', 'post')({ body: { project: 'x' } }, res, () => {})

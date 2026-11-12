@@ -110,11 +110,9 @@ app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiSpec))
 import authRouter from './routes/auth.js'
 app.use('/api/auth', authRouter)
 
-// POST /api/notify is the one route that's both unauthenticated (called by
-// local tooling/hooks with no browser session, so it can't require the JWT)
-// and mounted ahead of the baseline apiLimiter below — without its own
-// limiter here it'd be an open spam vector the moment this server is ever
-// reachable beyond localhost.
+// POST /api/notify requires auth (see routes/notify.ts — hooks send a dbrn_
+// token via DEVBRAIN_API_TOKEN) and is mounted ahead of the baseline
+// apiLimiter below, so it keeps its own limiter as defence in depth.
 const notifyLimiter = rateLimit({
   windowMs:        60 * 1000,  // 1 minute
   max:             20,

@@ -101,7 +101,12 @@ $job = Start-Job -ScriptBlock {
             level = "info"
         } | ConvertTo-Json
 
-        Invoke-RestMethod -Uri "http://localhost:3001/api/notify" -Method Post -Body $body -ContentType "application/json" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
+        # /api/notify requires auth when DevBrain has AUTH_PASSWORD set: create a
+        # token in Settings > Account > API Tokens and set DEVBRAIN_API_TOKEN.
+        $headers = @{}
+        if ($env:DEVBRAIN_API_TOKEN) { $headers['Authorization'] = "Bearer $($env:DEVBRAIN_API_TOKEN)" }
+
+        Invoke-RestMethod -Uri "http://localhost:3001/api/notify" -Method Post -Headers $headers -Body $body -ContentType "application/json" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
     } catch {}
 
     # -- Sync this project's source files into DevBrain's Codes tab --

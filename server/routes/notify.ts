@@ -15,8 +15,11 @@ const NotifyBody = z.object({
   level:   z.enum(['info', 'success', 'warning', 'error']).default('info'),
 })
 
-// ── POST /api/notify (Public hook for Claude Code sessions or other tools) ───
-router.post('/', async (req, res) => {
+// ── POST /api/notify (Hook for Claude Code sessions or other tools) ──────────
+// Requires auth (JWT or a dbrn_ personal access token). Hooks send the token
+// from the DEVBRAIN_API_TOKEN env var. When AUTH_PASSWORD is unset (local dev),
+// requireAuth is a pass-through, so unconfigured setups keep working.
+router.post('/', requireAuth, async (req, res) => {
   const parsed = NotifyBody.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Validation error', issues: parsed.error.issues })
   const { project: shortName, title, body, level } = parsed.data

@@ -53,7 +53,10 @@ print('unknown')
   fi
 
   # Send notification to DevBrain
+  # Auth: set DEVBRAIN_API_TOKEN (Settings > Account > API Tokens) when DevBrain
+  # has AUTH_PASSWORD set; the header is omitted otherwise.
   curl -s -X POST http://localhost:3001/api/notify \
+    ${DEVBRAIN_API_TOKEN:+-H "Authorization: Bearer $DEVBRAIN_API_TOKEN"} \
     -H "Content-Type: application/json" \
     -d "{\"project\":\"$PROJECT_NAME\",\"title\":\"Session complete — $PROJECT_NAME\",\"body\":\"Duration: ${DURATION}m, Files changed: $FILES_COUNT\",\"level\":\"info\"}" \
     --max-time 3 >/dev/null 2>&1
