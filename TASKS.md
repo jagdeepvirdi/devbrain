@@ -1131,3 +1131,45 @@ design, not oversight)*
       `tsc --noEmit` clean, full `vitest run` — 14 files, 119 passed; client `npm run build` succeeds.
       Committed as `bbde91c`, pushed, and manually triggered `workflow_dispatch` run 36438167085 confirmed
       both `audit-server` and `audit-client` jobs green. <!-- done: 2026-09-28 -->
+
+---
+
+## Phase 45 — CI Recovery, Lint Fixes & Health Audit (2026-11-12)
+
+> The weekly `Security Audit` workflow had failed 6 Mondays running (2026-10-05 through 2026-11-09) on
+> newly-published `npm audit` advisories (client: `dompurify` critical, `brace-expansion`/`source-map-js`/
+> `undici` high; server: the same families plus `zod`). Separately, `ubuntu-latest` moved to Ubuntu 26.04,
+> which Playwright doesn't support, breaking the CI `E2E Tests` job on the first push after the audit fix.
+> A follow-up health audit of the codebase and database found a handful of leftovers, cleaned up below.
+
+### Tasks
+- [x] `server/` + `client/`: plain `npm audit fix` (no `--force`) cleared `dompurify`, `brace-expansion`,
+      `source-map-js`, `undici`, `fast-uri` and vitest advisories. Commit `d2155b5`. <!-- done: 2026-11-12 -->
+- [x] `zod` `GHSA-mrhx-c7xc-m3w5` (memory exhaustion on oversized constrained collections) is only fixed in
+      zod 4, a breaking major across ~26 files — added to `security-audit.yml`'s allowlist with a dated note,
+      and switched the client audit job from plain `npm audit` to `scripts/audit-check.mjs` so both jobs share
+      one allowlist mechanism. Manual `workflow_dispatch` run confirmed both jobs green. <!-- done: 2026-11-12 -->
+- [x] `ci.yml`: pinned the `e2e` job to `ubuntu-24.04` (Playwright: "does not support chromium on
+      ubuntu26.04-x64"); commit `4f1f4be`. All three CI jobs green afterwards. <!-- done: 2026-11-12 -->
+- [x] `client/src/components/releases/ReleaseTable.tsx`: hoisted `SortableTh` out of the render function
+      (was remounting header cells every render; 4 `react-hooks/static-components` lint errors → 0). Ran
+      `npm update` in both packages (lockfiles only, in-range). Commit `1164c1f`; CI green. <!-- done: 2026-11-12 -->
+- [x] Database health check (devbrain-postgres-1, 34 tables, 165 MB): all 13,291 chunks embedded at a
+      consistent 768 dims, no orphan chunks. Deleted E2E leftovers from a crashed 2026-06-09 run (project
+      `prv1780987178744` + users `e2e-ua-…`/`e2e-ub-…`) after a pre-delete `pg_dump`. <!-- done: 2026-11-12 -->
+- [x] Committed the 5 new client page tests (`Codes`, `Dashboard`, `DocChat`, `Documents`, `Releases`),
+      `server/tests/services/treeSitterLoader.test.ts`, the jsdom `scrollIntoView` shim in
+      `client/src/test/setup.ts`, and doc updates (pdf-inspector mentions in `GEMINI.md`/`FEATURE_GUIDE.md`,
+      `CHANGELOG.md`, `docs/feature-requests/outpost-project-prompt.md`). <!-- done: 2026-11-12 -->
+
+### Open
+- [ ] Migrate `zod` 3 → 4 (26 files) and drop the `GHSA-mrhx-c7xc-m3w5` allowlist entry.
+- [ ] Upgrade `multer` 1.4.5-lts.2 → 2.x (uploads path); review API changes first.
+- [ ] Revert `e2e` runner pin to `ubuntu-latest` once Playwright supports Ubuntu 26.04.
+- [ ] Rotate the admin password and the `dbrn_` API token (both were stored in plain text in
+      `.claude/settings.local.json` allow-rules; rules removed, credentials not yet rotated).
+- [ ] Link the `devbrain` project to `D:/Project/devbrain` and run `scripts/index-code-graph.ts` so
+      `code_nodes`/`code_edges` (empty today) are populated. Note: the session hook's node count comes
+      from the separate `.code-review-graph` tool, not these tables.
+- [ ] Run E2E against a throwaway database rather than the `.env` one (local runs hit the real DB).
+- [ ] Gradually clear the 38 `react-hooks/set-state-in-effect` client lint warnings.

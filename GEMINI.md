@@ -2,7 +2,7 @@
 
 ## Foundational Mandates
 - **Local AI First**: All primary AI features must run locally via Ollama. Use `mistral:7b` for generation, `gemma3:4b` for fast classification/tagging, and `nomic-embed-text` for embeddings.
-- **Structured Parsing**: Use Microsoft MarkItDown (Python) for high-quality file-to-markdown conversion to improve RAG accuracy.
+- **Structured Parsing**: PDFs go through `@firecrawl/pdf-inspector` (Rust/napi, no Python) for high-quality Markdown conversion; other rich formats (DOCX/XLSX/PPTX/etc.) go through Microsoft MarkItDown (Python). Both improve RAG accuracy over raw text extraction.
 - **Zero Cost**: Avoid external API dependencies unless explicitly requested by the user. The `AI_PROVIDER` env var selects the backend: `ollama` (default, free), `claude` (Anthropic API, opt-in), or `gemini` (Google free tier — 1500 RPD/1M TPM, opt-in). Embeddings always stay on local Ollama regardless of provider.
 - **Privacy**: No data should leave the local environment without explicit action.
 

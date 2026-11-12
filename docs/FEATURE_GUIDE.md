@@ -107,7 +107,7 @@ The Dashboard gives a high-level view of activity across all (or the selected) p
 ## 4. Documents
 
 ### What it does
-Documents are the knowledge base. You can upload PDFs, DOCX, Markdown, plain text, Excel spreadsheets, or import from a URL. After upload, the server extracts text (using Microsoft MarkItDown for rich formats), splits it into 512-token chunks with 64-token overlap, and embeds each chunk using `nomic-embed-text` via Ollama. Embedded chunks power the RAG Q&A feature.
+Documents are the knowledge base. You can upload PDFs, DOCX, Markdown, plain text, Excel spreadsheets, or import from a URL. After upload, the server extracts text — PDFs are converted to structured Markdown via pdf-inspector (real headings/tables, no Python needed), other rich formats via Microsoft MarkItDown — splits it into 512-token chunks with 64-token overlap, and embeds each chunk using `nomic-embed-text` via Ollama. Embedded chunks power the RAG Q&A feature.
 
 **Supported formats:** PDF · DOCX · MD · TXT · XLSX · URL
 
