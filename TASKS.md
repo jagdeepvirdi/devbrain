@@ -75,9 +75,19 @@ Account → API Tokens); daily digest via `scripts/digest_scheduler.py` (APSched
       **Done:** all local git calls go through a `git(args, cwd)` `execFile` helper; `sha`/`base`/`head` are
       validated (`^[A-Za-z0-9_][A-Za-z0-9._/@^~-]{0,199}$`, no leading `-`) and 400 otherwise; `limit` is parsed as
       an int and clamped 1–50. Injection tests added in `git_crud.test.ts`.
-- [ ] Verify Outpost-style callers are idempotent against `POST /api/issues`: confirm whether repeated
+- [x] Verify Outpost-style callers are idempotent against `POST /api/issues`: confirm whether repeated <!-- done: 2026-11-12 -->
       identical reports create duplicate issues; if so add a dedupe key (e.g. `external_ref` +
       unique-per-project index) and a test.
+      **Confirmed duplicates** (plain INSERT, no dedupe). **Fixed:** optional `external_ref` on the create body;
+      unique partial index `issues_project_external_ref_uidx` on `(COALESCE(project_id,''), external_ref)` in
+      `schema.sql`; a repeat returns the existing issue as `200 {deduplicated: true}` (no new steps, no re-embed);
+      calls without a ref are unchanged. **Owner action:** re-apply `schema.sql` (`db/setup.ts`) to the live DB
+      before any caller sends `external_ref`. Not run against real Postgres yet (mocked tests only) — Outpost must
+      send a stable fingerprint per distinct error.
+      **Possible bug found, unverified:** `services/integrations.ts` upserts with `ON CONFLICT (external_id) WHERE
+      external_id IS NOT NULL`, but `schema.sql` / `add_phase24_25.ts` only create a *non-unique* index on
+      `external_id`, which Postgres rejects for that clause. Check the live DB's indexes; if confirmed, make that
+      index `UNIQUE` (P2).
 - [~] Add route-level tests for `/api/notify` happy path, unknown project (404), validation (400),
       and token enforcement (above); keep the coverage gate green.
       Happy path, 404 and 400 already existed; the `requireAuth`-on-route check was added 2026-11-12. Still open: a
