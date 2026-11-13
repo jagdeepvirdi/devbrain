@@ -6,6 +6,7 @@ import type { DashboardData, DashboardIssue, DashboardCommand, DashboardRelease,
 import { useRecentlyViewed, type RecentlyViewedEntry } from '../hooks/useRecentlyViewed'
 import { AnalyticsWidget, WidgetEmpty } from '../components/dashboard/AnalyticsWidget'
 import { WeeklyGitDigest } from '../components/dashboard/WeeklyGitDigest'
+import { TimeTracked } from '../components/dashboard/TimeTracked'
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -724,8 +725,11 @@ export function DashboardPage() {
         <StatCard value={stats.runbooks}   label="Runbooks"    color="#F59E0B" />
       </div>
 
-      {/* Weekly cross-project git digest — Phase 46 Step 2 (scoped to the selected project, else all) */}
-      <WeeklyGitDigest projectId={project?.id} />
+      {/* Phase 46: weekly git digest (Step 2) + time tracking (Step 3), scoped to the selected project, else all */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16, alignItems: 'start' }}>
+        <WeeklyGitDigest projectId={project?.id} />
+        <TimeTracked projectId={project?.id} projects={projects} />
+      </div>
 
       {/* Analytics widgets — Phase 22 */}
       {statsV2 && (

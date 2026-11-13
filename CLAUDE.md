@@ -121,7 +121,8 @@ devbrain/
 │   │   ├── claude-projects.ts           # Claude Code project discovery + task/session sync
 │   │   ├── antigravity-projects.ts      # Antigravity project discovery + task/session sync
 │   │   ├── code-intel.ts                # Code Intelligence graph — callers/callees/impact/context/unresolved
-│   │   └── activity.ts                  # Weekly cross-project git digest (Phase 46 Step 2) — GET/POST /api/activity/digest
+│   │   ├── activity.ts                  # Weekly cross-project git digest (Phase 46 Step 2) — GET/POST /api/activity/digest
+│   │   └── time.ts                      # Time tracking (Phase 46 Step 3) — GET /api/time, POST /api/time/import, /api/time/rules
 │   ├── services/
 │   │   ├── ai.ts                        # Unified AI client (Ollama/Claude toggle)
 │   │   ├── ollama.ts                    # Ollama chat + embed + stream
@@ -132,6 +133,8 @@ devbrain/
 │   │   ├── antigravity-discovery.ts     # Scans fs_path for Antigravity TASKS.md + sessions
 │   │   ├── gitDigest.ts                 # Weekly git digest: execFile collectors + map-reduce summarizer (local AI only, see lib/requireLocalAI.ts)
 │   │   ├── activityDigest.ts            # generateDigests() upsert + hourly catch-up scheduler + Apprise delivery for the weekly digest
+│   │   ├── activityWatch.ts             # ActivityWatch REST client + afk filtering, editor-claim + rule classification (pure, testable)
+│   │   ├── timeTracking.ts              # time_entries writer (atomic replace), AW/session/git-estimate importers, report query
 │   │   ├── treeSitterLoader.ts          # Shared tree-sitter grammar loading (codeChunker.ts + codeIntel/)
 │   │   └── codeIntel/                   # Code Intelligence graph engine (see TASKS.md Phase 40)
 │   │       ├── types.ts                 # Unified Entity/Relationship types, buildNodeId/buildTableNodeId

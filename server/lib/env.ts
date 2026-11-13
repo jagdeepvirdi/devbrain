@@ -17,6 +17,9 @@ const schema = z.object({
   ANTHROPIC_API_KEY:  z.string().optional(),
   GEMINI_API_KEY:     z.string().optional(),
   GEMINI_CHAT_MODEL:  z.string().default('gemini-2.0-flash'),
+  // Local ActivityWatch REST API (Phase 46 Step 3). Read from env only — never from a request
+  // body — so the importer can't be pointed at an arbitrary host.
+  ACTIVITYWATCH_URL:  z.string().url().default('http://localhost:5600'),
   NODE_ENV:           z.enum(['development', 'production', 'test']).default('development'),
   FORCE_HTTPS:        z.enum(['true', 'false']).default('false').transform(v => v === 'true'),
   // Controls Express's `trust proxy` setting, which governs how req.ip (and therefore

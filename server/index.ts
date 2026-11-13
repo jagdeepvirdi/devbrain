@@ -234,6 +234,8 @@ import dashboardRouter from './routes/dashboard.js'
 app.use('/api/dashboard', dashboardRouter)
 import activityRouter  from './routes/activity.js'
 app.use('/api/activity',  activityRouter)
+import timeRouter      from './routes/time.js'
+app.use('/api/time',      timeRouter)
 import chatRouter from './routes/chat.js'
 app.use('/api/chat',      chatRouter)
 import settingsRouter from './routes/settings.js'

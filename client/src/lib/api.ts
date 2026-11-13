@@ -1272,6 +1272,51 @@ export type GenerateDigestResult = {
   errors:  { project_id: string; project: string; error: string }[]
 }
 
+// ── Time tracking (Phase 46 Step 3) ──────────────────────────────────────
+
+export type TimeSource = 'activitywatch' | 'claude-session' | 'git-estimate'
+
+export type TimeReportRow = {
+  period:       string          // YYYY-MM-DD (start of day/week/month)
+  project_id:   string | null   // null = Unassigned (no mapping rule matched)
+  project_name: string | null
+  color:        string | null
+  seconds:      number
+  sources:      TimeSource[]
+}
+
+export type TimeReport = {
+  from: string; to: string; group: 'day' | 'week' | 'month'
+  rows:      TimeReportRow[]
+  by_source: { source: TimeSource; seconds: number }[]
+}
+
+export type TimeRuleKind = 'path' | 'title' | 'app' | 'editor_project'
+export type TimeRule = {
+  id: string; project_id: string; project_name: string
+  kind: TimeRuleKind; pattern: string; priority: number
+}
+
+export type TimeProjectResult = { project: string; commits?: number; hours?: number; days?: number; error?: string }
+export type TimeImportResult = {
+  activitywatch?:    { days: number; entries: number } | { error: string }
+  'claude-session'?: TimeProjectResult[]
+  'git-estimate'?:   TimeProjectResult[]
+}
+
+export const timeApi = {
+  report: (from: string, to: string, projectId?: string | null, group: 'day' | 'week' | 'month' = 'day') => {
+    const qs = new URLSearchParams({ from, to, group })
+    if (projectId) qs.set('project_id', projectId)
+    return request<TimeReport>(`/time?${qs.toString()}`)
+  },
+  import: () => request<TimeImportResult>('/time/import', { method: 'POST', body: JSON.stringify({}) }),
+  rules:  () => request<TimeRule[]>('/time/rules'),
+  addRule: (rule: { project_id: string; kind: TimeRuleKind; pattern: string; priority?: number }) =>
+    request<TimeRule>('/time/rules', { method: 'POST', body: JSON.stringify(rule) }),
+  deleteRule: (id: string) => request<{ id: string }>(`/time/rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+}
+
 export const activityApi = {
   digest: (week: string, projectId?: string | null) => {
     const qs = new URLSearchParams({ week })

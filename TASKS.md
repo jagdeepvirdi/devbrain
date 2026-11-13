@@ -189,24 +189,24 @@ than inventing a new pipeline; all Ollama calls already go through the serialize
 - [x] <!-- done: 2026-11-13 --> Tests: git collector (temp repo fixture), chunking/merge, malformed-JSON handling, route validation.
 
 ### Phase 46 · Step 3 — Time tracking (ActivityWatch import + git-timestamp backfill)
-- [ ] **DECISION NEEDED:** read ActivityWatch via its local REST API (`http://localhost:5600/api/0/...`,
+- [x] <!-- done: 2026-11-13 --> **DECIDED (REST, see P1 answers):** read ActivityWatch via its local REST API (`http://localhost:5600/api/0/...`,
       still 100% local, no lock/schema coupling) **or** directly from its SQLite file
       (`%LOCALAPPDATA%\activitywatch\activitywatch\aw-server\peewee-sqlite.v2.db` by default — confirm).
       Recommendation: REST by default, SQLite read-only fallback. Needs ActivityWatch installed first.
-- [ ] Migration `add_time_tracking.ts`: `time_entries(id, project_id, source TEXT, day DATE, seconds INT,
+- [x] <!-- done: 2026-11-13 --> Migration `add_time_tracking.ts` (+ `schema.sql`): `time_entries(id, project_id, source TEXT, day DATE, seconds INT,
       detail JSONB, created_at)` with `UNIQUE(project_id, source, day)` (idempotent re-imports);
       `time_mapping_rules(id, project_id, kind TEXT, pattern TEXT, priority INT)` where `kind` is one of
       `path | title | app | editor_project`.
-- [ ] Importer (Python bridge, matching `markitdown_bridge.py` / `sql_bridge.py`, stdlib only): pull window +
+- [x] <!-- done: 2026-11-13 --> **Built, but UNVERIFIED against a real ActivityWatch (not installed — tested against mocked REST responses only).** Deviation: TypeScript (`services/activityWatch.ts`, plain `fetch`) instead of a Python bridge — the bridges exist for SQLite/SQL parsing, and REST needs none. Original spec: pull window +
       afk events, drop afk time, merge adjacent heartbeats, classify each event to a project via the rules
       (VS Code watcher's `project` field and terminal cwd are the most reliable signals), roll up to
       per-project hours per day. Unclassified time goes to an "Unassigned" bucket the UI can show.
-- [ ] Free extra source: Claude Code/Antigravity session start/end times already in `sessions/*/SESSION.md`
+- [x] <!-- done: 2026-11-13 --> Free extra source: Claude Code/Antigravity session start/end times already in `sessions/*/SESSION.md`
       frontmatter + `sessions/index.md` -> `source='claude-session'` entries (no new tracker needed).
-- [ ] One-off backfill `scripts/estimate-hours-from-git.ts`: per project, sort commit timestamps; gap <= 2h =
+- [x] <!-- done: 2026-11-13 --> One-off backfill `scripts/estimate-hours-from-git.ts`: per project, sort commit timestamps; gap <= 2h =
       same session; session length = last - first + 30 min first-commit credit (git-hours heuristic; both
       constants configurable); writes `source='git-estimate'`, never overwrites ActivityWatch days.
-- [ ] API + UI: `GET /api/time?from&to&project`, project/week/month rollups, source breakdown; tests for
+- [x] <!-- done: 2026-11-13 --> API + UI (`routes/time.ts`, `components/dashboard/TimeTracked.tsx` + `TimeMappingRules.tsx`): `GET /api/time?from&to&project`, project/week/month rollups, source breakdown; tests for
       event merging, rule priority, idempotent re-import, and the git-gap clustering.
 
 ### Phase 46 · Step 4 — Browsing history, categorized (scheduled batch job, no extension)
