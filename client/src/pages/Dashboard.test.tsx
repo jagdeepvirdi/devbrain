@@ -14,6 +14,7 @@ const activityMock         = vi.fn()
 const issueThroughputMock  = vi.fn()
 const embeddingTrendMock   = vi.fn()
 const listCommitsMock      = vi.fn()
+const digestMock           = vi.fn()
 
 vi.mock('../lib/api', async () => {
   const actual = await vi.importActual<typeof import('../lib/api')>('../lib/api')
@@ -27,6 +28,7 @@ vi.mock('../lib/api', async () => {
       embeddingHealthTrend: (...args: unknown[]) => embeddingTrendMock(...args),
     },
     gitApi: { listCommits: (...args: unknown[]) => listCommitsMock(...args) },
+    activityApi: { digest: (...args: unknown[]) => digestMock(...args), generateDigest: vi.fn() },
   }
 })
 
@@ -51,6 +53,7 @@ beforeEach(() => {
   issueThroughputMock.mockResolvedValue([])
   embeddingTrendMock.mockResolvedValue([])
   listCommitsMock.mockResolvedValue([])
+  digestMock.mockResolvedValue([])
 })
 
 // Smoke coverage backfilled for the tech-debt audit (2026-08-17) — this page

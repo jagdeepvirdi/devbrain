@@ -166,21 +166,27 @@ Account → API Tokens); daily digest via `scripts/digest_scheduler.py` (APSched
 ### Phase 46 · Step 2 — Cross-project weekly git digest (reuse the release-notes summarizer)
 Reuse the `POST /api/releases/import-git` approach (`aiChat` + strict-JSON prompt → parsed arrays) rather
 than inventing a new pipeline; all Ollama calls already go through the serialized `withOllamaQueue`.
-- [ ] **BLOCKED ON USER:** list of local clone paths (+ which DevBrain project each belongs to). Prefer the
+- [x] <!-- done: 2026-11-13 --> ~~**BLOCKED ON USER:**~~ answered in "P1 answers" above (3 repos found). Prefer the
       existing `projects.fs_path` column; 6 projects currently have none (`devbrain`, `playcru`,
       `quantcru`, `musicplayer`, `ntbilling`, `general`).
-- [ ] Migration `add_activity_digests.ts`: `activity_digests(id, project_id, week_start DATE, week_end DATE,
+- [x] <!-- done: 2026-11-13 --> Migration `add_activity_digests.ts` (+ `schema.sql`): `activity_digests(id, project_id, week_start DATE, week_end DATE,
       commit_count INT, branches JSONB, stats JSONB, summary JSONB, model TEXT, generated_at)` with
       `UNIQUE(project_id, week_start)` so regeneration is an upsert.
-- [ ] `services/gitDigest.ts`: collect per-project `git log --since/--until` (via `execFile`, never a shell
+- [x] <!-- done: 2026-11-13 --> `services/gitDigest.ts`: collect per-project `git log --since/--until` (via `execFile`, never a shell
       string) + recent branches + `--shortstat`; cap input size and map-reduce (summarize chunks of ~40
       commits, then merge) so a busy week can't blow the model context.
-- [ ] Summarization prompt mirrors `import-git`: JSON `{ highlights[], features[], fixes[], risks[],
+- [x] <!-- done: 2026-11-13 --> Summarization prompt mirrors `import-git`: JSON `{ highlights[], features[], fixes[], risks[],
       summary }`; tolerate malformed JSON (regex-extract + retry once, as the release importer does).
-- [ ] `GET /api/activity/digest?week=YYYY-MM-DD`, `POST /api/activity/digest/generate` (member+).
-- [ ] Weekly generation scheduled through the existing digest scheduler; deliver a short message through the
-      Notification Hub (Apprise) when generated. Dashboard widget + per-project drill-down.
-- [ ] Tests: git collector (temp repo fixture), chunking/merge, malformed-JSON handling, route validation.
+- [x] <!-- done: 2026-11-13 --> `GET /api/activity/digest?week=YYYY-MM-DD`, `POST /api/activity/digest/generate` (member+).
+- [x] <!-- done: 2026-11-13 --> Weekly generation + Apprise delivery: `services/activityDigest.ts` — hourly in-process tick
+      (advisory lock `activityDigest`, first run 60s after boot) that generates only the *missing* digests for the last
+      completed week (catch-up semantics, so a server that was off on Monday still produces it) and sends one Apprise
+      message per active user. **Deviation:** not added to `digest_scheduler.py` — that Python daemon is a separate
+      process that POSTs to `/api/notify/send-digest` and has no access to the Ollama/git services; the TS scheduler
+      pattern (`embeddingHealthSnapshot.ts`) fits better. Skips entirely unless `AI_PROVIDER=ollama`.
+- [x] <!-- done: 2026-11-13 --> Dashboard widget + per-project drill-down: `components/dashboard/WeeklyGitDigest.tsx` (week
+      navigation, Generate/Regenerate, expandable per-project rows; with a project selected the row is expanded).
+- [x] <!-- done: 2026-11-13 --> Tests: git collector (temp repo fixture), chunking/merge, malformed-JSON handling, route validation.
 
 ### Phase 46 · Step 3 — Time tracking (ActivityWatch import + git-timestamp backfill)
 - [ ] **DECISION NEEDED:** read ActivityWatch via its local REST API (`http://localhost:5600/api/0/...`,
@@ -228,7 +234,7 @@ Chrome and Edge profiles both exist locally (`%LOCALAPPDATA%\Google\Chrome\User 
       classifier JSON parsing, and the `AI_PROVIDER=ollama` guard.
 
 ### Phase 46 · Cross-cutting
-- [ ] `requireLocalAI()` guard (see Safety guard above) with a test that cloud providers are rejected.
+- [x] <!-- done: 2026-11-13 --> `requireLocalAI()` guard (see Safety guard above) with a test that cloud providers are rejected.
 - [ ] Update `docs/FEATURE_GUIDE.md`, `CLAUDE.md` project structure, and `CHANGELOG.md` per step.
 - [ ] Each step lands as its own commit(s); CI must be green before starting the next step.
 

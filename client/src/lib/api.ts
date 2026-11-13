@@ -1241,6 +1241,50 @@ export const dashboardApi = {
   embeddingHealthTrend: () => request<EmbeddingHealthSnapshot[]>('/dashboard/embedding-health-trend'),
 }
 
+// ── Activity: weekly git digests (Phase 46 Step 2) ───────────────────────
+
+export type DigestSummary = {
+  highlights: string[]
+  features:   string[]
+  fixes:      string[]
+  risks:      string[]
+  summary:    string
+}
+
+export type ActivityDigest = {
+  id:           string
+  project_id:   string
+  project_name: string
+  short_name:   string
+  color:        string
+  week_start:   string   // YYYY-MM-DD (Monday)
+  week_end:     string   // YYYY-MM-DD (next Monday, exclusive)
+  commit_count: number
+  branches:     string[]
+  stats:        { files_changed: number; insertions: number; deletions: number }
+  summary:      DigestSummary
+  model:        string | null
+  generated_at: string
+}
+
+export type GenerateDigestResult = {
+  digests: ActivityDigest[]
+  errors:  { project_id: string; project: string; error: string }[]
+}
+
+export const activityApi = {
+  digest: (week: string, projectId?: string | null) => {
+    const qs = new URLSearchParams({ week })
+    if (projectId) qs.set('project_id', projectId)
+    return request<ActivityDigest[]>(`/activity/digest?${qs.toString()}`)
+  },
+  generateDigest: (week: string, projectId?: string | null) =>
+    request<GenerateDigestResult>('/activity/digest/generate', {
+      method: 'POST',
+      body: JSON.stringify({ week, ...(projectId ? { project_id: projectId } : {}) }),
+    }),
+}
+
 // ── Chat / RAG ────────────────────────────────────────────────────────────
 
 export type ChatCitation = {

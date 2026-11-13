@@ -120,7 +120,8 @@ devbrain/
 │   │   ├── chat.ts                      # RAG Q&A (streaming SSE)
 │   │   ├── claude-projects.ts           # Claude Code project discovery + task/session sync
 │   │   ├── antigravity-projects.ts      # Antigravity project discovery + task/session sync
-│   │   └── code-intel.ts                # Code Intelligence graph — callers/callees/impact/context/unresolved
+│   │   ├── code-intel.ts                # Code Intelligence graph — callers/callees/impact/context/unresolved
+│   │   └── activity.ts                  # Weekly cross-project git digest (Phase 46 Step 2) — GET/POST /api/activity/digest
 │   ├── services/
 │   │   ├── ai.ts                        # Unified AI client (Ollama/Claude toggle)
 │   │   ├── ollama.ts                    # Ollama chat + embed + stream
@@ -129,6 +130,8 @@ devbrain/
 │   │   ├── rag.ts                       # RAG retrieval + answer generation
 │   │   ├── summarizer.ts                # Issue summarization, release notes
 │   │   ├── antigravity-discovery.ts     # Scans fs_path for Antigravity TASKS.md + sessions
+│   │   ├── gitDigest.ts                 # Weekly git digest: execFile collectors + map-reduce summarizer (local AI only, see lib/requireLocalAI.ts)
+│   │   ├── activityDigest.ts            # generateDigests() upsert + hourly catch-up scheduler + Apprise delivery for the weekly digest
 │   │   ├── treeSitterLoader.ts          # Shared tree-sitter grammar loading (codeChunker.ts + codeIntel/)
 │   │   └── codeIntel/                   # Code Intelligence graph engine (see TASKS.md Phase 40)
 │   │       ├── types.ts                 # Unified Entity/Relationship types, buildNodeId/buildTableNodeId

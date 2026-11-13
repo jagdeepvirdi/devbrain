@@ -91,6 +91,7 @@ The Dashboard gives a high-level view of activity across all (or the selected) p
 - **Avg Resolution Time (last 30 days)** — days-to-resolve bar chart per project.
 - **Activity Heatmap** — 5-week × 7-day GitHub-contribution-style grid; shading intensity = event count that day; hover for a tooltip.
 - **Embedding Health** — Done / Pending / Failed document embedding counts with a "Retry all failed" button.
+- **Weekly Git Digest** — an AI-written summary of each linked project's commits for a week (commit count, +/- lines, highlights, features, fixes, risks). Defaults to the last completed week; use ‹ › to browse (the current, in-progress week is the furthest). Click a project row to expand its details; when a project is selected in the switcher, its row is expanded automatically. **Generate / Regenerate** builds the shown week on demand. A background job also generates last week's digests automatically and sends a short Apprise message to your notification channels. Runs entirely on local Ollama and does nothing if `AI_PROVIDER` is `claude` or `gemini`.
 - **Stale Issues** — Issues open > 14 days with no recent note, listed with priority badges and a one-click "Mark investigating" shortcut.
 
 ### How to test
@@ -100,7 +101,8 @@ The Dashboard gives a high-level view of activity across all (or the selected) p
 3. Confirm the Open Issues bar chart shows a bar for the project you created an issue in.
 4. Hover over any cell in the Activity Heatmap — a tooltip should show the date and event count.
 5. Upload a document and wait for embedding to complete — the Embedding Health widget should show "Done: 1".
-6. To test the Stale Issues widget: create an issue, then manually set `created_at` to 15+ days ago in Postgres (`UPDATE issues SET created_at = now() - interval '15 days' WHERE title = 'your issue'`), then refresh the Dashboard.
+6. To test the Weekly Git Digest widget: link a project to a local git repo (Projects → Link folder), make sure Ollama is running, click **Generate** on the Dashboard, and confirm a row appears with the commit count and a summary. Use ‹ to check an earlier week; a week with no commits shows "No commits this week." If nothing is linked you'll be told to link a folder; with a cloud `AI_PROVIDER` you'll see the "only runs with AI_PROVIDER=ollama" message.
+7. To test the Stale Issues widget: create an issue, then manually set `created_at` to 15+ days ago in Postgres (`UPDATE issues SET created_at = now() - interval '15 days' WHERE title = 'your issue'`), then refresh the Dashboard.
 
 ---
 

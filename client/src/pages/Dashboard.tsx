@@ -4,6 +4,8 @@ import { useProjectStore } from '../store/projectStore'
 import { dashboardApi, commandsApi, gitApi, documentsApi, issuesApi } from '../lib/api'
 import type { DashboardData, DashboardIssue, DashboardCommand, DashboardRelease, DashboardProject, DashboardActivity, DashboardStatsV2, DashboardActivityDay, IssueThroughputWeek, EmbeddingHealthSnapshot, GitCommit } from '../lib/api'
 import { useRecentlyViewed, type RecentlyViewedEntry } from '../hooks/useRecentlyViewed'
+import { AnalyticsWidget, WidgetEmpty } from '../components/dashboard/AnalyticsWidget'
+import { WeeklyGitDigest } from '../components/dashboard/WeeklyGitDigest'
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -284,42 +286,6 @@ function relativeTimeShort(iso: string): string {
 }
 
 // ── Phase 22: Analytics widgets ──────────────────────────────────────────
-
-function AnalyticsWidget({
-  title, onRefresh, children,
-}: { title: string; onRefresh?: () => void; children: React.ReactNode }) {
-  return (
-    <div style={{
-      background: 'var(--bg-elev)', border: '1px solid var(--line)',
-      borderRadius: 8, overflow: 'hidden',
-    }}>
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '11px 14px 10px', borderBottom: '1px solid var(--line)',
-      }}>
-        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '.08em' }}>
-          {title}
-        </span>
-        {onRefresh && (
-          <button
-            onClick={onRefresh}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-4)', fontSize: 13, lineHeight: 1, padding: 2 }}
-            title="Refresh"
-          >↻</button>
-        )}
-      </div>
-      <div style={{ padding: '14px' }}>{children}</div>
-    </div>
-  )
-}
-
-function WidgetEmpty({ text }: { text: string }) {
-  return (
-    <div style={{ padding: '12px 0', textAlign: 'center', fontSize: '12px', color: 'var(--fg-4)' }}>
-      {text}
-    </div>
-  )
-}
 
 function OpenIssuesByProject({ data }: { data: DashboardStatsV2['openByProject'] }) {
   const max = Math.max(...data.map(d => d.open_count), 1)
@@ -757,6 +723,9 @@ export function DashboardPage() {
         <StatCard value={stats.releases}   label="Releases"    color="#818CF8" />
         <StatCard value={stats.runbooks}   label="Runbooks"    color="#F59E0B" />
       </div>
+
+      {/* Weekly cross-project git digest — Phase 46 Step 2 (scoped to the selected project, else all) */}
+      <WeeklyGitDigest projectId={project?.id} />
 
       {/* Analytics widgets — Phase 22 */}
       {statsV2 && (

@@ -715,3 +715,19 @@ CREATE TABLE IF NOT EXISTS code_unresolved_refs (
 CREATE INDEX IF NOT EXISTS code_unresolved_refs_project_idx ON code_unresolved_refs (project_id);
 
 
+
+-- ── Phase 46 Step 2: weekly cross-project git digests ─────────────────────
+CREATE TABLE IF NOT EXISTS activity_digests (
+  id           TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  project_id   TEXT        NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  week_start   DATE        NOT NULL,
+  week_end     DATE        NOT NULL,
+  commit_count INT         NOT NULL DEFAULT 0,
+  branches     JSONB       NOT NULL DEFAULT '[]',
+  stats        JSONB       NOT NULL DEFAULT '{}',
+  summary      JSONB       NOT NULL DEFAULT '{}',
+  model        TEXT,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, week_start)
+);
+CREATE INDEX IF NOT EXISTS activity_digests_week_idx ON activity_digests (week_start);

@@ -18,6 +18,7 @@ import { initTasksWatcher, stopListening } from './services/tasks-watcher.js'
 import { startBackupScheduler } from './services/backup.js'
 import { startNotificationScheduler, startDigestScheduler } from './services/notifications.js'
 import { startEmbeddingHealthScheduler } from './services/embeddingHealthSnapshot.js'
+import { startActivityDigestScheduler } from './services/activityDigest.js'
 
 const app = express()
 
@@ -231,6 +232,8 @@ import searchRouter    from './routes/search.js'
 app.use('/api/search',    searchRouter)
 import dashboardRouter from './routes/dashboard.js'
 app.use('/api/dashboard', dashboardRouter)
+import activityRouter  from './routes/activity.js'
+app.use('/api/activity',  activityRouter)
 import chatRouter from './routes/chat.js'
 app.use('/api/chat',      chatRouter)
 import settingsRouter from './routes/settings.js'
@@ -328,6 +331,9 @@ async function start() {
 
   // Start embedding health trend scheduler
   startEmbeddingHealthScheduler()
+
+  // Start weekly cross-project git digest scheduler (local AI only)
+  startActivityDigestScheduler()
 
   app.listen(env.PORT, () => {
     console.log(`  server: http://localhost:${env.PORT} ✓`)
