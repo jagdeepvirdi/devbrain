@@ -47,7 +47,7 @@ Task markers: `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked
 > Security fixes and credential hygiene. Nothing here is blocked on a decision or on new information — start at the
 > top. The first item is yours (a few minutes); the rest is code work for Claude, all under Phase 46 Step 1.
 
-- [ ] **Rotate the admin password** *(owner action)* — it was stored in plaintext inside `.claude/settings.local.json`
+- [x] <!-- done: 2026-11-14 --> **Rotate the admin password** *(owner action)* — it was stored in plaintext inside `.claude/settings.local.json`
       allow-rules until 2026-11-12 (those rules are removed) and appeared in a session transcript. The matching
       `dbrn_` API token (`Temp-Claude`) was revoked 2026-11-12 (its `api_tokens` row deleted).
 
