@@ -19,6 +19,7 @@ import { startBackupScheduler } from './services/backup.js'
 import { startNotificationScheduler, startDigestScheduler } from './services/notifications.js'
 import { startEmbeddingHealthScheduler } from './services/embeddingHealthSnapshot.js'
 import { startActivityDigestScheduler } from './services/activityDigest.js'
+import { startTimeTrackingScheduler } from './services/timeTrackingScheduler.js'
 
 const app = express()
 
@@ -336,6 +337,9 @@ async function start() {
 
   // Start weekly cross-project git digest scheduler (local AI only)
   startActivityDigestScheduler()
+
+  // Start time tracking importer (ActivityWatch hourly; sessions + git estimate every 6h)
+  startTimeTrackingScheduler()
 
   app.listen(env.PORT, () => {
     console.log(`  server: http://localhost:${env.PORT} ✓`)

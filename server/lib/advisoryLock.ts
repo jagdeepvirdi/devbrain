@@ -11,6 +11,7 @@ export const LOCK_KEYS = {
   dailyDigest:       727_003,
   embeddingSnapshot: 727_004,
   activityDigest:    727_005,
+  timeImport:        727_006,
 } as const
 
 /**

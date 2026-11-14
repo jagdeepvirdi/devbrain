@@ -134,6 +134,7 @@ devbrain/
 │   │   ├── gitDigest.ts                 # Weekly git digest: execFile collectors + map-reduce summarizer (local AI only, see lib/requireLocalAI.ts)
 │   │   ├── activityDigest.ts            # generateDigests() upsert + hourly catch-up scheduler + Apprise delivery for the weekly digest
 │   │   ├── activityWatch.ts             # ActivityWatch REST client + afk filtering, editor-claim + rule classification (pure, testable)
+│   │   ├── timeTrackingScheduler.ts     # Hourly advisory-locked import tick (ActivityWatch hourly; sessions + git estimate every 6h)
 │   │   ├── timeTracking.ts              # time_entries writer (atomic replace), AW/session/git-estimate importers, report query
 │   │   ├── treeSitterLoader.ts          # Shared tree-sitter grammar loading (codeChunker.ts + codeIntel/)
 │   │   └── codeIntel/                   # Code Intelligence graph engine (see TASKS.md Phase 40)

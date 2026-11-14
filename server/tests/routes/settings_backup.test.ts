@@ -590,7 +590,10 @@ describe('POST /api/settings/zip-import', () => {
     expect(res.status).toHaveBeenCalledWith(400)
     expect(res.json).toHaveBeenCalledWith({ error: expect.stringContaining('total uncompressed size') })
     expect(mockConnect).not.toHaveBeenCalled()
-  })
+    // The time goes into building + deflating the 205MB fixture above, not into the code under test
+    // (it has to exceed the 200MB cap, so the fixture can't shrink). Under coverage instrumentation
+    // and a loaded CI box that blew the 5s default (6.6s on clean master), so give it real headroom.
+  }, 60_000)
 
   it('dry run: counts new documents/issues/commands, skips duplicates, unknown projects, and non-.md/directory entries', async () => {
     const zipPath = buildZip([

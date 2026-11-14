@@ -206,6 +206,7 @@ than inventing a new pipeline; all Ollama calls already go through the serialize
 - [x] <!-- done: 2026-11-13 --> One-off backfill `scripts/estimate-hours-from-git.ts`: per project, sort commit timestamps; gap <= 2h =
       same session; session length = last - first + 30 min first-commit credit (git-hours heuristic; both
       constants configurable); writes `source='git-estimate'`, never overwrites ActivityWatch days.
+- [x] <!-- done: 2026-11-13 --> Scheduled import: `services/timeTrackingScheduler.ts` — hourly advisory-locked tick (ActivityWatch yesterday+today; sessions + git estimate throttled to every 6h).
 - [x] <!-- done: 2026-11-13 --> API + UI (`routes/time.ts`, `components/dashboard/TimeTracked.tsx` + `TimeMappingRules.tsx`): `GET /api/time?from&to&project`, project/week/month rollups, source breakdown; tests for
       event merging, rule priority, idempotent re-import, and the git-gap clustering.
 
